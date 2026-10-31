@@ -165,6 +165,7 @@ async fn replay_survives_hubd_kill_and_matches_transcript() {
         ClientMsg::Start {
             session: session.clone(),
             resume: None,
+            cwd: None,
         },
     )
     .await;
@@ -281,6 +282,7 @@ async fn real_claude_under_systemd_survives_hubd_kill() {
         ClientMsg::Start {
             session: session.clone(),
             resume: None,
+            cwd: None,
         },
     )
     .await;
@@ -352,6 +354,158 @@ async fn real_claude_under_systemd_survives_hubd_kill() {
     assert!(stopped.unwrap().success());
 }
 
+fn context_switches(pid: u32) -> u64 {
+    let mut total = 0;
+    for task in std::fs::read_dir(format!("/proc/{pid}/task"))
+        .unwrap()
+        .flatten()
+    {
+        let status = std::fs::read_to_string(task.path().join("status")).unwrap_or_default();
+        total += status
+            .lines()
+            .filter(|line| line.contains("ctxt_switches"))
+            .filter_map(|line| line.split_whitespace().nth(1)?.parse::<u64>().ok())
+            .sum::<u64>();
+    }
+    total
+}
+
+#[tokio::test]
+async fn idle_subscription_does_not_poll() {
+    let temp = Temp::new("idle");
+    let (hubd, addr) = spawn_hubd(&temp.0).await;
+    let mut socket = connect(&addr).await;
+    send(
+        &mut socket,
+        ClientMsg::Start {
+            session: "s1".into(),
+            resume: None,
+            cwd: None,
+        },
+    )
+    .await;
+    send(
+        &mut socket,
+        ClientMsg::Attach {
+            session: "s1".into(),
+            after: 0,
+        },
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let pid = hubd.id().unwrap();
+    let before = context_switches(pid);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let woken = context_switches(pid) - before;
+    // 100ms 轮询在这段时间至少会醒 30 次。
+    assert!(woken < 20, "空闲时被唤醒 {woken} 次");
+    send(
+        &mut socket,
+        ClientMsg::Stop {
+            session: "s1".into(),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn reports_device_online_for_project_dir() {
+    let temp = Temp::new("device");
+    let project = temp.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let (_hubd, addr) = spawn_hubd(&temp.0).await;
+    let mut socket = connect(&addr).await;
+    send(
+        &mut socket,
+        ClientMsg::Start {
+            session: "s1".into(),
+            resume: None,
+            cwd: Some(project.display().to_string()),
+        },
+    )
+    .await;
+    send(
+        &mut socket,
+        ClientMsg::Attach {
+            session: "s1".into(),
+            after: 0,
+        },
+    )
+    .await;
+    let wait = async {
+        loop {
+            if let Message::Text(text) = socket.next().await.unwrap().unwrap() {
+                let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
+                if let ServerMsg::Device { online } = frame.msg {
+                    return online;
+                }
+            }
+        }
+    };
+    assert!(tokio::time::timeout(TIMEOUT, wait).await.unwrap());
+    send(
+        &mut socket,
+        ClientMsg::Stop {
+            session: "s1".into(),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn attach_beyond_log_end_reports_error() {
+    let temp = Temp::new("beyond");
+    let (_hubd, addr) = spawn_hubd(&temp.0).await;
+    let mut socket = connect(&addr).await;
+    send(
+        &mut socket,
+        ClientMsg::Start {
+            session: "s1".into(),
+            resume: None,
+            cwd: None,
+        },
+    )
+    .await;
+    send(
+        &mut socket,
+        ClientMsg::Attach {
+            session: "s1".into(),
+            after: 999,
+        },
+    )
+    .await;
+    let wait = async {
+        loop {
+            if let Message::Text(text) = socket.next().await.unwrap().unwrap() {
+                let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
+                if matches!(frame.msg, ServerMsg::Error { .. }) {
+                    return;
+                }
+            }
+        }
+    };
+    tokio::time::timeout(TIMEOUT, wait).await.unwrap();
+    send(
+        &mut socket,
+        ClientMsg::Stop {
+            session: "s1".into(),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn tailscale_listen_requires_allowed_users() {
+    let status = Command::new(env!("CARGO_BIN_EXE_hubd"))
+        .env("HUBD_LISTEN", "100.64.0.1:0")
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .unwrap();
+    assert!(!status.success());
+}
+
 #[tokio::test]
 async fn websocket_with_origin_is_rejected() {
     let temp = Temp::new("origin");
@@ -374,6 +528,7 @@ async fn invalid_session_id_is_rejected() {
         ClientMsg::Start {
             session: "../x".into(),
             resume: None,
+            cwd: None,
         },
     )
     .await;

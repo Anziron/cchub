@@ -2,41 +2,55 @@
 
 use std::collections::HashMap;
 use std::io::SeekFrom;
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
 use axum::http::{header::ORIGIN, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use cchub_protocol::{ClientMsg, Frame, LineSplitter, Outbound, OutboundLimits, ServerMsg};
 use futures_util::{SinkExt, StreamExt};
+use inotify::{Inotify, WatchMask};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::mpsc;
 use tokio::task::{spawn_blocking, JoinHandle};
 
+use crate::auth;
+use crate::device::{self, DeviceMonitor};
 use crate::host::ProcessHost;
 use crate::session::{valid_id, Sessions};
 
 const HEARTBEAT: Duration = Duration::from_secs(15);
-const POLL: Duration = Duration::from_millis(100);
-const STATUS_EVERY_POLLS: u32 = 50;
+const STATUS_EVERY: Duration = Duration::from_secs(5);
+const PROBE_EVERY_STATUS: u32 = 2;
 const READ_CHUNK: usize = 64 * 1024;
 const CHANNEL_FRAMES: usize = 16;
 
 pub struct App {
     pub sessions: Sessions,
     pub host: Box<dyn ProcessHost>,
+    pub allowed_users: Vec<String>,
 }
 
 pub async fn upgrade(
     State(app): State<Arc<App>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
     // 桌面端的连接在 Rust 进程里，不带 Origin。带 Origin 的只可能来自网页，一律拒绝，
     // 否则设备上任何网页都能连上来，在服务器上执行命令。
     if headers.contains_key(ORIGIN) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let users = app.clone();
+    let allowed = spawn_blocking(move || auth::is_allowed(peer, &users.allowed_users))
+        .await
+        .unwrap_or(false);
+    if !allowed {
         return StatusCode::FORBIDDEN.into_response();
     }
     ws.on_upgrade(move |socket| serve(app, socket))
@@ -111,7 +125,11 @@ async fn handle(
     let fail = |error: String| (Some(session.clone()), error);
 
     match msg {
-        ClientMsg::Start { resume, .. } => {
+        ClientMsg::Start { resume, cwd, .. } => {
+            let cwd = cwd.map(PathBuf::from);
+            if cwd.as_ref().is_some_and(|cwd| !cwd.is_absolute()) {
+                return Err(fail("cwd 必须是绝对路径".to_string()));
+            }
             if resume.as_deref().is_some_and(|id| !valid_id(id)) {
                 return Err(fail("resume ID 不合法".to_string()));
             }
@@ -122,7 +140,15 @@ async fn handle(
                 if app.host.is_running(&id, &dir) {
                     return Ok(());
                 }
-                app.host.start(&id, &dir, resume.as_deref())
+                // 在断开的挂载里启动进程不会报错，只会一直没有输出，所以先探测。
+                if let Some(cwd) = &cwd {
+                    if !device::probe(cwd) {
+                        return Err(std::io::Error::other("设备离线，无法启动会话"));
+                    }
+                    app.sessions.set_cwd(&id, cwd)?;
+                }
+                let workdir = app.sessions.cwd(&id).unwrap_or_else(|| dir.clone());
+                app.host.start(&id, &dir, &workdir, resume.as_deref())
             })
             .await
             .map_err(fail)?;
@@ -166,59 +192,133 @@ async fn blocking(
 }
 
 /// 从偏移开始跟读日志。积压时 `Outbound` 跳过逐字片段或暂停读取，内存有上限。
+/// 日志有变化才读，空闲时只有定时的状态检查。
 async fn follow(app: Arc<App>, session: String, after: u64, tx: mpsc::Sender<Frame>) {
     let frame = |msg| Frame {
         session: Some(session.clone()),
         msg,
     };
     let path = app.sessions.out_path(&session);
+    // 先建监听再读，订阅期间写入的内容不会漏。
+    let mut changes = match watch(&path, after).await {
+        Ok(changes) => changes,
+        Err(message) => {
+            let _ = tx.send(frame(ServerMsg::Error { message })).await;
+            return;
+        }
+    };
+
     let mut splitter = LineSplitter::new(after);
     let mut queue = Outbound::new(OutboundLimits::default());
     let mut buffer = vec![0; READ_CHUNK];
-    let mut tick = tokio::time::interval(POLL);
-    let mut polls = 0;
+    let mut status = tokio::time::interval(STATUS_EVERY);
+    let mut ticks: u32 = 0;
     let mut last_running = None;
+    let mut monitor = DeviceMonitor::default();
+    let mut probing: Option<JoinHandle<bool>> = None;
+
+    if let Err(message) = fill(&path, &mut splitter, &mut queue, &mut buffer).await {
+        let _ = tx.send(frame(ServerMsg::Error { message })).await;
+        return;
+    }
 
     loop {
-        tokio::select! {
+        let filled = tokio::select! {
             permit = tx.reserve(), if !queue.is_empty() => {
                 let Ok(permit) = permit else { return };
+                let was_full = !queue.wants_more();
                 if let Some(msg) = queue.pop() {
                     permit.send(frame(msg));
                 }
+                // 之前因为队列满暂停了读取，腾出空间后要接着读。
+                if was_full && queue.wants_more() {
+                    fill(&path, &mut splitter, &mut queue, &mut buffer).await
+                } else {
+                    Ok(())
+                }
             }
-            _ = tick.tick() => {
-                while queue.wants_more() {
-                    let read = read_at(&path, splitter.read_offset(), &mut buffer).await;
-                    let count = match read {
-                        Ok(0) => break,
-                        Ok(count) => count,
-                        Err(error) => {
-                            let _ = tx.send(frame(ServerMsg::Error { message: format!("读取日志失败：{error}") })).await;
-                            return;
-                        }
-                    };
-                    for (seq, next, line) in splitter.feed(&buffer[..count]) {
-                        queue.push(seq, next, line);
+            change = changes.next() => {
+                if !matches!(change, Some(Ok(_))) {
+                    let message = "监听日志失败".to_string();
+                    let _ = tx.send(frame(ServerMsg::Error { message })).await;
+                    return;
+                }
+                fill(&path, &mut splitter, &mut queue, &mut buffer).await
+            }
+            result = async { probing.as_mut().expect("条件已保证").await }, if probing.is_some() => {
+                probing = None;
+                if let Some(online) = monitor.observe(result.unwrap_or(false)) {
+                    if tx.send(frame(ServerMsg::Device { online })).await.is_err() {
+                        return;
                     }
                 }
-
-                if polls % STATUS_EVERY_POLLS == 0 {
-                    let (app, id) = (app.clone(), session.clone());
-                    let running = spawn_blocking(move || app.host.is_running(&id, &app.sessions.dir(&id)))
-                        .await
-                        .unwrap_or(false);
-                    if last_running != Some(running) {
-                        last_running = Some(running);
-                        if tx.send(frame(ServerMsg::Status { running })).await.is_err() {
-                            return;
-                        }
+                Ok(())
+            }
+            _ = status.tick() => {
+                let (host, id) = (app.clone(), session.clone());
+                let running = spawn_blocking(move || host.host.is_running(&id, &host.sessions.dir(&id)))
+                    .await
+                    .unwrap_or(false);
+                if last_running != Some(running) {
+                    last_running = Some(running);
+                    if tx.send(frame(ServerMsg::Status { running })).await.is_err() {
+                        return;
                     }
                 }
-                polls = polls.wrapping_add(1);
+                if ticks.is_multiple_of(PROBE_EVERY_STATUS) && probing.is_none() {
+                    if let Some(cwd) = app.sessions.cwd(&session) {
+                        probing = Some(spawn_blocking(move || device::probe(&cwd)));
+                    }
+                }
+                ticks = ticks.wrapping_add(1);
+                Ok(())
             }
+        };
+        if let Err(message) = filled {
+            let _ = tx.send(frame(ServerMsg::Error { message })).await;
+            return;
         }
     }
+}
+
+async fn watch(
+    path: &std::path::Path,
+    after: u64,
+) -> Result<inotify::EventStream<[u8; 1024]>, String> {
+    let length = tokio::fs::metadata(path)
+        .await
+        .map_err(|error| format!("读取日志失败：{error}"))?
+        .len();
+    if after > length {
+        return Err("日志已被清理，无法从该位置继续".to_string());
+    }
+    let failed = |error: std::io::Error| format!("监听日志失败：{error}");
+    let inotify = Inotify::init().map_err(failed)?;
+    inotify
+        .watches()
+        .add(path, WatchMask::MODIFY)
+        .map_err(failed)?;
+    inotify.into_event_stream([0; 1024]).map_err(failed)
+}
+
+async fn fill(
+    path: &std::path::Path,
+    splitter: &mut LineSplitter,
+    queue: &mut Outbound,
+    buffer: &mut [u8],
+) -> Result<(), String> {
+    while queue.wants_more() {
+        let count = read_at(path, splitter.read_offset(), buffer)
+            .await
+            .map_err(|error| format!("读取日志失败：{error}"))?;
+        if count == 0 {
+            break;
+        }
+        for (seq, next, line) in splitter.feed(&buffer[..count]) {
+            queue.push(seq, next, line);
+        }
+    }
+    Ok(())
 }
 
 async fn read_at(path: &std::path::Path, offset: u64, buffer: &mut [u8]) -> std::io::Result<usize> {

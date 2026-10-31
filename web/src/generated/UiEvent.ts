@@ -5,4 +5,4 @@ import type { EventClass } from "./EventClass";
 /**
  * 桌面端 Rust 进程经 IPC 推给前端的事件。
  */
-export type UiEvent = { "type": "connection", state: ConnectionState, } | { "type": "event", session: string, class: EventClass, seq: number, payload: string, } | { "type": "status", session: string, running: boolean, } | { "type": "error", session: string | null, message: string, };
+export type UiEvent = { "type": "connection", state: ConnectionState, } | { "type": "event", session: string, class: EventClass, seq: number, payload: string, } | { "type": "status", session: string, running: boolean, } | { "type": "device", session: string, online: boolean, } | { "type": "error", session: string | null, message: string, };

@@ -7,6 +7,7 @@ use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// 会话 ID 会拼进路径、unit 名和 shell 命令，只允许安全字符。
 pub fn valid_id(id: &str) -> bool {
@@ -32,6 +33,45 @@ impl Sessions {
 
     pub fn dir(&self, session: &str) -> PathBuf {
         self.root.join(session)
+    }
+
+    /// 项目目录，记在会话目录里，`hubd` 重启后还能继续探测。
+    pub fn cwd(&self, session: &str) -> Option<PathBuf> {
+        fs::read_to_string(self.dir(session).join("cwd"))
+            .ok()
+            .map(PathBuf::from)
+    }
+
+    pub fn set_cwd(&self, session: &str, cwd: &Path) -> io::Result<()> {
+        fs::write(self.dir(session).join("cwd"), cwd.as_os_str().as_bytes())
+    }
+
+    /// 清理进程已结束、很久没有更新的会话目录。这里只有运行日志，对话历史在 `claude` 的 `.jsonl` 里。
+    pub fn prune(&self, max_age: Duration, is_running: impl Fn(&str, &Path) -> bool) -> usize {
+        let Ok(entries) = fs::read_dir(&self.root) else {
+            return 0;
+        };
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            let name = entry.file_name();
+            let Some(session) = name.to_str().filter(|name| valid_id(name)) else {
+                continue;
+            };
+            // 只碰自己建的目录。
+            let age = fs::metadata(dir.join("out"))
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|time| time.elapsed().ok());
+            if !dir.join("in").exists() || age.is_none_or(|age| age < max_age) {
+                continue;
+            }
+            if !is_running(session, &dir) && fs::remove_dir_all(&dir).is_ok() {
+                self.release(session);
+                removed += 1;
+            }
+        }
+        removed
     }
 
     pub fn out_path(&self, session: &str) -> PathBuf {
@@ -113,5 +153,25 @@ mod tests {
             assert!(!valid_id(bad), "{bad}");
         }
         assert!(valid_id("Session_01-a"));
+    }
+
+    #[test]
+    fn prune_only_removes_old_stopped_sessions_it_created() {
+        let root = std::env::temp_dir().join(format!("hubd-prune-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("not-ours")).unwrap();
+        fs::write(root.join("not-ours/out"), "").unwrap();
+        let sessions = Sessions::new(root.clone());
+        sessions.prepare("stopped").unwrap();
+        sessions.prepare("running").unwrap();
+
+        assert_eq!(sessions.prune(Duration::from_secs(3600), |_, _| false), 0);
+        let removed = sessions.prune(Duration::ZERO, |id, _| id == "running");
+
+        assert_eq!(removed, 1);
+        assert!(!root.join("stopped").exists());
+        assert!(root.join("running").exists());
+        assert!(root.join("not-ours").exists());
+        fs::remove_dir_all(&root).unwrap();
     }
 }

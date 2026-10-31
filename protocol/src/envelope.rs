@@ -59,6 +59,11 @@ pub fn classify(line: &str) -> EventClass {
     }
 }
 
+/// 用户消息。设备离线时先暂存；审批回复等控制消息不算，要照常送达。
+pub fn is_user_message(line: &str) -> bool {
+    serde_json::from_str::<Envelope>(line).is_ok_and(|envelope| envelope.kind == Some("user"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +97,13 @@ mod tests {
         for (line, expected) in cases {
             assert_eq!(classify(line), expected, "{line}");
         }
+    }
+
+    #[test]
+    fn recognizes_user_messages() {
+        assert!(is_user_message(r#"{"type":"user","message":{}}"#));
+        assert!(!is_user_message(r#"{"type":"control_response"}"#));
+        assert!(!is_user_message("not json"));
     }
 
     #[test]

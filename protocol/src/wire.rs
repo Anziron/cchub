@@ -25,6 +25,9 @@ pub enum ClientMsg {
         session: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resume: Option<String>,
+        /// 项目目录。省略时用会话目录。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
     },
     /// 订阅会话，从 `after` 偏移开始接收。
     Attach {
@@ -57,6 +60,10 @@ pub enum ServerMsg {
         seq: u64,
         #[cfg_attr(feature = "ts", ts(type = "number"))]
         next: u64,
+    },
+    /// 项目目录所在设备是否在线。
+    Device {
+        online: bool,
     },
     /// 会话进程状态。
     Status {
@@ -94,6 +101,10 @@ pub enum UiEvent {
     Status {
         session: String,
         running: bool,
+    },
+    Device {
+        session: String,
+        online: bool,
     },
     Error {
         session: Option<String>,

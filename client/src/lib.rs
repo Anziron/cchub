@@ -1,12 +1,12 @@
 //! 桌面端的连接逻辑，放在 Rust 进程里，窗口关闭后也能维持连接和通知。
 //! 不依赖 Tauri，所以 Linux 上也能测试。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::time::Duration;
 
 use cchub_protocol::{
-    ClientMsg, ConnectionState, Frame, Inbound, InboundAction, ServerMsg, UiEvent,
+    is_user_message, ClientMsg, ConnectionState, Frame, Inbound, InboundAction, ServerMsg, UiEvent,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
@@ -47,8 +47,7 @@ async fn run(
     mut rx: mpsc::UnboundedReceiver<ClientMsg>,
     on_event: impl Fn(UiEvent),
 ) {
-    let mut sessions: HashMap<String, Inbound> = HashMap::new();
-    let mut pending: Vec<ClientMsg> = Vec::new();
+    let mut state = State::default();
     let mut backoff = initial_backoff;
 
     loop {
@@ -60,7 +59,7 @@ async fn run(
             on_event(UiEvent::Connection {
                 state: ConnectionState::Connected,
             });
-            match connected(socket, &mut rx, &mut sessions, &mut pending, &on_event).await {
+            match connected(socket, &mut rx, &mut state, &on_event).await {
                 Ended::Closed => return,
                 Ended::Lost => {}
             }
@@ -76,7 +75,7 @@ async fn run(
             tokio::select! {
                 _ = &mut wait => break,
                 msg = rx.recv() => match msg {
-                    Some(msg) => pending.push(msg),
+                    Some(msg) => state.pending.push(msg),
                     None => return,
                 },
             }
@@ -88,8 +87,7 @@ async fn run(
 async fn connected<S>(
     mut socket: S,
     rx: &mut mpsc::UnboundedReceiver<ClientMsg>,
-    sessions: &mut HashMap<String, Inbound>,
-    pending: &mut Vec<ClientMsg>,
+    state: &mut State,
     on_event: &impl Fn(UiEvent),
 ) -> Ended
 where
@@ -97,7 +95,7 @@ where
         + SinkExt<Message>
         + Unpin,
 {
-    for (session, inbound) in sessions.iter() {
+    for (session, inbound) in state.sessions.iter() {
         let attach = ClientMsg::Attach {
             session: session.clone(),
             after: inbound.expected(),
@@ -106,22 +104,20 @@ where
             return Ended::Lost;
         }
     }
-    while !pending.is_empty() {
-        let msg = pending[0].clone();
-        track_attach(&msg, sessions);
-        if send(&mut socket, &msg).await.is_err() {
+    while !state.pending.is_empty() {
+        let msg = state.pending[0].clone();
+        if state.deliver(&mut socket, msg).await.is_err() {
             return Ended::Lost;
         }
-        pending.remove(0);
+        state.pending.remove(0);
     }
 
     loop {
         tokio::select! {
             msg = rx.recv() => {
                 let Some(msg) = msg else { return Ended::Closed };
-                track_attach(&msg, sessions);
-                if send(&mut socket, &msg).await.is_err() {
-                    pending.push(msg);
+                if state.deliver(&mut socket, msg.clone()).await.is_err() {
+                    state.pending.push(msg);
                     return Ended::Lost;
                 }
             }
@@ -130,8 +126,9 @@ where
                 let Ok(Some(Ok(message))) = incoming else { return Ended::Lost };
                 let Message::Text(text) = message else { continue };
                 let Ok(frame) = serde_json::from_str::<Frame>(text.as_str()) else { continue };
-                if let Some(attach) = on_frame(frame, sessions, on_event) {
-                    if send(&mut socket, &attach).await.is_err() {
+                for msg in state.on_frame(frame, on_event) {
+                    if send(&mut socket, &msg).await.is_err() {
+                        state.pending.push(msg);
                         return Ended::Lost;
                     }
                 }
@@ -140,51 +137,97 @@ where
     }
 }
 
-/// 第一次订阅某个会话时建立接收状态；已有状态时以它记录的偏移为准。
-fn track_attach(msg: &ClientMsg, sessions: &mut HashMap<String, Inbound>) {
-    if let ClientMsg::Attach { session, after } = msg {
-        sessions
-            .entry(session.clone())
-            .or_insert_with(|| Inbound::new(*after));
-    }
+#[derive(Default)]
+struct State {
+    sessions: HashMap<String, Inbound>,
+    /// 断线期间的消息，重连后再发。
+    pending: Vec<ClientMsg>,
+    offline: HashSet<String>,
+    /// 设备离线期间的用户消息，恢复后再发。
+    held: Vec<ClientMsg>,
 }
 
-fn on_frame(
-    frame: Frame,
-    sessions: &mut HashMap<String, Inbound>,
-    on_event: &impl Fn(UiEvent),
-) -> Option<ClientMsg> {
-    let session = frame.session;
-    match frame.msg {
-        ServerMsg::Status { running } => {
-            on_event(UiEvent::Status {
-                session: session?,
-                running,
-            });
-            None
+impl State {
+    async fn deliver<S: SinkExt<Message> + Unpin>(
+        &mut self,
+        socket: &mut S,
+        msg: ClientMsg,
+    ) -> Result<(), ()> {
+        if let ClientMsg::Attach { session, after } = &msg {
+            // 第一次订阅时建立接收状态；已有状态时以它记录的偏移为准。
+            self.sessions
+                .entry(session.clone())
+                .or_insert_with(|| Inbound::new(*after));
         }
-        ServerMsg::Error { message } => {
-            on_event(UiEvent::Error { session, message });
-            None
+        if let ClientMsg::Input { session, line } = &msg {
+            if self.offline.contains(session) && is_user_message(line) {
+                self.held.push(msg);
+                return Ok(());
+            }
         }
-        msg => {
-            let id = session?;
-            match sessions.get_mut(&id)?.on_message(msg)? {
-                InboundAction::Apply {
-                    class,
-                    seq,
-                    payload,
-                } => {
-                    on_event(UiEvent::Event {
-                        session: id,
+        send(socket, &msg).await
+    }
+
+    /// 返回要发回服务器的消息。
+    fn on_frame(&mut self, frame: Frame, on_event: &impl Fn(UiEvent)) -> Vec<ClientMsg> {
+        let session = frame.session;
+        match frame.msg {
+            ServerMsg::Status { running } => {
+                if let Some(session) = session {
+                    on_event(UiEvent::Status { session, running });
+                }
+                Vec::new()
+            }
+            ServerMsg::Device { online } => {
+                let Some(session) = session else {
+                    return Vec::new();
+                };
+                on_event(UiEvent::Device {
+                    session: session.clone(),
+                    online,
+                });
+                if !online {
+                    self.offline.insert(session);
+                    return Vec::new();
+                }
+                self.offline.remove(&session);
+                let (ready, held) = std::mem::take(&mut self.held).into_iter().partition(
+                    |msg| matches!(msg, ClientMsg::Input { session: id, .. } if *id == session),
+                );
+                self.held = held;
+                ready
+            }
+            ServerMsg::Error { message } => {
+                on_event(UiEvent::Error { session, message });
+                Vec::new()
+            }
+            msg => {
+                let Some(id) = session else {
+                    return Vec::new();
+                };
+                let Some(action) = self.sessions.get_mut(&id).and_then(|i| i.on_message(msg))
+                else {
+                    return Vec::new();
+                };
+                match action {
+                    InboundAction::Apply {
                         class,
                         seq,
                         payload,
-                    });
-                    None
+                    } => {
+                        on_event(UiEvent::Event {
+                            session: id,
+                            class,
+                            seq,
+                            payload,
+                        });
+                        Vec::new()
+                    }
+                    InboundAction::Resync { after } => {
+                        vec![ClientMsg::Attach { session: id, after }]
+                    }
+                    InboundAction::Skipped | InboundAction::Duplicate => Vec::new(),
                 }
-                InboundAction::Resync { after } => Some(ClientMsg::Attach { session: id, after }),
-                InboundAction::Skipped | InboundAction::Duplicate => None,
             }
         }
     }
@@ -227,6 +270,64 @@ mod tests {
                 return serde_json::from_str(text.as_str()).unwrap();
             }
         }
+    }
+
+    #[tokio::test]
+    async fn holds_user_messages_while_device_is_offline() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (events_tx, mut events) = mpsc::unbounded_channel();
+        let (client, task) = HubClient::new(url, Duration::from_millis(10), move |event| {
+            let _ = events_tx.send(event);
+        });
+        tokio::spawn(task);
+        client
+            .send(ClientMsg::Attach {
+                session: "s1".into(),
+                after: 0,
+            })
+            .unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut server = accept_async(stream).await.unwrap();
+        next_client_msg(&mut server).await;
+
+        let device = |online| {
+            serde_json::to_string(&Frame {
+                session: Some("s1".into()),
+                msg: ServerMsg::Device { online },
+            })
+            .unwrap()
+        };
+        let mut wait_device = async |expected: bool| loop {
+            let received = tokio::time::timeout(Duration::from_secs(5), events.recv());
+            if let UiEvent::Device { online, .. } = received.await.unwrap().unwrap() {
+                assert_eq!(online, expected);
+                return;
+            }
+        };
+        server
+            .send(Message::Text(device(false).into()))
+            .await
+            .unwrap();
+        wait_device(false).await;
+
+        let input = |line: &str| ClientMsg::Input {
+            session: "s1".into(),
+            line: line.into(),
+        };
+        let user = r#"{"type":"user"}"#;
+        let reply = r#"{"type":"control_response"}"#;
+        client.send(input(user)).unwrap();
+        client.send(input(reply)).unwrap();
+
+        // 审批回复照常送达，用户消息先留着。
+        assert_eq!(next_client_msg(&mut server).await, input(reply));
+        server
+            .send(Message::Text(device(true).into()))
+            .await
+            .unwrap();
+        wait_device(true).await;
+        assert_eq!(next_client_msg(&mut server).await, input(user));
     }
 
     #[tokio::test]

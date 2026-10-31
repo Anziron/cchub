@@ -1,7 +1,13 @@
 #[cfg(unix)]
+mod auth;
+#[cfg(unix)]
 mod config;
 #[cfg(unix)]
+mod device;
+#[cfg(unix)]
 mod host;
+#[cfg(unix)]
+mod runner;
 #[cfg(unix)]
 mod session;
 #[cfg(unix)]
@@ -16,6 +22,15 @@ fn main() {
 #[cfg(unix)]
 fn main() -> std::process::ExitCode {
     use std::process::ExitCode;
+
+    let args: Vec<_> = std::env::args_os().collect();
+    if args.len() == 3 && args[1] == "--probe" {
+        return if device::probe_main(std::path::Path::new(&args[2])) {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
+    }
 
     let config = match config::Config::from_env() {
         Ok(config) => config,
@@ -40,7 +55,9 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(unix)]
 async fn run(config: config::Config) -> std::io::Result<()> {
+    use std::net::SocketAddr;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use axum::{routing::get, Json, Router};
     use cchub_protocol::{Health, PROTOCOL_VERSION};
@@ -64,7 +81,24 @@ async fn run(config: config::Config) -> std::io::Result<()> {
     let app = Arc::new(ws::App {
         sessions: session::Sessions::new(config.state_dir),
         host,
+        allowed_users: config.allowed_users,
     });
+
+    let retention = config.retention;
+    let pruner = app.clone();
+    tokio::spawn(async move {
+        let mut daily = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+        loop {
+            daily.tick().await;
+            let app = pruner.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                app.sessions
+                    .prune(retention, |id, dir| app.host.is_running(id, dir))
+            })
+            .await;
+        }
+    });
+
     let router = Router::new()
         .route("/health", get(health))
         .route("/ws", get(ws::upgrade))
@@ -72,9 +106,12 @@ async fn run(config: config::Config) -> std::io::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     println!("hubd listening on {}", listener.local_addr()?);
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await
 }

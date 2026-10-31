@@ -5,4 +5,4 @@ export type ServerMsg = { "type": "event", seq: number, next: number, class: Eve
 /**
  * `claude` 输出的一行原文，`hubd` 不解析正文。
  */
-payload: string, } | { "type": "skipped", seq: number, next: number, } | { "type": "status", running: boolean, } | { "type": "error", message: string, };
+payload: string, } | { "type": "skipped", seq: number, next: number, } | { "type": "device", online: boolean, } | { "type": "status", running: boolean, } | { "type": "error", message: string, };

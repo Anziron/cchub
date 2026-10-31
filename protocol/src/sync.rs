@@ -189,7 +189,7 @@ impl Inbound {
             ServerMsg::Skipped { seq, next } => {
                 Some(self.advance(seq, next).unwrap_or(InboundAction::Skipped))
             }
-            ServerMsg::Status { .. } | ServerMsg::Error { .. } => None,
+            ServerMsg::Status { .. } | ServerMsg::Device { .. } | ServerMsg::Error { .. } => None,
         }
     }
 

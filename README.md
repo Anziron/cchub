@@ -26,14 +26,16 @@ npm install
 npm run dev:web
 npm run tauri dev
 
-# 默认监听 127.0.0.1:7878；设备身份校验实现之前，hubd 拒绝非回环地址
+# 默认监听 127.0.0.1:7878
 HUBD_STATE_DIR=/tmp/hubd cargo run -p hubd --bin hubd
 curl http://127.0.0.1:7878/health
 ```
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `HUBD_LISTEN` | `127.0.0.1:7878` | 监听地址，只允许回环地址 |
+| `HUBD_LISTEN` | `127.0.0.1:7878` | 监听地址，只允许回环或 Tailscale 地址 |
+| `HUBD_ALLOWED_USERS` | 空 | 允许连接的 Tailscale 账号，逗号分隔；监听 Tailscale 地址时必填 |
+| `HUBD_RETENTION_DAYS` | `7` | 进程已结束的会话日志保留天数 |
 | `HUBD_STATE_DIR` | `/var/lib/hubd` | 会话目录 |
 | `HUBD_HOST` | `systemd` | 进程托管方式：`systemd` 或 `direct` |
 | `HUBD_CLAUDE_CMD` | `claude -p …` | 启动命令 |

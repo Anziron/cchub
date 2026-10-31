@@ -9,13 +9,18 @@ use std::process::{Command, Stdio};
 
 /// 用 `<>` 打开 FIFO，进程自己持有写端，所以永远读不到 EOF。
 fn shell_command(claude_cmd: &str, dir: &Path, resume: Option<&str>) -> String {
-    let dir = dir.display();
+    let dir = shell_quote(&dir.to_string_lossy());
     let resume = resume.map_or(String::new(), |id| format!(" --resume {id}"));
     format!("exec {claude_cmd}{resume} <>{dir}/in >>{dir}/out 2>>{dir}/err")
 }
 
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
 pub trait ProcessHost: Send + Sync {
-    fn start(&self, session: &str, dir: &Path, resume: Option<&str>) -> io::Result<()>;
+    /// `cwd` 是进程的工作目录，`dir` 是会话目录。
+    fn start(&self, session: &str, dir: &Path, cwd: &Path, resume: Option<&str>) -> io::Result<()>;
     fn is_running(&self, session: &str, dir: &Path) -> bool;
     fn stop(&self, session: &str, dir: &Path) -> io::Result<()>;
 }
@@ -30,13 +35,13 @@ fn unit_name(session: &str) -> String {
 }
 
 impl ProcessHost for SystemdHost {
-    fn start(&self, session: &str, dir: &Path, resume: Option<&str>) -> io::Result<()> {
+    fn start(&self, session: &str, dir: &Path, cwd: &Path, resume: Option<&str>) -> io::Result<()> {
         let mut command = Command::new("systemd-run");
         command
             .args(["-q", "--collect", "--unit"])
             .arg(unit_name(session))
             .arg("-p")
-            .arg(format!("WorkingDirectory={}", dir.display()));
+            .arg(format!("WorkingDirectory={}", cwd.display()));
         for name in ["PATH", "HOME"] {
             if let Ok(value) = std::env::var(name) {
                 command.arg(format!("--setenv={name}={value}"));
@@ -94,11 +99,17 @@ fn pid_alive(pid: i32) -> bool {
 }
 
 impl ProcessHost for DirectHost {
-    fn start(&self, _session: &str, dir: &Path, resume: Option<&str>) -> io::Result<()> {
+    fn start(
+        &self,
+        _session: &str,
+        dir: &Path,
+        cwd: &Path,
+        resume: Option<&str>,
+    ) -> io::Result<()> {
         let mut child = Command::new("/bin/sh")
             .arg("-c")
             .arg(shell_command(&self.claude_cmd, dir, resume))
-            .current_dir(dir)
+            .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -134,7 +145,7 @@ mod tests {
         let command = shell_command("claude -p", Path::new("/s/a"), Some("id1"));
         assert_eq!(
             command,
-            "exec claude -p --resume id1 <>/s/a/in >>/s/a/out 2>>/s/a/err"
+            "exec claude -p --resume id1 <>'/s/a'/in >>'/s/a'/out 2>>'/s/a'/err"
         );
     }
 }
