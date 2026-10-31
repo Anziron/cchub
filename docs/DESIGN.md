@@ -162,6 +162,12 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 - `/model`、`/config`、`/context`、`/usage` 都在 0.5 秒内返回，走普通的 `result`。输出**会写进 `.jsonl`，模型也能看到**，会占上下文，界面不应自动定时调用。
 - 中断后的 `result` 是 `subtype: error_during_execution`、`is_error: true`，要按“已中断”显示，不算任务失败。
 
+### 桌面端实现依据（2026-10-31 实测，claude 2.1.314）
+
+- `out` 默认没有用户消息，加 `--replay-user-messages` 才回显（`content` 是字符串，带 `uuid`、`timestamp`）。窗口重建靠从头重放 `out`，所以这个参数是必需的。
+- 客户端的回复不进 `out`，请求是否已回答要看后面有没有同 `tool_use_id` 的 `tool_result`；进程退出或一轮结束时未回答的请求作废。
+- “总是允许”：`allow` 回复加 `updatedPermissions`（原样用 `permission_suggestions`），CLI 把规则写进 `.claude/settings.local.json`。
+
 ### stream 与 `.jsonl` 的对应关系（2026-10-31 实测，单次短会话）
 
 - `assistant`、`user` 事件的 `uuid` 能对上（stream 4 个全部出现在 `.jsonl` 的 5 个里），`message.id`、`tool_use_id` 也一致，可以作为“逐事件一致”的比对键。

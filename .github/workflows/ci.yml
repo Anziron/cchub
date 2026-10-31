@@ -43,6 +43,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build:web
+      - run: npm test -w web
 
   desktop:
     runs-on: windows-latest
@@ -57,4 +58,11 @@ jobs:
       - run: npm ci
       - run: npm run build:web
       - run: cargo test -p cchub-protocol -p cchub-client --locked
-      - run: cargo check -p hubd -p cchub-desktop --locked
+      - run: cargo check -p hubd --locked
+      - run: cargo clippy -p cchub-desktop --locked -- -D warnings
+      - name: 编译可直接运行的桌面端
+        run: npm run tauri -- build --no-bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cchub-windows
+          path: target/release/cchub-desktop.exe

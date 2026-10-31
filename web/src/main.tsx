@@ -1,10 +1,20 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { loadHub } from "./hub";
+import { Store } from "./store";
 import "./styles.css";
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+void loadHub().then((hub) => {
+  if (!hub) {
+    document.body.textContent = "请在桌面端里打开。";
+    return;
+  }
+  const store = new Store(hub);
+  if (import.meta.env.DEV) store.select(new URLSearchParams(location.search).get("s"));
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <App store={store} />
+    </StrictMode>,
+  );
+});

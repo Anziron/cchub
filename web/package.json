@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build"
+    "build": "tsc && vite build",
+    "test": "node --test test/model.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
+    "marked": "^16.0.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },

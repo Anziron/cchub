@@ -33,4 +33,7 @@
 - 切换模型要用 `set_model` 控制消息；`/model` 回复成功但不生效。内置命令的输出会写进会话记录并占上下文，不要自动定时调用。
 - 中断后 `result` 是 `error_during_execution`、`is_error: true`，界面不能显示成任务失败。
 - 录制 `plan` 场景会在 `~/.claude/plans/` 留下方案文件，录完要删。
+- 前端的 `demo.ts` 只在开发时用录制驱动界面：`npm run dev:web` 后打开 `/?s=rich&theme=dark`。经 `pcrun` 启动的开发服务器随 SSH 会话退出，要和截图放在同一条命令里。
+- 设备没有 Rust，桌面端由 CI 编译，可执行文件在 Actions 的 `cchub-windows` 产物里。
+- 服务器上的 `claude` 受用户配置影响可能不发审批请求，要测审批时加 `--setting-sources project,local`。
 - CLI 会拦截 `sleep 60; ...` 这类命令，实验里要用脚本文件代替。

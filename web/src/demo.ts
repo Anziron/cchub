@@ -1,0 +1,78 @@
+// 开发时的假后端：用真实录制驱动界面，不需要 Rust 和服务器。
+// `?scene=offline`、`?scene=conn` 模拟设备离线和断线。
+import approval from "../../testdata/recordings/approval/stream.jsonl?raw";
+import interrupt from "../../testdata/recordings/interrupt/stream.jsonl?raw";
+import plan from "../../testdata/recordings/plan/stream.jsonl?raw";
+import question from "../../testdata/recordings/question/stream.jsonl?raw";
+import type { UiEvent } from "./generated/UiEvent";
+import type { Hub } from "./hub";
+
+const params = new URLSearchParams(location.search);
+const scene = params.get("scene");
+localStorage.setItem("cchub.url", "ws://demo");
+if (params.get("theme")) localStorage.setItem("cchub.theme", params.get("theme")!);
+
+function until(recording: string, needle: string): string[] {
+  const lines = recording.split("\n").filter(Boolean);
+  const index = lines.findIndex((line) => line.includes(needle));
+  return index < 0 ? lines : lines.slice(0, index + 1);
+}
+
+const user = (text: string) =>
+  JSON.stringify({ type: "user", uuid: crypto.randomUUID(), timestamp: new Date(Date.now() - 12000).toISOString(), message: { role: "user", content: text } });
+
+const assistant = (id: string, content: unknown[]) =>
+  JSON.stringify({ type: "assistant", message: { id, model: "claude-sonnet-5-5", content: content } });
+
+const result = (id: string, content: string) =>
+  JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content }] } });
+
+const rich = [
+  user("帮我修一下登录接口，并跑一遍相关测试。"),
+  assistant("m1", [{ type: "tool_use", id: "todo", name: "TodoWrite", input: { todos: [
+    { content: "定位登录接口", status: "completed" },
+    { content: "补充失败用例", status: "completed" },
+    { content: "运行完整测试并汇报", status: "in_progress", activeForm: "运行完整测试并汇报" },
+  ] } }]),
+  assistant("m1", [{ type: "thinking", thinking: "账号不存在和密码错误应该返回同一条提示，避免泄露账号是否存在。" }]),
+  assistant("m1", [{ type: "text", text: "我先看了现有实现。问题在于账号不存在和密码错误走了**两条分支**，返回的提示不一致，这会泄露账号是否存在。修改后在 `sign_in` 里返回同一条错误：\n\n```python\ndef sign_in(email, password):\n    account = users.find(email)\n    if not account or not verify(password, account.hash):\n        return {\"ok\": False, \"error\": \"账号或密码错误\"}\n    return create_session(account.id)\n```" }]),
+  assistant("m1", [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/work/src/auth.py" } }]),
+  result("t1", "读取 184 行"),
+  assistant("m1", [{ type: "tool_use", id: "t2", name: "Edit", input: { file_path: "/work/src/auth.py", old_string: "if not account: return None", new_string: "if not account or not verify(password, account.hash):\n    return {\"ok\": False, \"error\": \"账号或密码错误\"}" } }]),
+  result("t2", "ok"),
+  assistant("m1", [{ type: "tool_use", id: "t3", name: "Task", input: { description: "检查测试覆盖率" } }]),
+  result("t3", "认证分支覆盖率 86%"),
+  assistant("m1", [{ type: "tool_use", id: "t4", name: "Bash", input: { command: "sleep 60; echo ready" } }]),
+  JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t4", is_error: true, content: "<tool_use_error>Blocked: sleep 60 followed by: echo ready</tool_use_error>" }] } }),
+  assistant("m1", [{ type: "text", text: "测试结果如下，错误密码的用例现在已经通过：\n\n| 用例 | 结果 | 耗时 |\n| --- | --- | ---: |\n| 登录成功 | 通过 | 41 ms |\n| 错误密码 | 通过 | 38 ms |\n| 账号不存在 | 通过 | 35 ms |" }]),
+  assistant("m1", [{ type: "tool_use", id: "t5", name: "Bash", input: { command: "pytest tests/auth_test.py -q" } }]),
+];
+
+const SESSIONS: { id: string; title: string; running: boolean; lines: string[] }[] = [
+  { id: "approval", title: "修登录接口", running: true, lines: [user("把 hi 写进 marker，再写一句话。"), ...until(approval, '"can_use_tool"')] },
+  { id: "plan", title: "拆分账单模块", running: true, lines: [user("先出方案，确认后再写 hello.txt。"), ...until(plan, '"can_use_tool"')] },
+  { id: "question", title: "选择登录入口", running: true, lines: [user("问我选哪个颜色。"), ...until(question, '"can_use_tool"')] },
+  { id: "rich", title: "整理认证测试", running: true, lines: rich },
+  { id: "interrupt", title: "跑一个长任务", running: false, lines: [user("运行 long.py"), ...interrupt.split("\n").filter(Boolean)] },
+];
+
+let emit: (event: UiEvent) => void = () => {};
+
+export const demoHub: Hub = {
+  connect: async () => (scene === "conn" ? "disconnected" : "connected"),
+  onEvent: async (handler) => { emit = handler; },
+  send: async (msg) => {
+    if (msg.type === "list") {
+      const now = Math.floor(Date.now() / 1000);
+      emit({
+        type: "sessions",
+        mem_available_mb: 412,
+        sessions: SESSIONS.map((s, i) => ({ id: s.id, title: s.title, cwd: "/mnt/workstation/d/litellm_work", running: s.running, updated: now - i * 60 })),
+      });
+    } else if (msg.type === "attach") {
+      const session = SESSIONS.find((s) => s.id === msg.session);
+      session?.lines.forEach((payload, i) => emit({ type: "event", session: msg.session, class: "durable", seq: i, payload }));
+      if (scene === "offline") emit({ type: "device", session: msg.session, online: false });
+    }
+  },
+};
