@@ -86,7 +86,7 @@
 | 审批 | 沿用服务器自己的权限模式（当前是 `auto`），需要人决定的在桌面端弹窗并发系统通知 |
 | 界面风格 | 参考 Claude 桌面端：简约、留白多、浅色和深色主题；不使用 Anthropic 的 logo 和品牌素材 |
 | 兼容 | 原来的 `cc` 命令照常可用；app 开的会话在终端 `/resume` 也能接上 |
-| 代码仓库 | 私有仓库 `Anziron/cchub`，放在 pc-home 的 `D:\frame\buspi\cchub`（独立仓库，`buspi` 经 `.git/info/exclude` 忽略） |
+| 代码仓库 | 私有仓库 `Anziron/cchub`，放在 pc-home 的 `D:\cchub` |
 | 目录结构 | `server/` hubd、`desktop/` Tauri、`web/` 前端、`protocol/` 共用类型 |
 
 轻量原则：服务器端只做转发和进程管理，只解析事件信封（类型、序号、状态），不解析正文，不渲染。Markdown、diff、高亮、搜索全部在桌面端做。
