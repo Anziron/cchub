@@ -1,0 +1,9 @@
+target/
+node_modules/
+dist/
+*.log
+.env
+PLAN.md
+.cc/
+.claude/handoff.md
+desktop/gen/

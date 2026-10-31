@@ -1,0 +1,88 @@
+:root {
+  color-scheme: light dark;
+  --bg: #faf9f7;
+  --bg-sidebar: #f1efeb;
+  --text: #2b2a28;
+  --text-muted: #85827c;
+  --border: #e2dfd9;
+  font: 14px/1.6 system-ui, "Microsoft YaHei UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #23221f;
+    --bg-sidebar: #1b1a18;
+    --text: #e8e6e1;
+    --text-muted: #96938c;
+    --border: #393733;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button,
+textarea {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  height: 100vh;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.header {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.messages {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  overflow-y: auto;
+}
+
+.empty {
+  color: var(--text-muted);
+}
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.composer textarea {
+  flex: 1;
+  resize: none;
+}
