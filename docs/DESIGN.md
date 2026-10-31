@@ -154,6 +154,14 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 
 模型可能把前台命令自行改成 `run_in_background: true`，这时一轮会先结束、任务还在跑，界面不能把“一轮结束”等同于“任务完成”。
 
+### 控制消息和内置命令（2026-10-31 实测，脚本 `docs/experiments/cli.py`）
+
+- 切换模型用控制消息 `{"type":"control_request","request_id":"…","request":{"subtype":"set_model","model":"sonnet"}}`，返回 `control_response` 带完整模型 ID，下一轮生效。
+- **`/model haiku` 不可靠**：回复“Set model to Haiku”，但之后的请求仍用原模型。界面的模型切换必须走 `set_model`，不能发 `/model`。
+- `/config` 不弹菜单，只返回用法文字；要改设置用 `/config key=value`。
+- `/model`、`/config`、`/context`、`/usage` 都在 0.5 秒内返回，走普通的 `result`。输出**会写进 `.jsonl`，模型也能看到**，会占上下文，界面不应自动定时调用。
+- 中断后的 `result` 是 `subtype: error_during_execution`、`is_error: true`，要按“已中断”显示，不算任务失败。
+
 ### stream 与 `.jsonl` 的对应关系（2026-10-31 实测，单次短会话）
 
 - `assistant`、`user` 事件的 `uuid` 能对上（stream 4 个全部出现在 `.jsonl` 的 5 个里），`message.id`、`tool_use_id` 也一致，可以作为“逐事件一致”的比对键。
@@ -200,7 +208,8 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 - `hubd` 独立探测每个挂载的健康状态，作为协议里单独的“设备状态”，与连接状态、会话状态分开显示。
 - 设备离线时：通知用户；用户消息由客户端暂存，审批回复照常发送；不在该目录冷启动进程。正在运行的这一轮不打断，但醒目提示其中的文件错误可能由离线造成。
 - 探测方式（2026-10-31 实测，脚本 `docs/experiments/freeze.sh`）：`hubd --probe` 子进程查一个每次都新的文件名，答复“不存在”算在线，5 秒超时或其他错误算失败，连续 2 次失败判离线，一次成功恢复。断网后 `stat` 已缓存的文件 0 秒成功，所以不能查已有文件。卡住的探测进程收到 `SIGKILL` 后进入 D 状态，恢复网络才退出，因此同一路径同时只跑一个探测；恢复网络后 1 秒内探测成功。
-- 写到一半断网（2026-10-31 实测）：`dd` 约 60 秒后返回错误，设备上留下只写了一部分的文件（200MB 中的 2.6MB）。恢复后不会自动清理，界面要提示离线期间的写入可能不完整。模型对此的反应未测。
+- 写到一半断网（2026-10-31 实测）：`dd` 约 60 秒后返回错误，设备上留下只写了一部分的文件（200MB 中的 2.6MB）。恢复后不会自动清理，界面要提示离线期间的写入可能不完整。
+- 模型的反应（2026-10-31 实测一次，haiku，脚本 `docs/experiments/react.py`）：断网后工具卡到 120 秒超时被转到后台，结果里有 Python 报错但 `is_error: false`，170 秒时这一轮仍未结束，设备上留下 4.8MB 的残缺文件。模型不会及时判断出断网，界面的设备状态提示不能省。
 - 未验证：真实关机或休眠、`max_conns` 下的并发。
 
 ## 5.1 消息同步要求（硬性）
@@ -260,7 +269,7 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
   - 中断按钮（也支持 Esc）。
   - 一个简单的动态点，窗口不在前台时暂停。
   - 不做：随机俏皮状态词、精细动画、实时 token 计数（一轮结束后显示总数即可）。
-- 内置命令：`/usage`、`/context` 等直接作为普通回复显示（见第 4 节）。`/resume` 不可用，用历史会话列表代替；`/model`、`/config` 表现待验证，不行就用模型下拉框等界面功能替代。
+- 内置命令：`/usage`、`/context` 等直接作为普通回复显示（见第 4 节）。`/resume` 不可用，用历史会话列表代替；模型切换用下拉框，走 `set_model`（`/model` 不生效）。
 - 可选（以后再说）：从 `/usage` 文字里提取 5 小时窗口已用百分比，在左栏底部和服务器内存一起显示。
 - 第一版不做：文件浏览和编辑、插件、手机端、多用户。
 - 备用：终端标签页（xterm.js 直接 ssh 跑原生 `claude`），优先级低。
@@ -270,9 +279,8 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 
 1. 界面原型：先做一个静态 HTML 原型，确认配色、布局、各类消息样式（已提议，待确认）。
 2. `hubd` 和桌面端的消息格式：会话列表、订阅会话事件、发送消息、中断、审批回复、服务器状态推送。必须满足第 5.1 节的同步要求。
-3. 切换模型的控制消息格式，`/model`、`/config` 在无界面模式下的表现、内置命令输出是否写进会话记录，开发前在服务器上再验证。
-4. 条款：程序化驱动 `claude -p` 用订阅账号是否合规，自用和分发给别人分开判断，公开发布前查清。
-5. 正式项目名。
+3. 条款：程序化驱动 `claude -p` 用订阅账号是否合规，自用和分发给别人分开判断，公开发布前查清。
+4. 正式项目名。
 
 ## 9. 相关的服务器现状
 
@@ -292,3 +300,4 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 - 2026-10-31：实测 stream 与 `.jsonl` 的对应关系和 FIFO + `--resume`。
 - 2026-10-31：框架调整为可验证结构：`sans-IO` 同步核心、`fake-claude` 回放、连接放进 Rust 进程，设计文档移入项目仓库。
 - 2026-10-31：实现 inotify、设备身份校验、设备状态探测、日志清理；实测探测和写入中断；Codex 完成静态界面原型 `docs/prototype/index.html`，待用户确认。
+- 2026-10-31：实测 `set_model` 可用、`/model` 不生效、内置命令输出写入会话记录、写入中断时模型的反应；补录提问、方案确认、中断的回放数据。

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """录制一份 stream-json 和对应的 .jsonl，脱敏后写到 testdata/recordings/<名称>/。
 
-用法：python3 -I tools/record/record.py <输出目录>
+用法：python3 -I tools/record/record.py <场景> <输出目录>
 会调用真实 claude，消耗少量额度。运行结束后删除这次产生的会话记录。
 """
 import glob
@@ -16,13 +16,32 @@ import time
 
 CMD = (
     "claude -p --input-format stream-json --output-format stream-json --verbose "
-    "--permission-prompt-tool stdio --permission-mode default --model haiku "
+    "--permission-prompt-tool stdio --permission-mode {mode} --model haiku "
     "--include-partial-messages"
 )
-PROMPT = (
-    "Use the Bash tool once in the foreground to run: echo hi > marker . "
-    "Then reply with one short sentence about rivers."
-)
+SCENARIOS = {
+    "approval": {
+        "mode": "default",
+        "prompt": "Use the Bash tool once in the foreground to run: echo hi > marker . "
+        "Then reply with one short sentence about rivers.",
+    },
+    "question": {
+        "mode": "default",
+        "prompt": 'Call the AskUserQuestion tool once with one question "Pick a color" and '
+        "options Red and Blue. After the answer, reply with just the chosen color.",
+    },
+    "plan": {
+        "mode": "plan",
+        "prompt": "Plan only: creating a file hello.txt in the current directory. Write a one "
+        "line plan and call ExitPlanMode. After approval, create the file and reply OK.",
+    },
+    "interrupt": {
+        "mode": "default",
+        "prompt": "Use the Bash tool once in the foreground to run: python3 long.py . Then reply OK.",
+        "setup": ("long.py", "import time\ntime.sleep(59)\n"),
+        "interrupt_after": 4,
+    },
+}
 DROP_LISTS = {
     "tools", "mcp_servers", "slash_commands", "terminal_slash_commands", "agents",
     "skills", "plugins", "capabilities", "memory_paths", "additional_directories",
@@ -63,22 +82,42 @@ def write_lines(path, lines):
             f.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 
+def reply(event):
+    """按请求类型回答，和用户在界面上点“允许”的效果一样。"""
+    request = event["request"]
+    updated = dict(request.get("input") or {})
+    if request.get("tool_name") == "AskUserQuestion":
+        updated["answers"] = {q["question"]: q["options"][-1]["label"] for q in updated["questions"]}
+    elif "run_in_background" in updated:
+        updated["run_in_background"] = False
+    return {"type": "control_response", "response": {
+        "subtype": "success", "request_id": event["request_id"],
+        "response": {"behavior": "allow", "updatedInput": updated},
+    }}
+
+
 def main():
-    dest = sys.argv[1]
+    name, dest = sys.argv[1], sys.argv[2]
+    scenario = SCENARIOS[name]
     work = tempfile.mkdtemp(prefix="cchub-record-")
     fifo, out = f"{work}/in", f"{work}/out"
     os.mkfifo(fifo)
     open(out, "w").close()
     hold = os.open(fifo, os.O_RDWR)
+    if "setup" in scenario:
+        with open(f"{work}/{scenario['setup'][0]}", "w") as f:
+            f.write(scenario["setup"][1])
+    command = CMD.format(mode=scenario["mode"])
     proc = subprocess.Popen(
-        ["sh", "-c", f"exec {CMD} <>{fifo} >>{out} 2>>{work}/err"], cwd=work,
+        ["sh", "-c", f"exec {command} <>{fifo} >>{out} 2>>{work}/err"], cwd=work,
     )
     send = lambda obj: os.write(hold, (json.dumps(obj) + "\n").encode())
-    send({"type": "user", "message": {"role": "user", "content": PROMPT}})
+    send({"type": "user", "message": {"role": "user", "content": scenario["prompt"]}})
 
     pos, buf, stream, session = 0, "", [], None
-    deadline = time.time() + 120
+    deadline = time.time() + 150
     done = False
+    interrupt_at = None
     while not done and time.time() < deadline:
         with open(out, encoding="utf-8") as f:
             f.seek(pos)
@@ -90,11 +129,14 @@ def main():
             stream.append(event)
             session = session or event.get("session_id")
             if event.get("type") == "control_request":
-                send({"type": "control_response", "response": {
-                    "subtype": "success", "request_id": event["request_id"],
-                    "response": {"behavior": "allow", "updatedInput": event["request"]["input"]},
-                }})
+                send(reply(event))
+                if "interrupt_after" in scenario:
+                    interrupt_at = time.time() + scenario["interrupt_after"]
             done = done or event.get("type") == "result"
+        if interrupt_at and time.time() >= interrupt_at:
+            interrupt_at = None
+            send({"type": "control_request", "request_id": "interrupt-1",
+                  "request": {"subtype": "interrupt"}})
         time.sleep(0.1)
     proc.terminate()
     proc.wait()

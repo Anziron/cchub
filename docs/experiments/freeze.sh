@@ -1,6 +1,6 @@
 #!/bin/bash
 # 用单独的测试挂载验证：断网时探测不会被缓存骗过，以及写到一半断网的后果。
-S=/tmp/claude-0/-mnt-pc-home-d-frame-buspi-cchub/a6670715-65f4-4802-ab83-78f5852d4849/scratchpad
+S=${S:?请设置 S 为实验目录，里面要有 exp/fwd.py 和构建好的 work/target/debug/hubd}
 H=$S/work/target/debug/hubd; M=$S/offmnt2; F=$S/frozen; K=$S/kh2
 IP=$(awk -F'\t' '$1=="pc-home"{print $2}' /etc/cc/devices.tsv); U=$(awk -F'\t' '$1=="pc-home"{print $3}' /etc/cc/devices.tsv)
 rm -f $F $S/dd.rc; : > $K; mkdir -p $M; cd $S/exp

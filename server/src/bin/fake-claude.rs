@@ -1,7 +1,8 @@
 //! 回放录制的 stream-json，用来不耗额度地跑完整链路。
 //!
 //! 用法：`fake-claude <录制文件> [每行延迟毫秒]`
-//! 收到用户消息才开始输出，遇到审批请求就停下，等到对应的 `control_response` 才继续。
+//! 收到用户消息才开始输出，遇到审批请求就停下，等到对应的 `control_response` 才继续；
+//! 录制里有中断的，等到客户端发来同一 ID 的中断才继续。
 
 use std::io::{self, BufRead, Write};
 use std::{env, fs, thread, time::Duration};
@@ -44,11 +45,22 @@ fn main() {
             wait_for(&mut stdin, is_user);
             waiting_for_user = false;
         }
+        let event: Value = serde_json::from_str(line).expect("录制文件不是合法 JSON");
+        // 录制里的中断响应，要等客户端真的发来中断才输出。
+        if field(&event, "type") == Some("control_response") {
+            let id = event
+                .pointer("/response/request_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            wait_for(&mut stdin, |value| {
+                field(value, "type") == Some("control_request")
+                    && field(value, "request_id") == Some(id)
+            });
+        }
         writeln!(stdout, "{line}").expect("写 stdout 失败");
         stdout.flush().expect("写 stdout 失败");
         thread::sleep(Duration::from_millis(delay));
 
-        let event: Value = serde_json::from_str(line).expect("录制文件不是合法 JSON");
         match field(&event, "type") {
             Some("control_request") => {
                 let id = field(&event, "request_id").unwrap_or_default().to_string();

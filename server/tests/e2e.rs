@@ -18,10 +18,15 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 const TIMEOUT: Duration = Duration::from_secs(90);
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
-fn recording(name: &str) -> PathBuf {
+fn recording_in(scenario: &str, name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../testdata/recordings/approval")
+        .join("../testdata/recordings")
+        .join(scenario)
         .join(name)
+}
+
+fn recording(name: &str) -> PathBuf {
+    recording_in("approval", name)
 }
 
 struct Temp(PathBuf);
@@ -50,10 +55,14 @@ impl Drop for Temp {
 }
 
 async fn spawn_hubd(state: &Path) -> (Child, String) {
+    spawn_replay(state, "approval").await
+}
+
+async fn spawn_replay(state: &Path, scenario: &str) -> (Child, String) {
     let cmd = format!(
         "{} {} 1",
         env!("CARGO_BIN_EXE_fake-claude"),
-        recording("stream.jsonl").display()
+        recording_in(scenario, "stream.jsonl").display()
     );
     spawn_hubd_with(state, "direct", &cmd).await
 }
@@ -504,6 +513,126 @@ async fn tailscale_listen_requires_allowed_users() {
         .await
         .unwrap();
     assert!(!status.success());
+}
+
+/// 回放一个场景：遇到需要人介入的事件就回答，全部走完后和录制、`.jsonl` 比对。
+async fn replay_scenario(scenario: &str, expected: EventClass) {
+    let temp = Temp::new(scenario);
+    let (_hubd, addr) = spawn_replay(&temp.0, scenario).await;
+    let mut socket = connect(&addr).await;
+    let session = "s1".to_string();
+    let mut inbound = Inbound::new(0);
+    let mut applied = Vec::new();
+    send(
+        &mut socket,
+        ClientMsg::Start {
+            session: session.clone(),
+            resume: None,
+            cwd: None,
+        },
+    )
+    .await;
+    send(
+        &mut socket,
+        ClientMsg::Attach {
+            session: session.clone(),
+            after: 0,
+        },
+    )
+    .await;
+    let user = r#"{"type":"user","message":{"role":"user","content":"go"}}"#;
+    send(
+        &mut socket,
+        ClientMsg::Input {
+            session: session.clone(),
+            line: user.into(),
+        },
+    )
+    .await;
+
+    let mut interventions = Vec::new();
+    loop {
+        read_until(&mut socket, &mut inbound, &mut applied, |line| {
+            classify(line).needs_human() || event_type(line) == "result"
+        })
+        .await;
+        let last = applied.last().unwrap().clone();
+        if event_type(&last) == "result" {
+            break;
+        }
+        interventions.push(classify(&last));
+        let request: Value = serde_json::from_str(&last).unwrap();
+        let reply = serde_json::json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": request["request_id"],
+                "response": {"behavior": "allow", "updatedInput": request["request"]["input"]},
+            },
+        });
+        send(
+            &mut socket,
+            ClientMsg::Input {
+                session: session.clone(),
+                line: reply.to_string(),
+            },
+        )
+        .await;
+        if scenario == "interrupt" {
+            let interrupt = serde_json::json!({
+                "type": "control_request",
+                "request_id": "interrupt-1",
+                "request": {"subtype": "interrupt"},
+            });
+            send(
+                &mut socket,
+                ClientMsg::Input {
+                    session: session.clone(),
+                    line: interrupt.to_string(),
+                },
+            )
+            .await;
+        }
+    }
+    assert!(interventions.contains(&expected), "{interventions:?}");
+
+    let stream = std::fs::read_to_string(recording_in(scenario, "stream.jsonl")).unwrap();
+    let durable = |lines: Vec<String>| -> Vec<String> {
+        lines
+            .into_iter()
+            .filter(|l| classify(l) != EventClass::Partial)
+            .collect()
+    };
+    assert_eq!(
+        durable(applied.clone()),
+        durable(stream.lines().map(str::to_string).collect())
+    );
+
+    let transcript = std::fs::read_to_string(recording_in(scenario, "transcript.jsonl")).unwrap();
+    let (got_uuids, got_messages, got_tools) = ids(applied.into_iter());
+    let (want_uuids, want_messages, want_tools) = ids(transcript.lines().map(str::to_string));
+    assert!(
+        got_uuids.is_subset(&want_uuids),
+        "{got_uuids:?} / {want_uuids:?}"
+    );
+    assert_eq!(got_messages, want_messages);
+    assert_eq!(got_tools, want_tools);
+    send(&mut socket, ClientMsg::Stop { session }).await;
+}
+
+#[tokio::test]
+async fn replays_question() {
+    replay_scenario("question", EventClass::Question).await;
+}
+
+#[tokio::test]
+async fn replays_plan_approval() {
+    replay_scenario("plan", EventClass::Question).await;
+}
+
+#[tokio::test]
+async fn replays_interrupt() {
+    replay_scenario("interrupt", EventClass::Approval).await;
 }
 
 #[tokio::test]
