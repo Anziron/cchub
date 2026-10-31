@@ -28,6 +28,7 @@ pub trait ProcessHost: Send + Sync {
 /// 放进独立的 systemd unit，和 `hubd` 分属不同 cgroup，`hubd` 的 `MemoryMax` 不影响它。
 pub struct SystemdHost {
     pub claude_cmd: String,
+    pub memory_max_mb: u64,
 }
 
 fn unit_name(session: &str) -> String {
@@ -42,6 +43,12 @@ impl ProcessHost for SystemdHost {
             .arg(unit_name(session))
             .arg("-p")
             .arg(format!("WorkingDirectory={}", cwd.display()));
+        // 超过上限先换出到 swap，换不动才被 OOM 杀掉，不会拖垮 xray、tailscaled。
+        if self.memory_max_mb > 0 {
+            command
+                .arg("-p")
+                .arg(format!("MemoryMax={}M", self.memory_max_mb));
+        }
         for name in ["PATH", "HOME"] {
             if let Ok(value) = std::env::var(name) {
                 command.arg(format!("--setenv={name}={value}"));

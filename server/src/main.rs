@@ -72,6 +72,7 @@ async fn run(config: config::Config) -> std::io::Result<()> {
     let host: Box<dyn host::ProcessHost> = match config.host {
         config::HostKind::Systemd => Box::new(host::SystemdHost {
             claude_cmd: config.claude_cmd,
+            memory_max_mb: config.session_memory_max_mb,
         }),
         config::HostKind::Direct => Box::new(host::DirectHost {
             claude_cmd: config.claude_cmd,
@@ -82,6 +83,7 @@ async fn run(config: config::Config) -> std::io::Result<()> {
         sessions: session::Sessions::new(config.state_dir),
         host,
         allowed_users: config.allowed_users,
+        min_available_mb: config.min_available_mb,
     });
 
     let retention = config.retention;

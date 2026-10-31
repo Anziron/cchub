@@ -28,6 +28,10 @@ pub struct Config {
     pub allowed_users: Vec<String>,
     /// 运行日志的保留时长。
     pub retention: Duration,
+    /// 单个会话 unit 的 `MemoryMax`，0 表示不限制。
+    pub session_memory_max_mb: u64,
+    /// 可用内存低于此值时拒绝启动新进程，0 表示不检查。
+    pub min_available_mb: u64,
 }
 
 impl Config {
@@ -65,6 +69,14 @@ impl Config {
         let retention_days: u64 = retention_days
             .parse()
             .map_err(|_| format!("HUBD_RETENTION_DAYS 必须是数字：{retention_days}"))?;
+        let megabytes = |name: &str, default: &str| {
+            let value = var(name, default);
+            value
+                .parse::<u64>()
+                .map_err(|_| format!("{name} 必须是数字：{value}"))
+        };
+        let session_memory_max_mb = megabytes("HUBD_SESSION_MEMORY_MAX_MB", "600")?;
+        let min_available_mb = megabytes("HUBD_MIN_AVAILABLE_MB", "300")?;
 
         let host = match var("HUBD_HOST", "systemd").as_str() {
             "systemd" => HostKind::Systemd,
@@ -79,6 +91,8 @@ impl Config {
             claude_cmd: var("HUBD_CLAUDE_CMD", DEFAULT_CLAUDE_CMD),
             allowed_users,
             retention: Duration::from_secs(retention_days * 24 * 60 * 60),
+            session_memory_max_mb,
+            min_available_mb,
         })
     }
 }
