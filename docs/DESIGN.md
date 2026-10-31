@@ -185,6 +185,7 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
   2. 不够 → 结束最久没动的空闲进程，再检查。
   3. 仍不够（其他都在执行任务）→ 排队，界面显示“等待资源”。执行中的任务不打断。
 - 空闲回收：默认空闲 10 分钟结束进程，可配置，0 表示不回收。下次发消息用 `--resume` 自动拉起。
+  - 已实现（2026-10-31）：第 1 步的检查，不够时直接拒绝并报错（`HUBD_MIN_AVAILABLE_MB`，默认 300，0 关闭）；每个会话 unit 设 `MemoryMax`（`HUBD_SESSION_MEMORY_MAX_MB`，默认 600，0 关闭）。第 2、3 步和空闲回收未实现。
 - 可选的进程数上限，默认不限。
 - 同一会话不能同时被 app 和终端驱动，`hubd` 要检测并提示。
 - 进程内存过大（如超过 500MB）时提示 `/compact` 或开新会话。

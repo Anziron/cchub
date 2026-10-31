@@ -33,6 +33,7 @@ pub struct App {
     pub sessions: Sessions,
     pub host: Box<dyn ProcessHost>,
     pub allowed_users: Vec<String>,
+    pub min_available_mb: u64,
 }
 
 pub async fn upgrade(
@@ -146,6 +147,14 @@ async fn handle(
                 if app.host.is_running(&id, &dir) {
                     return Ok(());
                 }
+                let available = mem_available_mb();
+                if !has_room(available, app.min_available_mb) {
+                    return Err(std::io::Error::other(format!(
+                        "服务器可用内存不足（{} MB，至少需要 {} MB），请先结束其他会话",
+                        available.unwrap_or(0),
+                        app.min_available_mb
+                    )));
+                }
                 // 在断开的挂载里启动进程不会报错，只会一直没有输出，所以先探测。
                 if let Some(cwd) = &cwd {
                     if !device::probe(cwd) {
@@ -210,6 +219,11 @@ fn mem_available_mb() -> Option<u64> {
     let line = meminfo.lines().find(|l| l.starts_with("MemAvailable:"))?;
     let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
     Some(kb / 1024)
+}
+
+/// 读不到内存信息时放行：检查只是保护，不应挡住正常使用。
+fn has_room(available_mb: Option<u64>, min_mb: u64) -> bool {
+    available_mb.is_none_or(|available| available >= min_mb)
 }
 
 async fn blocking(
@@ -357,4 +371,17 @@ async fn read_at(path: &std::path::Path, offset: u64, buffer: &mut [u8]) -> std:
     let mut file = tokio::fs::File::open(path).await?;
     file.seek(SeekFrom::Start(offset)).await?;
     file.read(buffer).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_room;
+
+    #[test]
+    fn rejects_only_when_known_to_be_short() {
+        assert!(has_room(Some(300), 300));
+        assert!(!has_room(Some(299), 300));
+        assert!(has_room(None, 300));
+        assert!(has_room(Some(0), 0));
+    }
 }
