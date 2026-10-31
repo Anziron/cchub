@@ -114,6 +114,7 @@ async fn handle(
     readers: &mut HashMap<String, JoinHandle<()>>,
 ) -> Result<(), HandleError> {
     let session = match &msg {
+        ClientMsg::List => return list(app, tx).await,
         ClientMsg::Start { session, .. }
         | ClientMsg::Attach { session, .. }
         | ClientMsg::Input { session, .. }
@@ -125,7 +126,9 @@ async fn handle(
     let fail = |error: String| (Some(session.clone()), error);
 
     match msg {
-        ClientMsg::Start { resume, cwd, .. } => {
+        ClientMsg::Start {
+            resume, cwd, title, ..
+        } => {
             let cwd = cwd.map(PathBuf::from);
             if cwd.as_ref().is_some_and(|cwd| !cwd.is_absolute()) {
                 return Err(fail("cwd 必须是绝对路径".to_string()));
@@ -136,6 +139,9 @@ async fn handle(
             let id = session.clone();
             blocking(app, move |app| {
                 app.sessions.prepare(&id)?;
+                if let Some(title) = &title {
+                    app.sessions.set_title(&id, title)?;
+                }
                 let dir = app.sessions.dir(&id);
                 if app.host.is_running(&id, &dir) {
                     return Ok(());
@@ -166,6 +172,7 @@ async fn handle(
                 .await
                 .map_err(fail)?;
         }
+        ClientMsg::List => {}
         ClientMsg::Stop { .. } => {
             let id = session.clone();
             blocking(app, move |app| {
@@ -178,6 +185,31 @@ async fn handle(
         }
     }
     Ok(())
+}
+
+async fn list(app: &Arc<App>, tx: &mpsc::Sender<Frame>) -> Result<(), HandleError> {
+    let host = app.clone();
+    let sessions =
+        spawn_blocking(move || host.sessions.list(|id, dir| host.host.is_running(id, dir)))
+            .await
+            .map_err(|error| (None, error.to_string()))?;
+    let frame = Frame {
+        session: None,
+        msg: ServerMsg::Sessions {
+            sessions,
+            mem_available_mb: mem_available_mb(),
+        },
+    };
+    tx.send(frame)
+        .await
+        .map_err(|_| (None, "连接已关闭".to_string()))
+}
+
+fn mem_available_mb() -> Option<u64> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let line = meminfo.lines().find(|l| l.starts_with("MemAvailable:"))?;
+    let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kb / 1024)
 }
 
 async fn blocking(

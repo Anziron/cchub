@@ -4,4 +4,8 @@ export type ClientMsg = { "type": "start", session: string, resume?: string | nu
 /**
  * 项目目录。省略时用会话目录。
  */
-cwd?: string | null, } | { "type": "attach", session: string, after: number, } | { "type": "input", session: string, line: string, } | { "type": "stop", session: string, };
+cwd?: string | null, 
+/**
+ * 显示在会话列表里的标题。
+ */
+title?: string | null, } | { "type": "list" } | { "type": "attach", session: string, after: number, } | { "type": "input", session: string, line: string, } | { "type": "stop", session: string, };

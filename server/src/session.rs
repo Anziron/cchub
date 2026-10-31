@@ -7,7 +7,9 @@ use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
+
+use cchub_protocol::SessionInfo;
 
 /// 会话 ID 会拼进路径、unit 名和 shell 命令，只允许安全字符。
 pub fn valid_id(id: &str) -> bool {
@@ -44,6 +46,45 @@ impl Sessions {
 
     pub fn set_cwd(&self, session: &str, cwd: &Path) -> io::Result<()> {
         fs::write(self.dir(session).join("cwd"), cwd.as_os_str().as_bytes())
+    }
+
+    pub fn set_title(&self, session: &str, title: &str) -> io::Result<()> {
+        fs::write(self.dir(session).join("title"), title)
+    }
+
+    /// 列出自己建的会话目录，最近更新的在前。
+    pub fn list(&self, is_running: impl Fn(&str, &Path) -> bool) -> Vec<SessionInfo> {
+        let Ok(entries) = fs::read_dir(&self.root) else {
+            return Vec::new();
+        };
+        let mut sessions: Vec<SessionInfo> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let id = entry
+                    .file_name()
+                    .to_str()
+                    .filter(|n| valid_id(n))?
+                    .to_string();
+                let dir = entry.path();
+                if !dir.join("in").exists() {
+                    return None;
+                }
+                let updated = fs::metadata(dir.join("out"))
+                    .and_then(|meta| meta.modified())
+                    .ok()
+                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                    .map(|age| age.as_secs());
+                Some(SessionInfo {
+                    title: fs::read_to_string(dir.join("title")).ok(),
+                    cwd: fs::read_to_string(dir.join("cwd")).ok(),
+                    running: is_running(&id, &dir),
+                    updated,
+                    id,
+                })
+            })
+            .collect();
+        sessions.sort_by_key(|session| std::cmp::Reverse(session.updated));
+        sessions
     }
 
     /// 清理进程已结束、很久没有更新的会话目录。这里只有运行日志，对话历史在 `claude` 的 `.jsonl` 里。
@@ -153,6 +194,26 @@ mod tests {
             assert!(!valid_id(bad), "{bad}");
         }
         assert!(valid_id("Session_01-a"));
+    }
+
+    #[test]
+    fn list_reports_own_sessions_newest_first() {
+        let root = std::env::temp_dir().join(format!("hubd-list-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("not-ours")).unwrap();
+        let sessions = Sessions::new(root.clone());
+        sessions.prepare("a").unwrap();
+        sessions.set_title("a", "修登录").unwrap();
+        sessions.set_cwd("a", Path::new("/work")).unwrap();
+
+        let list = sessions.list(|id, _| id == "a");
+
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "a");
+        assert_eq!(list[0].title.as_deref(), Some("修登录"));
+        assert_eq!(list[0].cwd.as_deref(), Some("/work"));
+        assert!(list[0].running);
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

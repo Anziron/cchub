@@ -8,4 +8,6 @@ pub mod wire;
 
 pub use envelope::{classify, is_user_message, EventClass};
 pub use sync::{Inbound, InboundAction, LineSplitter, Outbound, OutboundLimits};
-pub use wire::{ClientMsg, ConnectionState, Frame, Health, ServerMsg, UiEvent, PROTOCOL_VERSION};
+pub use wire::{
+    ClientMsg, ConnectionState, Frame, Health, ServerMsg, SessionInfo, UiEvent, PROTOCOL_VERSION,
+};

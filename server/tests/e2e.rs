@@ -173,6 +173,7 @@ async fn replay_survives_hubd_kill_and_matches_transcript() {
         &mut socket,
         ClientMsg::Start {
             session: session.clone(),
+            title: None,
             resume: None,
             cwd: None,
         },
@@ -290,6 +291,7 @@ async fn real_claude_under_systemd_survives_hubd_kill() {
         &mut socket,
         ClientMsg::Start {
             session: session.clone(),
+            title: None,
             resume: None,
             cwd: None,
         },
@@ -388,6 +390,7 @@ async fn idle_subscription_does_not_poll() {
         &mut socket,
         ClientMsg::Start {
             session: "s1".into(),
+            title: None,
             resume: None,
             cwd: None,
         },
@@ -429,6 +432,7 @@ async fn reports_device_online_for_project_dir() {
         &mut socket,
         ClientMsg::Start {
             session: "s1".into(),
+            title: None,
             resume: None,
             cwd: Some(project.display().to_string()),
         },
@@ -471,6 +475,7 @@ async fn attach_beyond_log_end_reports_error() {
         &mut socket,
         ClientMsg::Start {
             session: "s1".into(),
+            title: None,
             resume: None,
             cwd: None,
         },
@@ -527,6 +532,7 @@ async fn replay_scenario(scenario: &str, expected: EventClass) {
         &mut socket,
         ClientMsg::Start {
             session: session.clone(),
+            title: None,
             resume: None,
             cwd: None,
         },
@@ -636,6 +642,52 @@ async fn replays_interrupt() {
 }
 
 #[tokio::test]
+async fn lists_started_sessions_with_title_and_memory() {
+    let temp = Temp::new("list");
+    let (mut hubd, addr) = spawn_hubd(&temp.0).await;
+    let mut socket = connect(&addr).await;
+    send(
+        &mut socket,
+        ClientMsg::Start {
+            session: "s1".into(),
+            title: Some("修登录".into()),
+            resume: None,
+            cwd: None,
+        },
+    )
+    .await;
+    send(&mut socket, ClientMsg::List).await;
+
+    let listed = tokio::time::timeout(TIMEOUT, async {
+        loop {
+            let message = socket.next().await.expect("连接断开").unwrap();
+            let Message::Text(text) = message else {
+                continue;
+            };
+            if let Ok(Frame {
+                msg:
+                    ServerMsg::Sessions {
+                        sessions,
+                        mem_available_mb,
+                    },
+                ..
+            }) = serde_json::from_str(text.as_str())
+            {
+                return (sessions, mem_available_mb);
+            }
+        }
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(listed.0.len(), 1);
+    assert_eq!(listed.0[0].title.as_deref(), Some("修登录"));
+    assert!(listed.0[0].running);
+    assert!(listed.1.is_some());
+    let _ = hubd.kill().await;
+}
+
+#[tokio::test]
 async fn websocket_with_origin_is_rejected() {
     let temp = Temp::new("origin");
     let (_hubd, addr) = spawn_hubd(&temp.0).await;
@@ -656,6 +708,7 @@ async fn invalid_session_id_is_rejected() {
         &mut socket,
         ClientMsg::Start {
             session: "../x".into(),
+            title: None,
             resume: None,
             cwd: None,
         },

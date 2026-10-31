@@ -9,7 +9,7 @@ const DEFAULT_LISTEN: &str = "127.0.0.1:7878";
 const DEFAULT_STATE_DIR: &str = "/var/lib/hubd";
 const DEFAULT_CLAUDE_CMD: &str = "claude -p --input-format stream-json \
     --output-format stream-json --verbose --permission-prompt-tool stdio \
-    --include-partial-messages";
+    --include-partial-messages --replay-user-messages";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostKind {

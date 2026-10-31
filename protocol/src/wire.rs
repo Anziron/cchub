@@ -28,7 +28,12 @@ pub enum ClientMsg {
         /// 项目目录。省略时用会话目录。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
+        /// 显示在会话列表里的标题。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
     },
+    /// 列出服务器上的会话。
+    List,
     /// 订阅会话，从 `after` 偏移开始接收。
     Attach {
         session: String,
@@ -39,6 +44,18 @@ pub enum ClientMsg {
     Input { session: String, line: String },
     /// 结束会话进程。
     Stop { session: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct SessionInfo {
+    pub id: String,
+    pub title: Option<String>,
+    pub cwd: Option<String>,
+    pub running: bool,
+    /// 日志最后更新时间，Unix 秒。
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub updated: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +85,12 @@ pub enum ServerMsg {
     /// 会话进程状态。
     Status {
         running: bool,
+    },
+    /// 回复 `List`。
+    Sessions {
+        sessions: Vec<SessionInfo>,
+        #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+        mem_available_mb: Option<u64>,
     },
     Error {
         message: String,
@@ -105,6 +128,11 @@ pub enum UiEvent {
     Device {
         session: String,
         online: bool,
+    },
+    Sessions {
+        sessions: Vec<SessionInfo>,
+        #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+        mem_available_mb: Option<u64>,
     },
     Error {
         session: Option<String>,

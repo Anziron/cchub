@@ -6,9 +6,11 @@ use std::future::Future;
 use std::time::Duration;
 
 use cchub_protocol::{
-    is_user_message, ClientMsg, ConnectionState, Frame, Inbound, InboundAction, ServerMsg, UiEvent,
+    is_user_message, ClientMsg, ConnectionState, EventClass, Frame, Inbound, InboundAction,
+    ServerMsg, UiEvent,
 };
 use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -154,10 +156,9 @@ impl State {
         msg: ClientMsg,
     ) -> Result<(), ()> {
         if let ClientMsg::Attach { session, after } = &msg {
-            // 第一次订阅时建立接收状态；已有状态时以它记录的偏移为准。
-            self.sessions
-                .entry(session.clone())
-                .or_insert_with(|| Inbound::new(*after));
+            // 窗口重建后要从头重放，所以这里按调用方给的偏移重置。
+            // 重连和缺口补齐走 `send`，不经过这里，用的是 `Inbound` 记录的偏移。
+            self.sessions.insert(session.clone(), Inbound::new(*after));
         }
         if let ClientMsg::Input { session, line } = &msg {
             if self.offline.contains(session) && is_user_message(line) {
@@ -197,6 +198,16 @@ impl State {
                 self.held = held;
                 ready
             }
+            ServerMsg::Sessions {
+                sessions,
+                mem_available_mb,
+            } => {
+                on_event(UiEvent::Sessions {
+                    sessions,
+                    mem_available_mb,
+                });
+                Vec::new()
+            }
             ServerMsg::Error { message } => {
                 on_event(UiEvent::Error { session, message });
                 Vec::new()
@@ -233,6 +244,23 @@ impl State {
     }
 }
 
+/// 决定哪些待决定事件要发系统通知。窗口重建后事件会从头重放，靠水位保证每条只通知一次。
+#[derive(Default, Serialize, Deserialize)]
+pub struct Notifier {
+    marks: HashMap<String, u64>,
+}
+
+impl Notifier {
+    /// 返回是否该通知。水位变了就要由调用方保存。
+    pub fn observe(&mut self, session: &str, seq: u64, class: EventClass) -> bool {
+        if !class.needs_human() || self.marks.get(session).is_some_and(|mark| seq < *mark) {
+            return false;
+        }
+        self.marks.insert(session.to_string(), seq + 1);
+        true
+    }
+}
+
 async fn send<S: SinkExt<Message> + Unpin>(socket: &mut S, msg: &ClientMsg) -> Result<(), ()> {
     let text = serde_json::to_string(msg).map_err(|_| ())?;
     socket
@@ -244,7 +272,6 @@ async fn send<S: SinkExt<Message> + Unpin>(socket: &mut S, msg: &ClientMsg) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cchub_protocol::EventClass;
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
 
@@ -270,6 +297,56 @@ mod tests {
                 return serde_json::from_str(text.as_str()).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn notifier_fires_once_per_event_even_after_replay() {
+        let mut notifier = Notifier::default();
+        assert!(!notifier.observe("s", 0, EventClass::Durable));
+        assert!(notifier.observe("s", 10, EventClass::Approval));
+        assert!(!notifier.observe("s", 10, EventClass::Approval));
+        assert!(notifier.observe("s", 20, EventClass::Question));
+        assert!(!notifier.observe("s", 10, EventClass::Approval));
+        assert!(notifier.observe("other", 10, EventClass::Approval));
+
+        let saved = serde_json::to_string(&notifier).unwrap();
+        let mut restored: Notifier = serde_json::from_str(&saved).unwrap();
+        assert!(!restored.observe("s", 20, EventClass::Question));
+    }
+
+    #[tokio::test]
+    async fn attach_from_zero_replays_for_a_rebuilt_window() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (events_tx, mut events) = mpsc::unbounded_channel();
+        let (client, task) = HubClient::new(url, Duration::from_millis(10), move |event| {
+            let _ = events_tx.send(event);
+        });
+        tokio::spawn(task);
+        let attach = ClientMsg::Attach {
+            session: "s1".into(),
+            after: 0,
+        };
+        client.send(attach.clone()).unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut server = accept_async(stream).await.unwrap();
+        next_client_msg(&mut server).await;
+
+        let mut next_payload = async || loop {
+            let received = tokio::time::timeout(Duration::from_secs(5), events.recv());
+            if let UiEvent::Event { payload, .. } = received.await.unwrap().unwrap() {
+                return payload;
+            }
+        };
+        let first = Message::Text(event(0, 5, "first").into());
+        server.send(first.clone()).await.unwrap();
+        assert_eq!(next_payload().await, "first");
+
+        // 窗口重建：再次从 0 订阅，同一条事件不能被当成重复丢掉。
+        client.send(attach).unwrap();
+        next_client_msg(&mut server).await;
+        server.send(first).await.unwrap();
+        assert_eq!(next_payload().await, "first");
     }
 
     #[tokio::test]
