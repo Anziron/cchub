@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::io::ErrorKind;
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,6 +15,8 @@ use tauri_plugin_notification::NotificationExt;
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAIN: &str = "main";
+/// 只在回环上占用，用来保证单实例；连接它等于请求已有实例打开窗口。
+const INSTANCE_ADDR: &str = "127.0.0.1:47878";
 
 struct Connection {
     url: String,
@@ -144,12 +148,37 @@ fn show_main(app: &AppHandle) {
         .build();
 }
 
+/// 第二个实例会多一条连接和一份通知，所以只唤起已有实例的窗口后退出。
+fn listen_for_reopen(app: &AppHandle, listener: TcpListener) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            if stream.is_ok() {
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || show_main(&handle));
+            }
+        }
+    });
+}
+
 fn main() {
+    let instance = match TcpListener::bind(INSTANCE_ADDR) {
+        Ok(listener) => Some(listener),
+        Err(e) if e.kind() == ErrorKind::AddrInUse => {
+            let _ = TcpStream::connect(INSTANCE_ADDR);
+            return;
+        }
+        // 端口不可用不应妨碍启动，只是失去单实例保护。
+        Err(_) => None,
+    };
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(Hub::default())
         .invoke_handler(tauri::generate_handler![hub_connect, hub_send])
-        .setup(|app| {
+        .setup(move |app| {
+            if let Some(listener) = instance {
+                listen_for_reopen(app.handle(), listener);
+            }
             let open = MenuItem::with_id(app, "open", "打开 cchub", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;
