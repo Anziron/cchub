@@ -6,7 +6,7 @@ IP=$(awk -F'\t' '$1=="pc-home"{print $2}' /etc/cc/devices.tsv); U=$(awk -F'\t' '
 rm -f $F $S/dd.rc; : > $K; mkdir -p $M; cd $S/exp
 python3 -I fwd.py $IP $F & FW=$!
 timeout 1 tail -f /dev/null
-sshfs -p 2299 -o IdentityFile=/root/.ssh/id_ed25519_hub,BatchMode=yes,UserKnownHostsFile=$K,StrictHostKeyChecking=accept-new,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,kernel_cache,dir_cache=yes,dcache_timeout=120,entry_timeout=120,attr_timeout=120,max_conns=4,idmap=user "$U@127.0.0.1:/D:/frame/buspi/cchub/.cc/offline-test" $M; echo mount=$?
+sshfs -p 2299 -o IdentityFile=/root/.ssh/id_ed25519_hub,BatchMode=yes,UserKnownHostsFile=$K,StrictHostKeyChecking=accept-new,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,kernel_cache,dir_cache=yes,dcache_timeout=120,entry_timeout=120,attr_timeout=120,max_conns=4,idmap=user "$U@127.0.0.1:/D:/cchub/.cc/offline-test" $M; echo mount=$?
 bgprobe(){ $H --probe $M & P=$!; s=$SECONDS; for i in $(seq 1 7); do kill -0 $P 2>/dev/null || break; timeout 1 tail -f /dev/null; done
   if kill -0 $P 2>/dev/null; then echo "$1: hung after $((SECONDS-s))s; state=$(awk '{print $3}' /proc/$P/stat)"; kill -9 $P; timeout 1 tail -f /dev/null; echo "  after SIGKILL state=$(awk '{print $3}' /proc/$P/stat 2>/dev/null || echo gone)"; else wait $P; echo "$1: rc=$? $((SECONDS-s))s"; fi; }
 stat -c 'warm a.txt size=%s' $M/a.txt; bgprobe online
