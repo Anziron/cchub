@@ -1,29 +1,11 @@
-//! `hubd` 和桌面端共用的类型。
+//! `hubd` 和桌面端共用的线路消息与同步核心。
+//!
+//! 这里不碰网络和文件：输入事件，输出动作，所以两端都能在同一个测试里确定性地模拟。
 
-use serde::{Deserialize, Serialize};
+pub mod envelope;
+pub mod sync;
+pub mod wire;
 
-pub const PROTOCOL_VERSION: u32 = 0;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Health {
-    pub version: String,
-    pub protocol_version: u32,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn health_serializes_with_snake_case_fields() {
-        let health = Health {
-            version: "0.1.0".into(),
-            protocol_version: PROTOCOL_VERSION,
-        };
-        let json = serde_json::to_value(&health).unwrap();
-        assert_eq!(
-            json,
-            serde_json::json!({"version": "0.1.0", "protocol_version": 0})
-        );
-    }
-}
+pub use envelope::{classify, EventClass};
+pub use sync::{Inbound, InboundAction, LineSplitter, Outbound, OutboundLimits};
+pub use wire::{ClientMsg, ConnectionState, Frame, Health, ServerMsg, UiEvent, PROTOCOL_VERSION};

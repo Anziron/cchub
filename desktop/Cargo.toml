@@ -8,4 +8,6 @@ publish.workspace = true
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+cchub-client = { path = "../client" }
+cchub-protocol.workspace = true
 tauri = { version = "2", features = [] }

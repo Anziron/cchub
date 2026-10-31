@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["protocol", "server", "desktop"]
-default-members = ["protocol", "server"]
+members = ["protocol", "client", "server", "desktop"]
+default-members = ["protocol", "client", "server"]
 
 [workspace.package]
 version = "0.1.0"
