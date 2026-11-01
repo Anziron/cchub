@@ -43,7 +43,7 @@ impl ProcessHost for SystemdHost {
             .arg(unit_name(session))
             .arg("-p")
             .arg(format!("WorkingDirectory={}", cwd.display()));
-        // 超过上限先换出到 swap，换不动才被 OOM 杀掉，不会拖垮 xray、tailscaled。
+        // 超过上限先换出到 swap，换不动才被 OOM 杀掉，不会拖垮服务器上的其他服务。
         if self.memory_max_mb > 0 {
             command
                 .arg("-p")

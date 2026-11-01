@@ -247,12 +247,12 @@ test("完整模型 ID 显示成具体模型，而不是默认", () => {
 });
 
 test("服务器地址只填 IP 也能补全", () => {
-  assert.equal(hubUrl(" 100.90.166.47 "), "ws://100.90.166.47:7878/ws");
-  assert.equal(hubUrl("100.90.166.47:9000"), "ws://100.90.166.47:9000/ws");
-  assert.equal(hubUrl("ws://100.90.166.47:7878/ws"), "ws://100.90.166.47:7878/ws");
+  assert.equal(hubUrl(" 100.64.0.1 "), "ws://100.64.0.1:7878/ws");
+  assert.equal(hubUrl("100.64.0.1:9000"), "ws://100.64.0.1:9000/ws");
+  assert.equal(hubUrl("ws://100.64.0.1:7878/ws"), "ws://100.64.0.1:7878/ws");
   assert.equal(hubUrl(""), null);
   assert.equal(hubUrl("a b"), null);
-  assert.equal(hubHost("ws://100.90.166.47:7878/ws"), "100.90.166.47");
+  assert.equal(hubHost("ws://100.64.0.1:7878/ws"), "100.64.0.1");
 });
 
 test("命令转入后台要靠 task_updated，停止后不再算运行中", () => {
