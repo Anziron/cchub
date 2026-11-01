@@ -112,7 +112,18 @@ const Tool = memo(function Tool({ tool, cwd }: { tool: ToolItem; cwd?: string })
 function ItemView({ item, store, session }: { item: Item; store: Store; session: Session }) {
   switch (item.kind) {
     case "user":
-      return <div className="user"><div>{item.text}</div></div>;
+      return (
+        <>
+          <div className="user"><div>{item.text}</div></div>
+          {item.state === "sending" ? <div className="sent">发送中…</div> : null}
+          {item.state === "failed" ? (
+            <div className="sent failed">
+              没有发送成功
+              <button onClick={() => store.retry(session, item.id, item.text)}>重试</button>
+            </div>
+          ) : null}
+        </>
+      );
     case "text":
       return <Markdown text={item.text} />;
     case "thinking":

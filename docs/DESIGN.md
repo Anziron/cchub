@@ -321,3 +321,4 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 - 2026-10-31：框架调整为可验证结构：`sans-IO` 同步核心、`fake-claude` 回放、连接放进 Rust 进程，设计文档移入项目仓库。
 - 2026-10-31：实现 inotify、设备身份校验、设备状态探测、日志清理；实测探测和写入中断；Codex 完成静态界面原型 `docs/prototype/index.html`，待用户确认。
 - 2026-10-31：实测 `set_model` 可用、`/model` 不生效、内置命令输出写入会话记录、写入中断时模型的反应；补录提问、方案确认、中断的回放数据。
+- 2026-11-01：界面优化：连接改弹窗只填 IP；模型列表取自 `initialize`；发送立刻显示；工作区改为弹窗浏览设备目录（`hubd` 调外部命令 `cc-workspace`）；`hubd` 每个会话一个有序队列，启动进程不再挡住其他消息；侧边栏每个工作区默认显示 5 个会话。

@@ -54,6 +54,7 @@ const SESSIONS: { id: string; title: string; running: boolean; lines: string[] }
   { id: "question", title: "选择登录入口", running: true, lines: [user("问我选哪个颜色。"), ...until(question, '"can_use_tool"')] },
   { id: "rich", title: "整理认证测试", running: true, lines: rich },
   { id: "interrupt", title: "跑一个长任务", running: false, lines: [user("运行 long.py"), ...interrupt.split("\n").filter(Boolean)] },
+  ...["补充单元测试", "smoke test", "smoke test", "smoke test", "smoke test", "smoke test"].map((title, i) => ({ id: `old${i}`, title, running: false, lines: [user(title)] })),
 ];
 
 let emit: (event: UiEvent) => void = () => {};
@@ -62,7 +63,26 @@ export const demoHub: Hub = {
   connect: async () => (scene === "conn" ? "disconnected" : "connected"),
   onEvent: async (handler) => { emit = handler; },
   send: async (msg) => {
-    if (msg.type === "list") {
+    if (msg.type === "browse") {
+      if (!msg.device) emit({ type: "browse", device: null, path: null, parent: null, entries: ["pc-home", "pc-company"], error: null });
+      else if (msg.device === "pc-company") emit({ type: "browse", device: msg.device, path: null, parent: null, entries: [], error: "读取目录失败：设备离线、没有权限或路径不存在" });
+      else if (!msg.path) emit({ type: "browse", device: msg.device, path: null, parent: null, entries: ["C:\\", "D:\\"], error: null });
+      else emit({ type: "browse", device: msg.device, path: msg.path, parent: msg.path.length > 3 ? "D:\\" : null, entries: ["cchub", "litellm_work", "docshub"].map((name) => `${msg.path!.replace(/\\$/, "")}\\${name}`), error: null });
+    } else if (msg.type === "mount") {
+      emit({ type: "mounted", device: msg.device, path: msg.path, cwd: `/mnt/${msg.device}/${msg.path[0].toLowerCase()}/${msg.path.slice(3).replaceAll("\\", "/")}`, error: null });
+    } else if (msg.type === "input") {
+      const request = JSON.parse(msg.line);
+      if (request.request?.subtype === "initialize") {
+        const models = [
+          { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)", description: "Opus 5.5 · Best for everyday, complex tasks" },
+          { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5", description: "For complex work and everyday tasks" },
+          { value: "sonnet", resolvedModel: "claude-sonnet-5-5", displayName: "Sonnet 5.5", description: "Most efficient for simpler tasks" },
+          { value: "fable", resolvedModel: "claude-fable-5-1", displayName: "Fable 5.1", description: "For your toughest challenges" },
+          { value: "haiku", resolvedModel: "claude-haiku-5-5", displayName: "Haiku 5.5", description: "Fastest for quick answers" },
+        ];
+        emit({ type: "event", session: msg.session, class: "durable", seq: 0, payload: JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: request.request_id, response: { models } } }) });
+      }
+    } else if (msg.type === "list") {
       const now = Math.floor(Date.now() / 1000);
       emit({
         type: "sessions",

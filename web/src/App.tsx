@@ -1,19 +1,9 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { ConnectDialog, ModelMenu, WorkspaceDialog } from "./Dialogs";
 import { Icon } from "./Icon";
-import { firstAsk, isWaiting, type Ask, type Todo } from "./model";
+import { firstAsk, isSending, isWaiting, type Ask, type Todo } from "./model";
 import { describeCwd, type Session, type Store } from "./store";
 import { describeTool, ThreadView } from "./Thread";
-
-const MODELS = [
-  ["sonnet", "Sonnet"],
-  ["opus", "Opus"],
-  ["haiku", "Haiku"],
-];
-
-function modelLabel(model?: string): string {
-  const found = MODELS.find(([id]) => model?.includes(id));
-  return found ? found[0] : "";
-}
 
 function askHint(ask?: Ask): string {
   if (ask?.kind === "plan") return "方案等你确认";
@@ -35,16 +25,56 @@ function SessionRow({ store, session }: { store: Store; session: Session }) {
   );
 }
 
+const VISIBLE_SESSIONS = 5;
+const COLLAPSED_KEY = "cchub.collapsedProjects";
+
+function ProjectGroup({ store, project, sessions, collapsed, toggle }: {
+  store: Store;
+  project: string;
+  sessions: Session[];
+  collapsed: boolean;
+  toggle: () => void;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  // 正在看的会话不能被收起来。
+  const shown = sessions.filter((s, i) => (collapsed ? false : showAll || i < VISIBLE_SESSIONS) || s.id === store.selected);
+  const hidden = collapsed ? 0 : sessions.length - shown.length;
+  return (
+    <div className={`group${collapsed ? " closed" : ""}`}>
+      <button className="row project" title={sessions[0]?.cwd} aria-expanded={!collapsed} onClick={toggle}>
+        <Icon name="chev" size={11} />
+        <span className="name">{project || "未指定目录"}</span>
+        <span className="hint">{sessions.length}</span>
+      </button>
+      {shown.map((s) => <SessionRow key={s.id} store={store} session={s} />)}
+      {hidden > 0 ? <button className="row more" onClick={() => setShowAll(true)}>展开其余 {hidden} 个</button> : null}
+      {showAll && !collapsed && sessions.length > VISIBLE_SESSIONS ? <button className="row more" onClick={() => setShowAll(false)}>收起</button> : null}
+    </div>
+  );
+}
+
 function Sidebar({ store }: { store: Store }) {
   const { waiting, running, recent } = store.groups();
   const projects = new Map<string, Session[]>();
+  // 按完整路径分组：不同设备上可能有同名项目。
   for (const session of recent) {
-    const { project } = describeCwd(session.cwd);
-    projects.set(project, [...(projects.get(project) ?? []), session]);
+    const key = session.cwd ?? "";
+    projects.set(key, [...(projects.get(key) ?? []), session]);
   }
+  const [collapsed, setCollapsed] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
+    } catch {
+      return [];
+    }
+  });
+  const toggle = (key: string) => {
+    const next = collapsed.includes(key) ? collapsed.filter((k) => k !== key) : [...collapsed, key];
+    setCollapsed(next);
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next));
+  };
   return (
     <aside className="side">
-      <div className="wordmark">cchub</div>
       <button className="row new" onClick={() => store.select(null)}>
         <i><Icon name="plus" size={13} /></i><span className="name">新建会话</span>
       </button>
@@ -64,11 +94,15 @@ function Sidebar({ store }: { store: Store }) {
         {recent.length ? (
           <section>
             <h2>最近</h2>
-            {[...projects].map(([project, sessions]) => (
-              <div key={project}>
-                <div className="row project">{project || "未指定目录"}</div>
-                {sessions.map((s) => <SessionRow key={s.id} store={store} session={s} />)}
-              </div>
+            {[...projects].map(([key, sessions]) => (
+              <ProjectGroup
+                key={key}
+                store={store}
+                project={describeCwd(key).project}
+                sessions={sessions}
+                collapsed={collapsed.includes(key)}
+                toggle={() => toggle(key)}
+              />
             ))}
           </section>
         ) : null}
@@ -111,11 +145,11 @@ function TopBar({ store, session, toggleTheme }: { store: Store; session?: Sessi
       </div>
       <div className="top-right">
         <div className="health">
-          <span className={connClass}><i />{connText}</span>
+          <button className={connClass} onClick={() => store.toggleSettings()}><i />{store.url ? connText : "未连接"}</button>
           {session ? <span className={offline ? "bad" : ""}><i />{offline ? "设备离线" : "设备在线"}</span> : null}
         </div>
         <button className="icon" aria-label="切换深浅色" onClick={toggleTheme}><Icon name="moon" /></button>
-        <button className="icon" aria-label="设置" onClick={() => store.toggleSettings()}><Icon name="gear" /></button>
+        <button className="icon" aria-label="连接服务器" onClick={() => store.toggleSettings()}><Icon name="gear" /></button>
       </div>
     </header>
   );
@@ -159,7 +193,8 @@ function Activity({ store, session }: { store: Store; session: Session }) {
   }, [busy]);
 
   let text = "";
-  if (ask) text = ask.kind === "plan" ? "等待你确认方案" : ask.kind === "question" ? "等待你回答" : "等待你批准";
+  if (!ask && isSending(thread)) text = session.deviceOnline ? (thread.claudeSessionId ? "正在发送" : "正在启动会话") : "设备离线，恢复后发送";
+  else if (ask) text = ask.kind === "plan" ? "等待你确认方案" : ask.kind === "question" ? "等待你回答" : "等待你批准";
   else if (thread.phase === "thinking") text = "思考中";
   else if (thread.phase === "replying") text = "正在回复";
   else if (thread.phase === "tool") {
@@ -230,10 +265,7 @@ function Composer({ store, session }: { store: Store; session: Session }) {
         }}
       />
       <div className="tools">
-        <select className="model" aria-label="模型" value={modelLabel(thread.model)} onChange={(event) => store.setModel(session, event.target.value)}>
-          {modelLabel(thread.model) ? null : <option value="">{thread.model ?? "默认模型"}</option>}
-          {MODELS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-        </select>
+        <ModelMenu models={store.models} model={thread.model} onChange={(value) => store.setModel(session, value)} />
         {busy && !text ? (
           <button type="button" className="send stop" aria-label="中断" onClick={() => store.interrupt(session)}><Icon name="stop" /></button>
         ) : (
@@ -245,16 +277,15 @@ function Composer({ store, session }: { store: Store; session: Session }) {
 }
 
 function Welcome({ store }: { store: Store }) {
-  const cwds = [...new Set([...store.sessions.values()].flatMap((s) => (s.cwd ? [s.cwd] : [])))];
   const [text, setText] = useState("");
-  const [cwd, setCwd] = useState(() => localStorage.getItem("cchub.cwd") ?? cwds[0] ?? "");
   const [model, setModel] = useState("");
-  const valid = text.trim() && cwd.startsWith("/");
   const send = () => {
-    if (!valid) return;
-    localStorage.setItem("cchub.cwd", cwd);
-    store.newSession(text, cwd, model);
+    if (!text.trim()) return;
+    // 还没选工作区时先选，文字留在输入框里。
+    if (!store.cwd) store.openWorkspace();
+    else store.newSession(text, store.cwd, model);
   };
+  const { project, device } = describeCwd(store.cwd);
   return (
     <section className="welcome">
       <h1>今天想让它做点什么？</h1>
@@ -273,30 +304,13 @@ function Welcome({ store }: { store: Store }) {
           }}
         />
         <div className="tools">
-          <input className="path" list="cwds" aria-label="项目目录" placeholder="服务器上的项目目录，如 /mnt/pc-home/d/frame/x" value={cwd} onChange={(event) => setCwd(event.target.value)} />
-          <datalist id="cwds">{cwds.map((c) => <option key={c} value={c} />)}</datalist>
-          <select className="model" aria-label="模型" value={model} onChange={(event) => setModel(event.target.value)}>
-            <option value="">默认模型</option>
-            {MODELS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-          </select>
-          <button className="send" aria-label="发送" disabled={!valid}><Icon name="up" /></button>
-        </div>
-      </form>
-    </section>
-  );
-}
-
-function Settings({ store }: { store: Store }) {
-  const [url, setUrl] = useState(store.url || "ws://");
-  const valid = /^wss?:\/\/.+/.test(url);
-  return (
-    <section className="welcome">
-      <h1>连接到你的服务器</h1>
-      <form className="composer" onSubmit={(event) => { event.preventDefault(); if (valid) void store.connect(url); }}>
-        <textarea autoFocus aria-label="服务器地址" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="ws://服务器的 Tailscale 地址:端口/ws" />
-        <div className="tools">
-          <span className="hint">地址保存在这台设备上</span>
-          <button className="send" aria-label="连接" disabled={!valid}><Icon name="up" /></button>
+          <button type="button" className="workspace" title={store.cwd || undefined} onClick={() => store.openWorkspace()}>
+            <Icon name="folder" size={14} />
+            <span>{project || "选择工作区"}</span>
+            {device ? <small>{device}</small> : null}
+          </button>
+          <ModelMenu models={store.models} model={model || "default"} onChange={setModel} />
+          <button className="send" aria-label="发送" disabled={!text.trim()}><Icon name="up" /></button>
         </div>
       </form>
     </section>
@@ -332,9 +346,7 @@ export function App({ store }: { store: Store }) {
         {store.error ? (
           <div className="notice on"><Icon name="alert" /><span>{store.error}</span><button onClick={() => store.dismissError()}>知道了</button></div>
         ) : null}
-        {store.showSettings ? (
-          <Settings store={store} />
-        ) : session ? (
+        {session ? (
           <>
             <TodoBar todos={session.thread.todos} />
             <ThreadView store={store} session={session} />
@@ -347,6 +359,8 @@ export function App({ store }: { store: Store }) {
           <Welcome store={store} />
         )}
       </main>
+      {store.showSettings ? <ConnectDialog store={store} /> : null}
+      {store.showWorkspace ? <WorkspaceDialog store={store} /> : null}
     </div>
   );
 }

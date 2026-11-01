@@ -11,6 +11,8 @@ mod runner;
 #[cfg(unix)]
 mod session;
 #[cfg(unix)]
+mod workspace;
+#[cfg(unix)]
 mod ws;
 
 #[cfg(not(unix))]
@@ -84,6 +86,7 @@ async fn run(config: config::Config) -> std::io::Result<()> {
         host,
         allowed_users: config.allowed_users,
         min_available_mb: config.min_available_mb,
+        workspace_cmd: config.workspace_cmd,
     });
 
     let retention = config.retention;

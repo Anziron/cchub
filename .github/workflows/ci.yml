@@ -35,6 +35,8 @@ jobs:
           TS_RS_EXPORT_DIR: ${{ github.workspace }}/web/src/generated
         run: |
           cargo test -p cchub-protocol --features ts --locked export_bindings
+          git status --porcelain web/src/generated
+          git --no-pager diff web/src/generated
           test -z "$(git status --porcelain web/src/generated)"
 
   web:

@@ -6,10 +6,17 @@ import {
   allowLine,
   answerLine,
   apply,
+  addSending,
+  failSending,
+  findModel,
   firstAsk,
+  hubHost,
+  hubUrl,
+  isSending,
   isWaiting,
   newThread,
   onProcessExit,
+  parseModels,
   type Thread,
 } from "../src/model.ts";
 
@@ -195,4 +202,48 @@ test("普通错误显示出来；进程退出后卡片作废；待办原地更�
   assert.equal(thread.background.size, 1, "一轮结束不等于后台任务结束");
   apply(thread, JSON.stringify({ type: "system", subtype: "task_notification", task_id: "b1" }));
   assert.equal(thread.background.size, 0);
+});
+
+test("发送的消息立刻显示，回传后不重复", () => {
+  const thread = newThread();
+  addSending(thread, "u1", "你好");
+  assert.ok(isSending(thread));
+  assert.equal(thread.phase, "thinking");
+  apply(thread, JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "你好" } }));
+  assert.deepEqual(thread.items, [{ kind: "user", id: "u1", text: "你好" }]);
+  assert.ok(!isSending(thread));
+});
+
+test("服务器报错后消息转为失败，界面不再显示运行中", () => {
+  const thread = newThread();
+  addSending(thread, "u1", "你好");
+  failSending(thread);
+  assert.equal(thread.phase, "idle");
+  assert.equal((thread.items[0] as { state?: string }).state, "failed");
+});
+
+test("模型列表只认这次请求的回复", () => {
+  const reply = (id: string) => JSON.stringify({ type: "control_response", response: { request_id: id, response: { models: [{ value: "opus", displayName: "Opus 5.5" }, { bad: 1 }] } } });
+  assert.deepEqual(parseModels(reply("now"), "now"), [{ value: "opus", displayName: "Opus 5.5" }]);
+  assert.equal(parseModels(reply("old"), "now"), null);
+  assert.equal(parseModels("not json now", "now"), null);
+});
+
+test("完整模型 ID 显示成具体模型，而不是默认", () => {
+  const models = [
+    { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default" },
+    { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5" },
+  ];
+  assert.equal(findModel(models, "claude-opus-5-5")?.value, "opus");
+  assert.equal(findModel(models, "default")?.value, "default");
+  assert.equal(findModel(models, "unknown"), undefined);
+});
+
+test("服务器地址只填 IP 也能补全", () => {
+  assert.equal(hubUrl(" 100.90.166.47 "), "ws://100.90.166.47:7878/ws");
+  assert.equal(hubUrl("100.90.166.47:9000"), "ws://100.90.166.47:9000/ws");
+  assert.equal(hubUrl("ws://100.90.166.47:7878/ws"), "ws://100.90.166.47:7878/ws");
+  assert.equal(hubUrl(""), null);
+  assert.equal(hubUrl("a b"), null);
+  assert.equal(hubHost("ws://100.90.166.47:7878/ws"), "100.90.166.47");
 });
