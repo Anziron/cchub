@@ -179,7 +179,10 @@ async fn session_worker(
     let mut reader = None;
     while let Some(msg) = messages.recv().await {
         if let Err(message) = handle(&app, &session, msg, &tx, &mut reader).await {
-            if send_error(&tx, Some(session.clone()), message).await.is_err() {
+            if send_error(&tx, Some(session.clone()), message)
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -261,7 +264,11 @@ async fn browse(
 ) {
     let (from_device, from_path) = (device.clone(), path.clone());
     let listing = spawn_blocking(move || {
-        workspace::browse(&app.workspace_cmd, from_device.as_deref(), from_path.as_deref())
+        workspace::browse(
+            &app.workspace_cmd,
+            from_device.as_deref(),
+            from_path.as_deref(),
+        )
     })
     .await
     .unwrap_or_else(|error| Err(error.to_string()));
@@ -286,11 +293,10 @@ async fn browse(
 
 async fn mount(app: Arc<App>, device: String, path: String, tx: mpsc::Sender<Frame>) {
     let (from_device, from_path) = (device.clone(), path.clone());
-    let mounted = spawn_blocking(move || {
-        workspace::mount(&app.workspace_cmd, &from_device, &from_path)
-    })
-    .await
-    .unwrap_or_else(|error| Err(error.to_string()));
+    let mounted =
+        spawn_blocking(move || workspace::mount(&app.workspace_cmd, &from_device, &from_path))
+            .await
+            .unwrap_or_else(|error| Err(error.to_string()));
     let (cwd, error) = match mounted {
         Ok(cwd) => (Some(cwd), None),
         Err(error) => (None, Some(error)),
