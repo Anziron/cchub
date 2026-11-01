@@ -53,6 +53,8 @@ pub enum ClientMsg {
     },
     /// 挂载设备上的目录，作为工作区。
     Mount { device: String, path: String },
+    /// 读取后台任务输出文件的末尾。
+    TaskOutput { path: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +118,12 @@ pub enum ServerMsg {
         cwd: Option<String>,
         error: Option<String>,
     },
+    /// 回复 `TaskOutput`。
+    TaskOutput {
+        path: String,
+        text: Option<String>,
+        error: Option<String>,
+    },
     Error {
         message: String,
     },
@@ -169,6 +177,11 @@ pub enum UiEvent {
         device: String,
         path: String,
         cwd: Option<String>,
+        error: Option<String>,
+    },
+    TaskOutput {
+        path: String,
+        text: Option<String>,
         error: Option<String>,
     },
     Error {

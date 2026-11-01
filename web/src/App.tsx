@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { ConnectDialog, ModelMenu, WorkspaceDialog } from "./Dialogs";
+import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { CommandMenu, ConfirmDialog, ConnectDialog, ModelMenu, TasksDialog, WorkspaceDialog } from "./Dialogs";
 import { Icon } from "./Icon";
-import { firstAsk, isSending, isWaiting, type Ask, type Todo } from "./model";
-import { describeCwd, type Session, type Store } from "./store";
+import { firstAsk, isSending, isWaiting, matchCommands, runningTasks, type Ask, type SlashCommand, type Todo } from "./model";
+import { describeCwd, NEW_DRAFT, type Session, type Store } from "./store";
 import { describeTool, ThreadView } from "./Thread";
 
 function askHint(ask?: Ask): string {
@@ -14,14 +14,22 @@ function askHint(ask?: Ask): string {
 function SessionRow({ store, session }: { store: Store; session: Session }) {
   const waiting = isWaiting(session.thread);
   const current = store.selected === session.id;
+  const status = waiting || !session.running ? "" : sessionStatus(session);
+  const started = session.thread.phase !== "idle" ? session.thread.turnStartedAt : undefined;
   return (
-    <button className={`row${current ? " current" : ""}`} onClick={() => store.select(session.id)}>
-      <span className={`dot${waiting ? " wait" : session.running ? " run" : ""}`} />
-      <span className="name">
-        {session.title}
-        {waiting ? <small>{askHint(firstAsk(session.thread))}</small> : null}
-      </span>
-    </button>
+    <div className="row-wrap">
+      <button className={`row${current ? " current" : ""}`} onClick={() => store.select(session.id)}>
+        <span className={`dot${waiting ? " wait" : session.running ? " run" : ""}`} />
+        <span className="name">
+          {session.title}
+          {waiting ? <small>{askHint(firstAsk(session.thread))}</small> : null}
+          {status ? <small className="status">{status}{started ? ` · ${formatDuration(Date.now() - started)}` : ""}</small> : null}
+        </span>
+      </button>
+      {session.running ? (
+        <button className="row-stop" aria-label={`结束会话 ${session.title}`} title="结束会话" onClick={() => store.askStop(session)}><Icon name="close" size={12} /></button>
+      ) : null}
+    </div>
   );
 }
 
@@ -53,8 +61,36 @@ function ProjectGroup({ store, project, sessions, collapsed, toggle }: {
   );
 }
 
+type QuotaWindow = { utilization: number; resetsAt: number };
+
+function Quota({ label, window }: { label: string; window?: QuotaWindow }) {
+  // 窗口已过期的旧数据不显示。
+  const at = window ? window.resetsAt * 1000 : 0;
+  const percent = window && at > Date.now() ? Math.round(window.utilization * 100) : null;
+  const minutes = Math.round((at - Date.now()) / 60000);
+  const reset = minutes < 60 ? `${minutes} 分钟后` : minutes < 2880 ? `${Math.round(minutes / 60)} 小时后` : `${Math.round(minutes / 1440)} 天后`;
+  return (
+    <div className="quota" title={percent != null ? `${reset}重置（${new Date(at).toLocaleString()}）` : "还没有数据，下一轮回复后更新"}>
+      <span>{label}</span>
+      <span className="quota-bar"><i className={percent != null && percent >= 80 ? "high" : ""} style={{ width: `${percent ?? 0}%` }} /></span>
+      <span className="num">{percent != null ? `${percent}%` : "—"}</span>
+    </div>
+  );
+}
+
+/** 有会话在跑时每秒刷新用时，窗口不在前台时不刷新。 */
+function useTick(active: boolean) {
+  const [, setNow] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => { if (document.hasFocus()) setNow(Date.now()); }, 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+}
+
 function Sidebar({ store }: { store: Store }) {
   const { waiting, running, recent } = store.groups();
+  useTick(running.length > 0);
   const projects = new Map<string, Session[]>();
   // 按完整路径分组：不同设备上可能有同名项目。
   for (const session of recent) {
@@ -108,8 +144,12 @@ function Sidebar({ store }: { store: Store }) {
         ) : null}
       </div>
       <div className="side-foot">
-        <span>服务器可用内存</span>
-        <span>{store.memAvailableMb == null ? "—" : `${store.memAvailableMb} MB`}</span>
+        <Quota label="5 小时" window={store.limits.fiveHour} />
+        <Quota label="本周" window={store.limits.sevenDay} />
+        <div className="quota">
+          <span>服务器可用内存</span>
+          <span className="num mem">{store.memAvailableMb == null ? "—" : `${store.memAvailableMb} MB`}</span>
+        </div>
       </div>
     </aside>
   );
@@ -148,6 +188,7 @@ function TopBar({ store, session, toggleTheme }: { store: Store; session?: Sessi
           <button className={connClass} onClick={() => store.toggleSettings()}><i />{store.url ? connText : "未连接"}</button>
           {session ? <span className={offline ? "bad" : ""}><i />{offline ? "设备离线" : "设备在线"}</span> : null}
         </div>
+        {session?.running ? <button className="btn quiet end-session" onClick={() => store.askStop(session)}>结束会话</button> : null}
         <button className="icon" aria-label="切换深浅色" onClick={toggleTheme}><Icon name="moon" /></button>
         <button className="icon" aria-label="连接服务器" onClick={() => store.toggleSettings()}><Icon name="gear" /></button>
       </div>
@@ -180,10 +221,47 @@ function formatDuration(ms: number): string {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
+/** 这个会话现在在做什么，状态行和侧边栏共用。 */
+function sessionStatus(session: Session): string {
+  const thread = session.thread;
+  const ask = firstAsk(thread);
+  if (!ask && isSending(thread)) return session.deviceOnline ? (thread.claudeSessionId ? "正在发送" : "正在启动会话") : "设备离线，恢复后发送";
+  if (ask) return ask.kind === "plan" ? "等待你确认方案" : ask.kind === "question" ? "等待你回答" : "等待你批准";
+  if (thread.phase === "thinking") return "思考中";
+  if (thread.phase === "replying") return "正在回复";
+  if (thread.phase === "tool") {
+    const tool = thread.items.find((item) => item.kind === "tool" && item.id === thread.activeTool);
+    if (tool?.kind !== "tool") return "正在执行";
+    const { verb, target } = describeTool(tool, session.cwd);
+    return `正在${verb} ${target}`;
+  }
+  const background = runningTasks(thread).length;
+  if (background) return `后台还有 ${background} 个任务`;
+  return session.running ? "空闲" : "";
+}
+
+function formatTokens(tokens: number): string {
+  if (tokens < 1000) return String(tokens);
+  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
+  return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+}
+
+function ContextMeter({ session }: { session: Session }) {
+  const context = session.thread.context;
+  if (!context) return null;
+  const percent = context.max ? Math.round((context.used / context.max) * 100) : null;
+  return (
+    <span className={`context${percent != null && percent >= 80 ? " high" : ""}`} title="这个会话已占用的上下文。接近上限时可以发 /compact 压缩。">
+      上下文 {formatTokens(context.used)}{context.max ? ` / ${formatTokens(context.max)}` : ""}{percent != null ? ` · ${percent}%` : ""}
+    </span>
+  );
+}
+
 function Activity({ store, session }: { store: Store; session: Session }) {
   const thread = session.thread;
   const ask = firstAsk(thread);
   const busy = !ask && thread.phase !== "idle";
+  const background = runningTasks(thread).length;
   // 只在运行中每秒刷新用时，窗口不在前台时不刷新。
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -192,44 +270,71 @@ function Activity({ store, session }: { store: Store; session: Session }) {
     return () => clearInterval(timer);
   }, [busy]);
 
-  let text = "";
-  if (!ask && isSending(thread)) text = session.deviceOnline ? (thread.claudeSessionId ? "正在发送" : "正在启动会话") : "设备离线，恢复后发送";
-  else if (ask) text = ask.kind === "plan" ? "等待你确认方案" : ask.kind === "question" ? "等待你回答" : "等待你批准";
-  else if (thread.phase === "thinking") text = "思考中";
-  else if (thread.phase === "replying") text = "正在回复";
-  else if (thread.phase === "tool") {
-    const tool = thread.items.find((item) => item.kind === "tool" && item.id === thread.activeTool);
-    if (tool?.kind === "tool") {
-      const { verb, target } = describeTool(tool, session.cwd);
-      text = `正在${verb} ${target}`;
-    } else text = "正在执行";
-  } else if (thread.background.size) text = `这一轮已结束，后台还有 ${thread.background.size} 个任务在运行`;
-  else if (thread.lastTurn?.durationMs != null) {
+  let text = busy || ask ? sessionStatus(session) : "";
+  if (!text && background) text = `这一轮已结束，后台还有 ${background} 个任务在运行`;
+  else if (!text && thread.lastTurn?.durationMs != null) {
     const tokens = thread.lastTurn.outputTokens;
     text = `上一轮用时 ${formatDuration(thread.lastTurn.durationMs)}${tokens ? ` · ${tokens} tokens` : ""}`;
-  } else if (!session.running) text = "进程已休眠，发消息时自动恢复";
+  } else if (!text && !session.running) text = "进程已结束，发消息时自动恢复";
 
-  const live = busy || thread.background.size > 0;
+  const live = busy || background > 0;
+  const hasTasks = [...thread.tasks.values()].some((task) => task.backgrounded);
   return (
     <div className="activity">
       {ask || live ? <span className="pulse" style={ask ? { animation: "none" } : undefined} /> : null}
       <span className="activity-text">{text}</span>
       {busy && thread.turnStartedAt ? <time>· {formatDuration(now - thread.turnStartedAt)}</time> : null}
-      {busy ? <span className="esc" role="button" onClick={() => store.interrupt(session)}>Esc 中断</span> : null}
+      <span className="activity-right">
+        {hasTasks ? <button onClick={() => store.openTasks()}><Icon name="tasks" size={13} />后台任务{background ? ` ${background}` : ""}</button> : null}
+        {busy ? <span className="esc" role="button" onClick={() => store.interrupt(session)}>Esc 中断</span> : null}
+      </span>
     </div>
   );
 }
 
+/** 输入框的 `/` 菜单：和 CLI 一样，输入 `/` 就列命令，列表直接来自 CLI。 */
+function useCommandMenu(commands: SlashCommand[], text: string, setText: (text: string) => void, submit: (text: string) => void) {
+  const [index, setIndex] = useState(0);
+  const [closedFor, setClosedFor] = useState<string | null>(null);
+  const matches = closedFor === text ? [] : matchCommands(commands, text);
+  const selected = Math.min(index, Math.max(0, matches.length - 1));
+  useEffect(() => setIndex(0), [text]);
+  const choose = (command: SlashCommand, run: boolean) => {
+    // 需要参数的命令先填进去，等用户写完。
+    if (run && !command.argumentHint) submit(`/${command.name}`);
+    else setText(`/${command.name} `);
+  };
+  const onKeyDown = (event: ReactKeyboardEvent): boolean => {
+    if (!matches.length) return false;
+    if (event.key === "ArrowDown") setIndex((selected + 1) % matches.length);
+    else if (event.key === "ArrowUp") setIndex((selected - 1 + matches.length) % matches.length);
+    else if (event.key === "Tab") choose(matches[selected], false);
+    else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) choose(matches[selected], true);
+    else if (event.key === "Escape") { event.stopPropagation(); setClosedFor(text); }
+    else return false;
+    event.preventDefault();
+    return true;
+  };
+  const menu = matches.length ? <CommandMenu commands={matches} selected={selected} onChoose={(command) => choose(command, true)} /> : null;
+  return { menu, onKeyDown };
+}
+
 function Composer({ store, session }: { store: Store; session: Session }) {
-  const [text, setText] = useState("");
+  const [text, setTextState] = useState(() => store.draft(session.id));
   const ref = useRef<HTMLTextAreaElement>(null);
   const thread = session.thread;
   const busy = thread.phase !== "idle" && !firstAsk(thread);
-  const send = () => {
-    if (!text.trim()) return;
-    store.sendText(session, text);
+  const setText = (next: string) => {
+    setTextState(next);
+    store.setDraft(session.id, next);
+  };
+  const submit = (message: string) => {
+    if (!message.trim()) return;
+    store.sendText(session, message);
     setText("");
   };
+  const send = () => submit(text);
+  const commands = useCommandMenu(store.commandsFor(session), text, setText, submit);
   // 有卡片等决定时不抢焦点，回车和 Esc 留给卡片。
   useEffect(() => {
     if (!firstAsk(session.thread)) ref.current?.focus();
@@ -250,6 +355,7 @@ function Composer({ store, session }: { store: Store; session: Session }) {
   }, [busy, store, session]);
   return (
     <form className="composer" onSubmit={(event) => { event.preventDefault(); send(); }}>
+      {commands.menu}
       <textarea
         ref={ref}
         rows={1}
@@ -258,6 +364,7 @@ function Composer({ store, session }: { store: Store; session: Session }) {
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
+          if (commands.onKeyDown(event)) return;
           if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault();
             send();
@@ -265,6 +372,7 @@ function Composer({ store, session }: { store: Store; session: Session }) {
         }}
       />
       <div className="tools">
+        <ContextMeter session={session} />
         <ModelMenu models={store.models} model={thread.model} onChange={(value) => store.setModel(session, value)} />
         {busy && !text ? (
           <button type="button" className="send stop" aria-label="中断" onClick={() => store.interrupt(session)}><Icon name="stop" /></button>
@@ -277,19 +385,31 @@ function Composer({ store, session }: { store: Store; session: Session }) {
 }
 
 function Welcome({ store }: { store: Store }) {
-  const [text, setText] = useState("");
+  const [text, setTextState] = useState(() => store.draft(NEW_DRAFT));
   const [model, setModel] = useState("");
-  const send = () => {
-    if (!text.trim()) return;
-    // 还没选工作区时先选，文字留在输入框里。
-    if (!store.cwd) store.openWorkspace();
-    else store.newSession(text, store.cwd, model);
+  const setText = (next: string) => {
+    setTextState(next);
+    store.setDraft(NEW_DRAFT, next);
   };
+  const submit = (message: string) => {
+    if (!message.trim()) return;
+    // 还没选工作区时先选，文字留在输入框里。
+    if (!store.cwd) {
+      setText(message);
+      store.openWorkspace();
+      return;
+    }
+    setText("");
+    store.newSession(message, store.cwd, model);
+  };
+  const send = () => submit(text);
+  const commands = useCommandMenu(store.commandsFor(), text, setText, submit);
   const { project, device } = describeCwd(store.cwd);
   return (
     <section className="welcome">
       <h1>今天想让它做点什么？</h1>
       <form className="composer" onSubmit={(event) => { event.preventDefault(); send(); }}>
+        {commands.menu}
         <textarea
           autoFocus
           aria-label="输入任务"
@@ -297,6 +417,7 @@ function Welcome({ store }: { store: Store }) {
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
+            if (commands.onKeyDown(event)) return;
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               send();
@@ -349,7 +470,7 @@ export function App({ store }: { store: Store }) {
         {session ? (
           <>
             <TodoBar todos={session.thread.todos} />
-            <ThreadView store={store} session={session} />
+            <ThreadView key={session.id} store={store} session={session} />
             <footer className="dock">
               <Activity store={store} session={session} />
               <Composer key={session.id} store={store} session={session} />
@@ -361,6 +482,8 @@ export function App({ store }: { store: Store }) {
       </main>
       {store.showSettings ? <ConnectDialog store={store} /> : null}
       {store.showWorkspace ? <WorkspaceDialog store={store} /> : null}
+      {store.stopping ? <ConfirmDialog store={store} session={store.stopping} /> : null}
+      {store.showTasks && session ? <TasksDialog store={store} session={session} /> : null}
     </div>
   );
 }

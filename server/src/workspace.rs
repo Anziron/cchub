@@ -5,6 +5,9 @@
 //! - `ls <设备> [路径]`：第 1 行当前路径，第 2 行上一级，之后每行一个子目录的完整路径。
 //! - `mount <设备> <路径>`：输出服务器上的路径。
 
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Component, Path};
 use std::process::Command;
 use std::time::Duration;
 
@@ -12,6 +15,8 @@ use crate::runner;
 
 const BROWSE_TIMEOUT: Duration = Duration::from_secs(15);
 const MOUNT_TIMEOUT: Duration = Duration::from_secs(30);
+/// 查看任务输出只看末尾，日志再大也不占内存。
+const TASK_OUTPUT_TAIL: u64 = 64 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Listing {
@@ -55,6 +60,38 @@ pub fn mount(program: &str, device: &str, path: &str) -> Result<String, String> 
     }
 }
 
+/// 只放行 CLI 写的后台任务输出，别的路径都不读，这个接口不能变成任意读文件。
+fn is_task_output(path: &str) -> bool {
+    let path = Path::new(path);
+    let mut parts = path.components();
+    let safe = path.components().all(|part| !matches!(part, Component::ParentDir));
+    let in_tmp = matches!(parts.next(), Some(Component::RootDir))
+        && matches!(parts.next(), Some(Component::Normal(dir)) if dir == "tmp")
+        && matches!(parts.next(), Some(Component::Normal(dir))
+            if dir.to_str().is_some_and(|name| name.starts_with("claude-")));
+    let in_tasks = path
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|name| name == "tasks");
+    safe && in_tmp && in_tasks && path.extension().is_some_and(|ext| ext == "output")
+}
+
+pub fn read_task_output(path: &str) -> Result<String, String> {
+    if !is_task_output(path) {
+        return Err("不是后台任务的输出文件".to_string());
+    }
+    let failed = |_| "输出文件读取失败，可能已被清理".to_string();
+    let mut file = File::open(path).map_err(failed)?;
+    let length = file.metadata().map_err(failed)?.len();
+    file.seek(SeekFrom::Start(length.saturating_sub(TASK_OUTPUT_TAIL)))
+        .map_err(failed)?;
+    let mut bytes = Vec::new();
+    file.take(TASK_OUTPUT_TAIL)
+        .read_to_end(&mut bytes)
+        .map_err(failed)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 fn parse_listing(output: &str) -> Listing {
     let not_empty = |line: Option<&str>| line.filter(|l| !l.is_empty()).map(str::to_string);
     let mut lines = output.lines();
@@ -94,6 +131,18 @@ mod tests {
                 entries: vec!["C:\\".into(), "D:\\".into()],
             }
         );
+    }
+
+    #[test]
+    fn only_task_output_files_can_be_read() {
+        assert!(is_task_output("/tmp/claude-0/-mnt-x/abc/tasks/b1.output"));
+        assert!(!is_task_output("/etc/passwd"));
+        assert!(!is_task_output("/root/.ssh/id_ed25519"));
+        assert!(!is_task_output("/tmp/claude-0/x/tasks/b1.txt"));
+        assert!(!is_task_output("/tmp/other/x/tasks/b1.output"));
+        assert!(!is_task_output("/tmp/claude-0/../../etc/tasks/b1.output"));
+        assert!(!is_task_output("tmp/claude-0/x/tasks/b1.output"));
+        assert!(read_task_output("/etc/passwd").is_err());
     }
 
     #[test]

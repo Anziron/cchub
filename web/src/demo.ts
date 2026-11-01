@@ -68,6 +68,8 @@ export const demoHub: Hub = {
       else if (msg.device === "pc-company") emit({ type: "browse", device: msg.device, path: null, parent: null, entries: [], error: "读取目录失败：设备离线、没有权限或路径不存在" });
       else if (!msg.path) emit({ type: "browse", device: msg.device, path: null, parent: null, entries: ["C:\\", "D:\\"], error: null });
       else emit({ type: "browse", device: msg.device, path: msg.path, parent: msg.path.length > 3 ? "D:\\" : null, entries: ["cchub", "litellm_work", "docshub"].map((name) => `${msg.path!.replace(/\\$/, "")}\\${name}`), error: null });
+    } else if (msg.type === "task_output") {
+      emit({ type: "task_output", path: msg.path, text: "tick 1\ntick 2\n构建完成\n", error: null });
     } else if (msg.type === "mount") {
       emit({ type: "mounted", device: msg.device, path: msg.path, cwd: `/mnt/${msg.device}/${msg.path[0].toLowerCase()}/${msg.path.slice(3).replaceAll("\\", "/")}`, error: null });
     } else if (msg.type === "input") {
@@ -80,7 +82,14 @@ export const demoHub: Hub = {
           { value: "fable", resolvedModel: "claude-fable-5-1", displayName: "Fable 5.1", description: "For your toughest challenges" },
           { value: "haiku", resolvedModel: "claude-haiku-5-5", displayName: "Haiku 5.5", description: "Fastest for quick answers" },
         ];
-        emit({ type: "event", session: msg.session, class: "durable", seq: 0, payload: JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: request.request_id, response: { models } } }) });
+        const commands = [
+          { name: "compact", description: "压缩对话，释放上下文", argumentHint: "<可选说明>" },
+          { name: "context", description: "查看上下文占用", argumentHint: "" },
+          { name: "usage", description: "查看额度", argumentHint: "" },
+          { name: "review", description: "审查当前改动", argumentHint: "" },
+          ...Array.from({ length: 20 }, (_, i) => ({ name: `skill-${i}`, description: `示例技能 ${i}`, argumentHint: "" })),
+        ];
+        emit({ type: "event", session: msg.session, class: "durable", seq: 0, payload: JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: request.request_id, response: { models, commands } } }) });
       }
     } else if (msg.type === "list") {
       const now = Math.floor(Date.now() / 1000);
@@ -92,6 +101,14 @@ export const demoHub: Hub = {
     } else if (msg.type === "attach") {
       const session = SESSIONS.find((s) => s.id === msg.session);
       session?.lines.forEach((payload, i) => emit({ type: "event", session: msg.session, class: "durable", seq: i, payload }));
+      const event = (o: unknown) => emit({ type: "event", session: msg.session, class: "durable", seq: 0, payload: JSON.stringify(o) });
+      const hours = Math.floor(Date.now() / 1000) + 7200;
+      event({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.34, resetsAt: hours }, seven_day: { utilization: 0.86, resetsAt: hours + 400000 } } } });
+      event({ type: "assistant", message: { id: "usage", usage: { input_tokens: 2, cache_read_input_tokens: 240000, cache_creation_input_tokens: 4000 }, content: [] } });
+      if (msg.session === "rich") {
+        event({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "b1", task_type: "local_bash", description: "运行完整测试 npm test" }, { task_id: "b2", task_type: "local_bash", description: "构建桌面端" }] });
+        event({ type: "system", subtype: "task_notification", task_id: "b2", status: "completed", summary: "构建完成", output_file: "/tmp/claude-0/x/tasks/b2.output" });
+      }
       if (scene === "offline") emit({ type: "device", session: msg.session, online: false });
     }
   },

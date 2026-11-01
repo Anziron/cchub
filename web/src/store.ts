@@ -9,17 +9,24 @@ import {
   apply,
   denyLine,
   failSending,
+  mergeRateLimits,
   initializeLine,
   interruptLine,
   isWaiting,
   newThread,
   onProcessExit,
+  parseCommands,
   parseModels,
+  parseRateLimits,
+  runningTasks,
   removeItem,
   setModelLine,
+  stopTaskLine,
   userLine,
   type Ask,
   type ModelOption,
+  type RateLimits,
+  type SlashCommand,
   type Thread,
 } from "./model";
 
@@ -32,11 +39,28 @@ export interface Session {
   deviceOnline: boolean;
   attached: boolean;
   thread: Thread;
+  /** 这个项目的 `/` 命令。不同项目的技能不同。 */
+  commands?: SlashCommand[];
 }
 
 const URL_KEY = "cchub.url";
 const MODELS_KEY = "cchub.models";
 const CWD_KEY = "cchub.cwd";
+const COMMANDS_KEY = "cchub.commands";
+const LIMITS_KEY = "cchub.limits";
+const DRAFTS_KEY = "cchub.drafts";
+const TASK_TIMES_KEY = "cchub.taskTimes";
+const MAX_TASK_TIMES = 200;
+/** 新会话页的草稿。 */
+export const NEW_DRAFT = "";
+
+function loadJson<T>(key: string, fallback: T): T {
+  try {
+    return (JSON.parse(localStorage.getItem(key) ?? "null") as T) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 /** 还没有任何会话返回过模型列表时用，只放 CLI 长期支持的别名。 */
 const FALLBACK_MODELS: ModelOption[] = [
@@ -47,12 +71,8 @@ const FALLBACK_MODELS: ModelOption[] = [
 ];
 
 function loadModels(): ModelOption[] {
-  try {
-    const saved = JSON.parse(localStorage.getItem(MODELS_KEY) ?? "null");
-    return Array.isArray(saved) && saved.length ? saved : FALLBACK_MODELS;
-  } catch {
-    return FALLBACK_MODELS;
-  }
+  const saved = loadJson<ModelOption[]>(MODELS_KEY, []);
+  return Array.isArray(saved) && saved.length ? saved : FALLBACK_MODELS;
 }
 
 export interface BrowseState {
@@ -73,6 +93,12 @@ export class Store {
   url = localStorage.getItem(URL_KEY) ?? "";
   showSettings = this.url === "";
   models = loadModels();
+  commands = loadJson<SlashCommand[]>(COMMANDS_KEY, []);
+  limits = loadJson<RateLimits>(LIMITS_KEY, {});
+  showTasks = false;
+  /** 等确认结束的会话。 */
+  stopping: Session | null = null;
+  taskOutput: { path: string; text: string | null; error: string | null } | null = null;
   /** 新会话要用的工作区，服务器上的路径。 */
   cwd = localStorage.getItem(CWD_KEY) ?? "";
   showWorkspace = false;
@@ -84,8 +110,11 @@ export class Store {
   private listeners = new Set<() => void>();
   private frame = 0;
   private browsesInFlight = 0;
-  private modelsRequest: string | null = null;
-  private modelsRefreshed = false;
+  /** 等 `initialize` 回复的请求，只认当次的，重放旧日志不算。 */
+  private initRequests = new Map<string, Session>();
+  private initialized = new Set<string>();
+  private drafts = loadJson<Record<string, string>>(DRAFTS_KEY, {});
+  private taskTimes = loadJson<Record<string, number>>(TASK_TIMES_KEY, {});
 
   constructor(private hub: Hub) {
     void hub.onEvent((event) => this.onEvent(event));
@@ -178,14 +207,16 @@ export class Store {
           // 窗口一打开就更新模型列表，新会话页也要用。
           const running = event.sessions.find((info) => info.running);
           const session = running && this.sessions.get(running.id);
-          if (session) this.refreshModels(session);
+          if (session) this.requestInit(session);
         }
         break;
       case "event": {
         const session = this.sessions.get(event.session);
         if (session) {
-          if (this.modelsRequest) this.takeModels(event.payload, this.modelsRequest);
+          this.takeInit(event.payload);
+          this.takeLimits(event.payload);
           apply(session.thread, event.payload);
+          this.stampTasks(session, event.payload);
           session.updated = Math.floor(Date.now() / 1000);
         }
         break;
@@ -213,6 +244,9 @@ export class Store {
         if (event.cwd) this.chooseWorkspace(event.cwd);
         else this.mountError = event.error ?? "挂载失败";
         break;
+      case "task_output":
+        if (this.taskOutput?.path === event.path) this.taskOutput = { path: event.path, text: event.text, error: event.error };
+        break;
       case "error":
         this.error = event.message;
         if (event.session) {
@@ -224,20 +258,74 @@ export class Store {
     this.changed();
   }
 
-  private takeModels(line: string, requestId: string): void {
-    const models = parseModels(line, requestId);
-    if (!models) return;
-    this.models = models;
-    this.modelsRequest = null;
-    localStorage.setItem(MODELS_KEY, JSON.stringify(models));
+  private takeInit(line: string): void {
+    for (const [requestId, session] of this.initRequests) {
+      if (!line.includes(requestId)) continue;
+      this.initRequests.delete(requestId);
+      const models = parseModels(line, requestId);
+      if (models) {
+        this.models = models;
+        localStorage.setItem(MODELS_KEY, JSON.stringify(models));
+      }
+      const commands = parseCommands(line, requestId);
+      if (commands) {
+        session.commands = commands;
+        this.commands = commands;
+        localStorage.setItem(COMMANDS_KEY, JSON.stringify(commands));
+      }
+      return;
+    }
   }
 
-  /** 问 CLI 当前有哪些模型。不调用模型，也不写进会话记录；每次打开窗口问一次就够。 */
-  private refreshModels(session: Session): void {
-    if (this.modelsRefreshed) return;
-    this.modelsRefreshed = true;
-    this.modelsRequest = `cchub-models-${crypto.randomUUID()}`;
-    void this.send({ type: "input", session: session.id, line: initializeLine(this.modelsRequest) });
+  private takeLimits(line: string): void {
+    const next = parseRateLimits(line);
+    if (!next) return;
+    this.limits = mergeRateLimits(this.limits, next);
+    localStorage.setItem(LIMITS_KEY, JSON.stringify(this.limits));
+  }
+
+  /** 任务事件没有时间戳，首次看到时记下来，窗口重建后重放还能用。 */
+  private stampTasks(session: Session, line: string): void {
+    if (!line.includes("task")) return;
+    let changed = false;
+    for (const task of session.thread.tasks.values()) {
+      if (task.startedAt) continue;
+      if (!this.taskTimes[task.id]) {
+        // 重放时才第一次看到已结束的任务，开始时间未知。
+        if (task.endedAt) continue;
+        this.taskTimes[task.id] = Date.now();
+        changed = true;
+      }
+      task.startedAt = this.taskTimes[task.id];
+    }
+    if (!changed) return;
+    const entries = Object.entries(this.taskTimes);
+    if (entries.length > MAX_TASK_TIMES) this.taskTimes = Object.fromEntries(entries.slice(-MAX_TASK_TIMES));
+    localStorage.setItem(TASK_TIMES_KEY, JSON.stringify(this.taskTimes));
+  }
+
+  /** 问 CLI 当前有哪些模型和命令。不调用模型，也不写进会话记录；每个进程问一次就够。 */
+  private requestInit(session: Session): void {
+    if (this.initialized.has(session.id)) return;
+    this.initialized.add(session.id);
+    const requestId = `cchub-init-${crypto.randomUUID()}`;
+    this.initRequests.set(requestId, session);
+    void this.send({ type: "input", session: session.id, line: initializeLine(requestId) });
+  }
+
+  draft(key: string): string {
+    return this.drafts[key] ?? "";
+  }
+
+  /** 草稿存在本地：切换会话和关窗（WebView 会销毁）都不能丢。 */
+  setDraft(key: string, text: string): void {
+    if (text) this.drafts[key] = text;
+    else delete this.drafts[key];
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(this.drafts));
+  }
+
+  commandsFor(session?: Session): SlashCommand[] {
+    return session?.commands ?? this.commands;
   }
 
   private attach(session: Session): void {
@@ -252,7 +340,7 @@ export class Store {
     const session = id ? this.sessions.get(id) : undefined;
     if (session) {
       this.attach(session);
-      if (session.running) this.refreshModels(session);
+      if (session.running) this.requestInit(session);
     }
     this.changed();
   }
@@ -323,8 +411,7 @@ export class Store {
     this.selected = id;
     void this.send({ type: "start", session: id, cwd, title });
     void this.send({ type: "attach", session: id, after: 0 });
-    this.modelsRefreshed = false;
-    this.refreshModels(session);
+    this.requestInit(session);
     if (model) void this.send({ type: "input", session: id, line: setModelLine(model) });
     this.sendUser(session, text);
     this.refresh();
@@ -340,8 +427,14 @@ export class Store {
         resume: session.thread.claudeSessionId,
       });
       session.running = true;
-      this.modelsRefreshed = false;
-      this.refreshModels(session);
+      this.initialized.delete(session.id);
+      this.requestInit(session);
+    }
+    // `/model` 回复成功但不生效，要走控制消息。其他命令都原样交给 CLI。
+    const model = /^\/model\s+(\S+)\s*$/.exec(text)?.[1];
+    if (model) {
+      this.setModel(session, model);
+      return;
     }
     this.sendUser(session, text);
     this.changed();
@@ -369,6 +462,52 @@ export class Store {
 
   interrupt(session: Session): void {
     void this.send({ type: "input", session: session.id, line: interruptLine() });
+  }
+
+  /** 正在干活时先确认，空闲时结束没有损失，直接结束。 */
+  askStop(session: Session): void {
+    const working = session.thread.phase !== "idle" || runningTasks(session.thread).length > 0;
+    if (working) {
+      this.stopping = session;
+      this.changed();
+    } else this.stopSession(session);
+  }
+
+  cancelStop(): void {
+    this.stopping = null;
+    this.changed();
+  }
+
+  /** 结束进程。之后再发消息会用 `--resume` 接着聊。 */
+  stopSession(session: Session): void {
+    this.stopping = null;
+    void this.send({ type: "stop", session: session.id });
+    session.running = false;
+    onProcessExit(session.thread);
+    this.initialized.delete(session.id);
+    // 不刷新列表：`stop` 可能还没执行完，会把会话又标回运行中。状态由 hubd 推送。
+    this.changed();
+  }
+
+  openTasks(): void {
+    this.showTasks = true;
+    this.changed();
+  }
+
+  closeTasks(): void {
+    this.showTasks = false;
+    this.taskOutput = null;
+    this.changed();
+  }
+
+  stopTask(session: Session, taskId: string): void {
+    void this.send({ type: "input", session: session.id, line: stopTaskLine(taskId) });
+  }
+
+  readTaskOutput(path: string): void {
+    if (this.taskOutput?.path !== path) this.taskOutput = { path, text: null, error: null };
+    void this.send({ type: "task_output", path });
+    this.changed();
   }
 
   setModel(session: Session, model: string): void {

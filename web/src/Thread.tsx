@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AskCard } from "./AskCard";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
@@ -147,12 +147,23 @@ function ItemView({ item, store, session }: { item: Item; store: Store; session:
 
 export function ThreadView({ store, session }: { store: Store; session: Session }) {
   const ref = useRef<HTMLElement>(null);
+  const column = useRef<HTMLDivElement>(null);
+  // 每个会话一个实例（App 里按会话 ID 设 key），回到会话时从底部开始。
   const pinned = useRef(true);
-  // 用户往上翻时不打扰，在底部时跟随新内容。
-  useLayoutEffect(() => {
+  const lastTop = useRef(0);
+  const toBottom = () => {
     const element = ref.current;
     if (element && pinned.current) element.scrollTop = element.scrollHeight;
-  });
+  };
+  // 用户往上翻时不打扰，在底部时跟随新内容。
+  useLayoutEffect(toBottom);
+  // 长消息用了 content-visibility，渲染后高度才准，高度变了要再贴一次底。
+  useEffect(() => {
+    if (!column.current) return;
+    const observer = new ResizeObserver(toBottom);
+    observer.observe(column.current);
+    return () => observer.disconnect();
+  }, []);
   return (
     <section
       className="stream"
@@ -160,10 +171,13 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
       ref={ref}
       onScroll={(event) => {
         const el = event.currentTarget;
-        pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        // 只有真的往上滚才算离开底部。内容变高也会让“离底距离”变大，不能据此判断。
+        if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) pinned.current = true;
+        else if (el.scrollTop < lastTop.current - 1) pinned.current = false;
+        lastTop.current = el.scrollTop;
       }}
     >
-      <div className="column">
+      <div className="column" ref={column}>
         {session.thread.items.map((item) => (
           <ItemView key={item.id} item={item} store={store} session={session} />
         ))}

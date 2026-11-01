@@ -52,6 +52,20 @@ export interface Todo {
   activeForm?: string;
 }
 
+export interface Task {
+  id: string;
+  type?: string;
+  description?: string;
+  backgrounded: boolean;
+  status: "running" | "completed" | "failed" | "stopped";
+  /** 事件里没有开始时间，由 store 记录首次看到的时间。 */
+  startedAt?: number;
+  endedAt?: number;
+  toolUseId?: string;
+  outputFile?: string;
+  summary?: string;
+}
+
 export type Phase = "idle" | "thinking" | "replying" | "tool";
 
 export interface Thread {
@@ -65,8 +79,10 @@ export interface Thread {
   claudeSessionId?: string;
   model?: string;
   cwd?: string;
-  /** 一轮结束后仍在跑的后台任务。一轮结束不等于任务完成。 */
-  background: Set<string>;
+  /** 所有任务。转入后台的会在一轮结束后继续跑，一轮结束不等于任务完成。 */
+  tasks: Map<string, Task>;
+  /** 上下文已用 token 和上限。 */
+  context?: { used: number; max?: number };
   lastTurn?: { durationMs?: number; outputTokens?: number };
 }
 
@@ -78,7 +94,7 @@ export function newThread(): Thread {
     asks: new Map(),
     todos: [],
     phase: "idle",
-    background: new Set(),
+    tasks: new Map(),
   };
 }
 
@@ -180,14 +196,144 @@ function onToolResult(thread: Thread, part: Json): void {
   });
 }
 
+/** 还原内置命令的回传：`<command-name>/x</command-name><command-args>y</command-args>`。 */
+function commandText(content: string): string | null {
+  const name = /<command-name>\s*([^<]*?)\s*<\/command-name>/.exec(content)?.[1];
+  if (!name) return null;
+  const args = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(content)?.[1];
+  return args ? `${name} ${args}` : name;
+}
+
+function ensureTask(thread: Thread, id: string): Task {
+  let task = thread.tasks.get(id);
+  if (!task) {
+    task = { id, backgrounded: false, status: "running" };
+    thread.tasks.set(id, task);
+  }
+  return task;
+}
+
+const TASK_STATUS: Record<string, Task["status"]> = {
+  completed: "completed",
+  failed: "failed",
+  killed: "stopped",
+  stopped: "stopped",
+};
+
+function onTaskEvent(thread: Thread, event: Json): void {
+  if (event.subtype === "background_tasks_changed") {
+    for (const item of (event.tasks ?? []) as Json[]) {
+      const task = ensureTask(thread, item.task_id);
+      task.backgrounded = true;
+      task.type = item.task_type ?? task.type;
+      task.description = item.description ?? task.description;
+    }
+    return;
+  }
+  const task = ensureTask(thread, event.task_id);
+  if (event.subtype === "task_started") {
+    task.type = event.task_type;
+    task.description = event.description;
+    task.toolUseId = event.tool_use_id;
+    task.backgrounded = task.backgrounded || event.is_backgrounded === true;
+  } else if (event.subtype === "task_updated") {
+    const patch: Json = event.patch ?? {};
+    if (patch.is_backgrounded !== undefined) task.backgrounded = patch.is_backgrounded === true;
+    if (TASK_STATUS[patch.status]) task.status = TASK_STATUS[patch.status];
+    if (patch.end_time) task.endedAt = patch.end_time;
+  } else {
+    task.status = TASK_STATUS[event.status] ?? "completed";
+    task.endedAt = task.endedAt ?? Date.now();
+    task.summary = event.summary;
+    task.outputFile = event.output_file || task.outputFile;
+    task.toolUseId = event.tool_use_id ?? task.toolUseId;
+  }
+}
+
+/** 后台任务，新的在前。 */
+export const backgroundTasks = (thread: Thread): Task[] =>
+  [...thread.tasks.values()].filter((task) => task.backgrounded).reverse();
+
+export const runningTasks = (thread: Thread): Task[] =>
+  backgroundTasks(thread).filter((task) => task.status === "running");
+
+/** 运行中的任务没有 `output_file`，路径写在启动它的工具结果里。 */
+export function taskOutputPath(thread: Thread, task: Task): string | null {
+  if (task.outputFile) return task.outputFile;
+  const tool = thread.items.find((item) => item.kind === "tool" && item.id === task.toolUseId);
+  const result = tool?.kind === "tool" ? tool.result : undefined;
+  return result?.match(/\/tmp\/claude-[^\s"']+\/tasks\/[^\s"']+\.output/)?.[0] ?? null;
+}
+
+export interface RateLimits {
+  fiveHour?: { utilization: number; resetsAt: number };
+  sevenDay?: { utilization: number; resetsAt: number };
+}
+
+/** 从 `rate_limit_event` 取额度。 */
+export function parseRateLimits(line: string): RateLimits | null {
+  if (!line.includes("rate_limit_event")) return null;
+  try {
+    const event = JSON.parse(line);
+    const windows = event.type === "rate_limit_event" ? event.rate_limit_info?.unifiedWindows : null;
+    if (!windows) return null;
+    const pick = (window: Json) =>
+      typeof window?.utilization === "number" && typeof window?.resetsAt === "number"
+        ? { utilization: window.utilization, resetsAt: window.resetsAt }
+        : undefined;
+    return { fiveHour: pick(windows.five_hour), sevenDay: pick(windows.seven_day) };
+  } catch {
+    return null;
+  }
+}
+
+/** 重放旧日志不能盖掉新数据：重置时间更晚的算新，同一窗口里使用率只增不减。 */
+export function mergeRateLimits(old: RateLimits, next: RateLimits): RateLimits {
+  const newer = (a?: RateLimits["fiveHour"], b?: RateLimits["fiveHour"]) => {
+    if (!a || !b) return b ?? a;
+    if (b.resetsAt !== a.resetsAt) return b.resetsAt > a.resetsAt ? b : a;
+    return b.utilization >= a.utilization ? b : a;
+  };
+  return { fiveHour: newer(old.fiveHour, next.fiveHour), sevenDay: newer(old.sevenDay, next.sevenDay) };
+}
+
+/** `/` 命令，字段来自 CLI 的 `initialize` 回复。 */
+export interface SlashCommand {
+  name: string;
+  description?: string;
+  argumentHint?: string;
+}
+
+/** 输入框里只有一个还没打完的 `/词` 时才弹菜单。前缀匹配排在前面。 */
+export function matchCommands(commands: SlashCommand[], text: string): SlashCommand[] {
+  const query = /^\/(\S*)$/.exec(text)?.[1]?.toLowerCase();
+  if (query === undefined) return [];
+  const name = (c: SlashCommand) => c.name.toLowerCase();
+  return [
+    ...commands.filter((c) => name(c).startsWith(query)),
+    ...commands.filter((c) => !name(c).startsWith(query) && name(c).includes(query)),
+  ];
+}
+
 function onUser(thread: Thread, event: Json): void {
   const content = event.message?.content;
   if (typeof content === "string") {
     if (event.parent_tool_use_id) return;
+    const command = commandText(content);
     // 发送时已经先显示了，回传只是确认送达。
     const sent = findLast(thread, (item) => item.kind === "user" && item.id === event.uuid);
-    if (sent >= 0) replaceItem(thread, sent, { kind: "user", id: event.uuid, text: content });
-    else thread.items.push({ kind: "user", id: event.uuid ?? `u${thread.items.length}`, text: content });
+    if (sent >= 0) {
+      replaceItem(thread, sent, { kind: "user", id: event.uuid, text: command ?? content });
+      if (command) return;
+    } else if (command) {
+      // 内置命令的回传排在回复后面，重放时放回回复前面。
+      const last = thread.items.length - 1;
+      const at = thread.items[last]?.kind === "text" ? last : thread.items.length;
+      thread.items.splice(at, 0, { kind: "user", id: event.uuid ?? `u${thread.items.length}`, text: command });
+      return;
+    } else {
+      thread.items.push({ kind: "user", id: event.uuid ?? `u${thread.items.length}`, text: content });
+    }
     thread.phase = "thinking";
     thread.activeTool = undefined;
     const at = Date.parse(event.timestamp ?? "");
@@ -214,6 +360,11 @@ function onAssistant(thread: Thread, event: Json): void {
   const message: Json = event.message ?? {};
   const parent: string | null = event.parent_tool_use_id ?? null;
   if (message.model && !parent) thread.model = message.model;
+  const usage: Json | undefined = message.usage;
+  if (usage && !parent) {
+    const used = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+    if (used) thread.context = { ...thread.context, used };
+  }
   for (const block of (message.content ?? []) as Json[]) {
     if (parent) {
       // 子代理的内容折叠进父调用，只计数。
@@ -279,6 +430,9 @@ function onStreamEvent(thread: Thread, outer: Json): void {
 
 function onResult(thread: Thread, event: Json): void {
   clearAsks(thread);
+  const models: Json = event.modelUsage ?? {};
+  const max = (models[thread.model ?? ""] ?? (Object.values(models)[0] as Json | undefined))?.contextWindow;
+  if (thread.context && max) thread.context.max = max;
   thread.phase = "idle";
   thread.activeTool = undefined;
   thread.lastTurn = {
@@ -314,10 +468,8 @@ export function apply(thread: Thread, line: string): void {
         thread.claudeSessionId = event.session_id;
         thread.model = event.model;
         thread.cwd = event.cwd;
-      } else if (event.subtype === "task_started" && event.is_backgrounded) {
-        thread.background.add(event.task_id);
-      } else if (event.subtype === "task_notification") {
-        thread.background.delete(event.task_id);
+      } else if (["task_started", "task_updated", "task_notification", "background_tasks_changed"].includes(event.subtype)) {
+        onTaskEvent(thread, event);
       }
       break;
     case "stream_event":
@@ -346,7 +498,12 @@ export function onProcessExit(thread: Thread): void {
   clearAsks(thread);
   thread.phase = "idle";
   thread.activeTool = undefined;
-  thread.background.clear();
+  for (const task of thread.tasks.values()) {
+    if (task.status === "running") {
+      task.status = "stopped";
+      task.endedAt = Date.now();
+    }
+  }
 }
 
 // 发给 claude 的消息。
@@ -392,14 +549,25 @@ export interface ModelOption {
 
 /** 从事件里取模型列表。只认 `requestId` 这一次请求的回复，重放旧日志不能覆盖新列表。 */
 export function parseModels(line: string, requestId: string): ModelOption[] | null {
+  const models = initializeReply(line, requestId)?.models;
+  if (!Array.isArray(models)) return null;
+  const valid = models.filter((m) => typeof m?.value === "string" && typeof m?.displayName === "string");
+  return valid.length ? valid : null;
+}
+
+export function parseCommands(line: string, requestId: string): SlashCommand[] | null {
+  const commands = initializeReply(line, requestId)?.commands;
+  if (!Array.isArray(commands)) return null;
+  const valid = commands.filter((c) => typeof c?.name === "string");
+  return valid.length ? valid : null;
+}
+
+function initializeReply(line: string, requestId: string): Json | null {
   if (!line.includes(requestId)) return null;
   try {
     const event = JSON.parse(line);
     if (event.type !== "control_response" || event.response?.request_id !== requestId) return null;
-    const models = event.response.response?.models;
-    if (!Array.isArray(models)) return null;
-    const valid = models.filter((m) => typeof m?.value === "string" && typeof m?.displayName === "string");
-    return valid.length ? valid : null;
+    return event.response.response ?? null;
   } catch {
     return null;
   }
@@ -465,4 +633,5 @@ export const interruptLine = () => controlRequest({ subtype: "interrupt" });
 export function initializeLine(requestId: string): string {
   return JSON.stringify({ type: "control_request", request_id: requestId, request: { subtype: "initialize" } });
 }
+export const stopTaskLine = (taskId: string) => controlRequest({ subtype: "stop_task", task_id: taskId });
 export const setModelLine = (model: string) => controlRequest({ subtype: "set_model", model });
