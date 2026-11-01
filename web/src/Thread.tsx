@@ -38,6 +38,8 @@ export function describeTool(tool: Pick<ToolItem, "name" | "input">, cwd?: strin
     case "Task":
     case "Agent":
       return { verb: "子任务：", target: line(input.description), icon: "agents" };
+    case "Skill":
+      return { verb: "使用技能", target: line(input.skill), icon: "file" };
     case "AskUserQuestion":
       return { verb: "提问", target: "", icon: "think" };
     case "ExitPlanMode":
@@ -73,6 +75,24 @@ function Step({ icon, label, children }: { icon: string; label: ReactNode; child
   );
 }
 
+/** 错误默认只显示第一行，长内容点开再看。 */
+function ErrorBox({ title, text }: { title: string; text: string }) {
+  const first = text.split("\n")[0];
+  if (first === text && text.length <= 120) {
+    return <div className="blocked"><b>{title}</b><code>{text}</code></div>;
+  }
+  return (
+    <details className="blocked error-fold">
+      <summary>
+        <b>{title}</b>
+        <code>{first}</code>
+        <Icon name="chev" size={14} className="chev" />
+      </summary>
+      <pre className="output">{text}</pre>
+    </details>
+  );
+}
+
 const Tool = memo(function Tool({ tool, cwd }: { tool: ToolItem; cwd?: string }) {
   const { verb, target, icon } = describeTool(tool, cwd);
   // 被拒绝或中断的调用也是 is_error，不能显示成失败。
@@ -91,7 +111,9 @@ const Tool = memo(function Tool({ tool, cwd }: { tool: ToolItem; cwd?: string })
       {tool.blocked ? " · 被拦截" : notRun ? " · 未执行" : tool.isError ? " · 失败" : ""}
     </>
   );
-  const body = isEdit ? (
+  const body = tool.blocked ? undefined : tool.detail ? (
+    <div className="body"><Markdown text={tool.detail} /></div>
+  ) : isEdit ? (
     <Diff oldText={String(tool.input.old_string ?? "")} newText={String(tool.input.new_string ?? "")} />
   ) : tool.result ? (
     <div className="body">
@@ -102,9 +124,7 @@ const Tool = memo(function Tool({ tool, cwd }: { tool: ToolItem; cwd?: string })
   return (
     <>
       <Step icon={icon} label={label}>{body}</Step>
-      {tool.blocked ? (
-        <div className="blocked"><b>工具调用被命令行工具拦下</b><code>{tool.result}</code></div>
-      ) : null}
+      {tool.blocked ? <ErrorBox title="工具调用被命令行工具拦下" text={tool.result ?? ""} /> : null}
     </>
   );
 });
@@ -127,11 +147,7 @@ function ItemView({ item, store, session }: { item: Item; store: Store; session:
     case "text":
       return <Markdown text={item.text} />;
     case "thinking":
-      return item.text ? (
-        <Step icon="think" label="思考过程"><div className="body">{item.text}</div></Step>
-      ) : (
-        <Step icon="think" label="思考过" />
-      );
+      return <Step icon="think" label="思考过程"><div className="body">{item.text}</div></Step>;
     case "tool":
       return <Tool tool={item} cwd={session.cwd} />;
     case "ask": {
@@ -141,7 +157,7 @@ function ItemView({ item, store, session }: { item: Item; store: Store; session:
     case "interrupted":
       return <div className="stopped">已中断</div>;
     case "error":
-      return <div className="blocked"><b>这一轮出错了</b><code>{item.text}</code></div>;
+      return <ErrorBox title="这一轮出错了" text={item.text} />;
   }
 }
 

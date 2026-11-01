@@ -1,5 +1,5 @@
 import { marked, type Token, type Tokens } from "marked";
-import { memo, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 
 // 渲染成 React 元素而不是 HTML 字符串，模型输出里的标签只会显示成文字。
 
@@ -36,11 +36,22 @@ function decode(text: string): string {
 }
 
 function CodeBlock({ token }: { token: Tokens.Code }) {
+  const [copied, setCopied] = useState<"" | "已复制" | "复制失败">("");
+  const timer = useRef(0);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const copy = (text: string) => {
+    const show = (state: "已复制" | "复制失败") => {
+      setCopied(state);
+      clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setCopied(""), 1500);
+    };
+    navigator.clipboard.writeText(text).then(() => show("已复制"), () => show("复制失败"));
+  };
   return (
     <div className="codeblock">
       <header>
         <span>{token.lang || "text"}</span>
-        <span role="button" onClick={() => void navigator.clipboard.writeText(token.text)}>复制</span>
+        <span role="button" className={copied ? "copied" : undefined} aria-live="polite" onClick={() => copy(token.text)}>{copied || "复制"}</span>
       </header>
       <pre>{token.text}</pre>
     </div>

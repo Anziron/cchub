@@ -257,6 +257,8 @@ function ContextMeter({ session }: { session: Session }) {
   );
 }
 
+const INTERRUPT_TIMEOUT_MS = 5000;
+
 function Activity({ store, session }: { store: Store; session: Session }) {
   const thread = session.thread;
   const ask = firstAsk(thread);
@@ -277,6 +279,10 @@ function Activity({ store, session }: { store: Store; session: Session }) {
     text = `上一轮用时 ${formatDuration(thread.lastTurn.durationMs)}${tokens ? ` · ${tokens} tokens` : ""}`;
   } else if (!text && !session.running) text = "进程已结束，发消息时自动恢复";
 
+  const interruptAt = busy ? thread.interruptAt : undefined;
+  const unresponsive = interruptAt != null && now - interruptAt >= INTERRUPT_TIMEOUT_MS;
+  if (interruptAt != null) text = unresponsive ? "进程没有响应，可以结束会话" : "正在中断…";
+
   const live = busy || background > 0;
   const hasTasks = [...thread.tasks.values()].some((task) => task.backgrounded);
   return (
@@ -286,7 +292,8 @@ function Activity({ store, session }: { store: Store; session: Session }) {
       {busy && thread.turnStartedAt ? <time>· {formatDuration(now - thread.turnStartedAt)}</time> : null}
       <span className="activity-right">
         {hasTasks ? <button onClick={() => store.openTasks()}><Icon name="tasks" size={13} />后台任务{background ? ` ${background}` : ""}</button> : null}
-        {busy ? <span className="esc" role="button" onClick={() => store.interrupt(session)}>Esc 中断</span> : null}
+        {unresponsive ? <button onClick={() => store.askStop(session)}>结束会话</button> : null}
+        {busy && interruptAt == null ? <span className="esc" role="button" onClick={() => store.interrupt(session)}>Esc 中断</span> : null}
       </span>
     </div>
   );
