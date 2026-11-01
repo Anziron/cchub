@@ -38,7 +38,7 @@ export interface ToolItem {
 }
 
 export type Item =
-  | { kind: "user"; id: string; text: string }
+  | { kind: "user"; id: string; text: string; state?: "sending" | "failed" }
   | { kind: "text"; id: string; text: string; live: boolean }
   | { kind: "thinking"; id: string; text: string }
   | ToolItem
@@ -184,7 +184,10 @@ function onUser(thread: Thread, event: Json): void {
   const content = event.message?.content;
   if (typeof content === "string") {
     if (event.parent_tool_use_id) return;
-    thread.items.push({ kind: "user", id: event.uuid ?? `u${thread.items.length}`, text: content });
+    // 发送时已经先显示了，回传只是确认送达。
+    const sent = findLast(thread, (item) => item.kind === "user" && item.id === event.uuid);
+    if (sent >= 0) replaceItem(thread, sent, { kind: "user", id: event.uuid, text: content });
+    else thread.items.push({ kind: "user", id: event.uuid ?? `u${thread.items.length}`, text: content });
     thread.phase = "thinking";
     thread.activeTool = undefined;
     const at = Date.parse(event.timestamp ?? "");
@@ -348,8 +351,85 @@ export function onProcessExit(thread: Thread): void {
 
 // 发给 claude 的消息。
 
-export function userLine(text: string): string {
-  return JSON.stringify({ type: "user", message: { role: "user", content: text } });
+export function userLine(text: string, uuid?: string): string {
+  return JSON.stringify({ type: "user", ...(uuid ? { uuid } : {}), message: { role: "user", content: text } });
+}
+
+/** 发送时立刻显示，不等服务器回传。回传带同一个 uuid，到时候转为已送达。 */
+export function addSending(thread: Thread, id: string, text: string): void {
+  thread.items.push({ kind: "user", id, text, state: "sending" });
+  if (thread.phase === "idle") {
+    thread.phase = "thinking";
+    thread.activeTool = undefined;
+    thread.turnStartedAt = Date.now();
+  }
+}
+
+export const isSending = (thread: Thread): boolean =>
+  thread.items.some((item) => item.kind === "user" && item.state === "sending");
+
+/** 服务器报错时，还没确认的消息都算没发出去。 */
+export function failSending(thread: Thread): void {
+  if (!isSending(thread)) return;
+  thread.items = thread.items.map((item) =>
+    item.kind === "user" && item.state === "sending" ? { ...item, state: "failed" } : item,
+  );
+  thread.phase = "idle";
+  thread.turnStartedAt = undefined;
+}
+
+export function removeItem(thread: Thread, id: string): void {
+  thread.items = thread.items.filter((item) => item.id !== id);
+}
+
+/** 模型列表里的一项，字段来自 CLI 的 `initialize` 回复。 */
+export interface ModelOption {
+  value: string;
+  resolvedModel?: string;
+  displayName: string;
+  description?: string;
+}
+
+/** 从事件里取模型列表。只认 `requestId` 这一次请求的回复，重放旧日志不能覆盖新列表。 */
+export function parseModels(line: string, requestId: string): ModelOption[] | null {
+  if (!line.includes(requestId)) return null;
+  try {
+    const event = JSON.parse(line);
+    if (event.type !== "control_response" || event.response?.request_id !== requestId) return null;
+    const models = event.response.response?.models;
+    if (!Array.isArray(models)) return null;
+    const valid = models.filter((m) => typeof m?.value === "string" && typeof m?.displayName === "string");
+    return valid.length ? valid : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 当前模型对应哪一项。`thread.model` 可能是别名，也可能是完整模型 ID。 */
+export function findModel(models: ModelOption[], model?: string): ModelOption | undefined {
+  if (!model) return undefined;
+  return (
+    models.find((m) => m.value === model) ??
+    // “默认”和具体模型解析到同一个 ID 时，显示具体模型。
+    models.find((m) => m.value !== "default" && m.resolvedModel === model) ??
+    models.find((m) => m.resolvedModel === model) ??
+    // 还没拿到列表时只有别名，完整 ID 里含别名就算匹配。
+    models.find((m) => !m.resolvedModel && model.includes(m.value))
+  );
+}
+
+const HUB_PORT = 7878;
+
+/** 用户只填 IP，也接受带端口或完整地址。不合法返回 null。 */
+export function hubUrl(input: string): string | null {
+  const host = input.trim().replace(/^(wss?|https?):\/\//, "").replace(/\/.*$/, "");
+  if (!/^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(host)) return null;
+  return `ws://${host.includes(":") ? host : `${host}:${HUB_PORT}`}/ws`;
+}
+
+/** 从完整地址还原给用户看的部分，默认端口不显示。 */
+export function hubHost(url: string): string {
+  return url.replace(/^wss?:\/\//, "").replace(/\/.*$/, "").replace(`:${HUB_PORT}`, "");
 }
 
 function controlResponse(requestId: string, response: Json): string {
@@ -382,4 +462,7 @@ function controlRequest(request: Json): string {
 }
 
 export const interruptLine = () => controlRequest({ subtype: "interrupt" });
+export function initializeLine(requestId: string): string {
+  return JSON.stringify({ type: "control_request", request_id: requestId, request: { subtype: "initialize" } });
+}
 export const setModelLine = (model: string) => controlRequest({ subtype: "set_model", model });

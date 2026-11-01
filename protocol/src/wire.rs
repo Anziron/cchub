@@ -44,6 +44,15 @@ pub enum ClientMsg {
     Input { session: String, line: String },
     /// 结束会话进程。
     Stop { session: String },
+    /// 浏览设备目录。省略 `device` 时列设备，省略 `path` 时从设备的起始位置开始。
+    Browse {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    /// 挂载设备上的目录，作为工作区。
+    Mount { device: String, path: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +101,21 @@ pub enum ServerMsg {
         #[cfg_attr(feature = "ts", ts(type = "number | null"))]
         mem_available_mb: Option<u64>,
     },
+    /// 回复 `Browse`。`entries` 是设备名或子目录的完整路径。
+    Browse {
+        device: Option<String>,
+        path: Option<String>,
+        parent: Option<String>,
+        entries: Vec<String>,
+        error: Option<String>,
+    },
+    /// 回复 `Mount`。成功时 `cwd` 是服务器上的路径。
+    Mounted {
+        device: String,
+        path: String,
+        cwd: Option<String>,
+        error: Option<String>,
+    },
     Error {
         message: String,
     },
@@ -133,6 +157,19 @@ pub enum UiEvent {
         sessions: Vec<SessionInfo>,
         #[cfg_attr(feature = "ts", ts(type = "number | null"))]
         mem_available_mb: Option<u64>,
+    },
+    Browse {
+        device: Option<String>,
+        path: Option<String>,
+        parent: Option<String>,
+        entries: Vec<String>,
+        error: Option<String>,
+    },
+    Mounted {
+        device: String,
+        path: String,
+        cwd: Option<String>,
+        error: Option<String>,
     },
     Error {
         session: Option<String>,

@@ -208,6 +208,36 @@ impl State {
                 });
                 Vec::new()
             }
+            ServerMsg::Browse {
+                device,
+                path,
+                parent,
+                entries,
+                error,
+            } => {
+                on_event(UiEvent::Browse {
+                    device,
+                    path,
+                    parent,
+                    entries,
+                    error,
+                });
+                Vec::new()
+            }
+            ServerMsg::Mounted {
+                device,
+                path,
+                cwd,
+                error,
+            } => {
+                on_event(UiEvent::Mounted {
+                    device,
+                    path,
+                    cwd,
+                    error,
+                });
+                Vec::new()
+            }
             ServerMsg::Error { message } => {
                 on_event(UiEvent::Error { session, message });
                 Vec::new()

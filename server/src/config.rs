@@ -32,6 +32,8 @@ pub struct Config {
     pub session_memory_max_mb: u64,
     /// 可用内存低于此值时拒绝启动新进程，0 表示不检查。
     pub min_available_mb: u64,
+    /// 浏览和挂载设备目录的外部命令，协议见 `workspace.rs`。
+    pub workspace_cmd: String,
 }
 
 impl Config {
@@ -89,6 +91,7 @@ impl Config {
             state_dir,
             host,
             claude_cmd: var("HUBD_CLAUDE_CMD", DEFAULT_CLAUDE_CMD),
+            workspace_cmd: var("HUBD_WORKSPACE_CMD", "cc-workspace"),
             allowed_users,
             retention: Duration::from_secs(retention_days * 24 * 60 * 60),
             session_memory_max_mb,

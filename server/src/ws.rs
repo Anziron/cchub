@@ -22,6 +22,7 @@ use crate::auth;
 use crate::device::{self, DeviceMonitor};
 use crate::host::ProcessHost;
 use crate::session::{valid_id, Sessions};
+use crate::workspace;
 
 const HEARTBEAT: Duration = Duration::from_secs(15);
 const STATUS_EVERY: Duration = Duration::from_secs(5);
@@ -34,6 +35,7 @@ pub struct App {
     pub host: Box<dyn ProcessHost>,
     pub allowed_users: Vec<String>,
     pub min_available_mb: u64,
+    pub workspace_cmd: String,
 }
 
 pub async fn upgrade(
@@ -80,69 +82,131 @@ async fn serve(app: Arc<App>, socket: WebSocket) {
         }
     });
 
-    let mut readers: HashMap<String, JoinHandle<()>> = HashMap::new();
+    // 每个会话一个有序队列：启动进程要几秒，不能挡住其他会话和列表请求。
+    let mut workers: HashMap<String, mpsc::UnboundedSender<ClientMsg>> = HashMap::new();
     while let Some(Ok(message)) = stream.next().await {
         let Message::Text(text) = message else {
             continue;
         };
-        let result = match serde_json::from_str::<ClientMsg>(text.as_str()) {
-            Ok(msg) => handle(&app, msg, &tx, &mut readers).await,
-            Err(error) => Err((None, format!("无法解析消息：{error}"))),
+        let msg = match serde_json::from_str::<ClientMsg>(text.as_str()) {
+            Ok(msg) => msg,
+            Err(error) => {
+                let message = format!("无法解析消息：{error}");
+                if send_error(&tx, None, message).await.is_err() {
+                    break;
+                }
+                continue;
+            }
         };
-        if let Err((session, message)) = result {
-            let frame = Frame {
-                session,
-                msg: ServerMsg::Error { message },
-            };
-            if tx.send(frame).await.is_err() {
+        let session = match &msg {
+            ClientMsg::List => {
+                tokio::spawn(list(app.clone(), tx.clone()));
+                continue;
+            }
+            ClientMsg::Browse { device, path } => {
+                let (device, path) = (device.clone(), path.clone());
+                tokio::spawn(browse(app.clone(), device, path, tx.clone()));
+                continue;
+            }
+            ClientMsg::Mount { device, path } => {
+                let (device, path) = (device.clone(), path.clone());
+                tokio::spawn(mount(app.clone(), device, path, tx.clone()));
+                continue;
+            }
+            ClientMsg::Start { session, .. }
+            | ClientMsg::Attach { session, .. }
+            | ClientMsg::Input { session, .. }
+            | ClientMsg::Stop { session } => session.clone(),
+        };
+        if !valid_id(&session) {
+            let message = "会话 ID 不合法".to_string();
+            if send_error(&tx, None, message).await.is_err() {
+                break;
+            }
+            continue;
+        }
+        // 建目录和写标题只碰本机磁盘，先做完，紧接着的列表请求才能看到这个会话。
+        if let ClientMsg::Start { title, .. } = &msg {
+            let (id, title) = (session.clone(), title.clone());
+            let prepared = blocking(&app, move |app| {
+                app.sessions.prepare(&id)?;
+                match &title {
+                    Some(title) => app.sessions.set_title(&id, title),
+                    None => Ok(()),
+                }
+            })
+            .await;
+            if let Err(message) = prepared {
+                if send_error(&tx, Some(session), message).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+        }
+        let worker = workers.entry(session.clone()).or_insert_with(|| {
+            let (queue, messages) = mpsc::unbounded_channel();
+            tokio::spawn(session_worker(
+                app.clone(),
+                session.clone(),
+                messages,
+                tx.clone(),
+            ));
+            queue
+        });
+        let _ = worker.send(msg);
+    }
+
+    // 队列关闭后各会话任务自己结束，并停掉各自的日志跟读。
+    drop(workers);
+    writer.abort();
+}
+
+async fn send_error(
+    tx: &mpsc::Sender<Frame>,
+    session: Option<String>,
+    message: String,
+) -> Result<(), ()> {
+    let msg = ServerMsg::Error { message };
+    tx.send(Frame { session, msg }).await.map_err(|_| ())
+}
+
+async fn session_worker(
+    app: Arc<App>,
+    session: String,
+    mut messages: mpsc::UnboundedReceiver<ClientMsg>,
+    tx: mpsc::Sender<Frame>,
+) {
+    let mut reader = None;
+    while let Some(msg) = messages.recv().await {
+        if let Err(message) = handle(&app, &session, msg, &tx, &mut reader).await {
+            if send_error(&tx, Some(session.clone()), message).await.is_err() {
                 break;
             }
         }
     }
-
-    for reader in readers.into_values() {
+    if let Some(reader) = reader {
         reader.abort();
     }
-    writer.abort();
 }
-
-type HandleError = (Option<String>, String);
 
 async fn handle(
     app: &Arc<App>,
+    session: &str,
     msg: ClientMsg,
     tx: &mpsc::Sender<Frame>,
-    readers: &mut HashMap<String, JoinHandle<()>>,
-) -> Result<(), HandleError> {
-    let session = match &msg {
-        ClientMsg::List => return list(app, tx).await,
-        ClientMsg::Start { session, .. }
-        | ClientMsg::Attach { session, .. }
-        | ClientMsg::Input { session, .. }
-        | ClientMsg::Stop { session } => session.clone(),
-    };
-    if !valid_id(&session) {
-        return Err((None, "会话 ID 不合法".to_string()));
-    }
-    let fail = |error: String| (Some(session.clone()), error);
-
+    reader: &mut Option<JoinHandle<()>>,
+) -> Result<(), String> {
+    let id = session.to_string();
     match msg {
-        ClientMsg::Start {
-            resume, cwd, title, ..
-        } => {
+        ClientMsg::Start { resume, cwd, .. } => {
             let cwd = cwd.map(PathBuf::from);
             if cwd.as_ref().is_some_and(|cwd| !cwd.is_absolute()) {
-                return Err(fail("cwd 必须是绝对路径".to_string()));
+                return Err("cwd 必须是绝对路径".to_string());
             }
             if resume.as_deref().is_some_and(|id| !valid_id(id)) {
-                return Err(fail("resume ID 不合法".to_string()));
+                return Err("resume ID 不合法".to_string());
             }
-            let id = session.clone();
             blocking(app, move |app| {
-                app.sessions.prepare(&id)?;
-                if let Some(title) = &title {
-                    app.sessions.set_title(&id, title)?;
-                }
                 let dir = app.sessions.dir(&id);
                 if app.host.is_running(&id, &dir) {
                     return Ok(());
@@ -165,43 +229,88 @@ async fn handle(
                 let workdir = app.sessions.cwd(&id).unwrap_or_else(|| dir.clone());
                 app.host.start(&id, &dir, &workdir, resume.as_deref())
             })
-            .await
-            .map_err(fail)?;
+            .await?;
         }
         ClientMsg::Attach { after, .. } => {
-            if let Some(old) = readers.remove(&session) {
+            if let Some(old) = reader.take() {
                 old.abort();
             }
-            let reader = tokio::spawn(follow(app.clone(), session.clone(), after, tx.clone()));
-            readers.insert(session.clone(), reader);
+            *reader = Some(tokio::spawn(follow(app.clone(), id, after, tx.clone())));
         }
         ClientMsg::Input { line, .. } => {
-            let id = session.clone();
-            blocking(app, move |app| app.sessions.write_line(&id, &line))
-                .await
-                .map_err(fail)?;
+            blocking(app, move |app| app.sessions.write_line(&id, &line)).await?;
         }
-        ClientMsg::List => {}
         ClientMsg::Stop { .. } => {
-            let id = session.clone();
             blocking(app, move |app| {
                 let result = app.host.stop(&id, &app.sessions.dir(&id));
                 app.sessions.release(&id);
                 result
             })
-            .await
-            .map_err(fail)?;
+            .await?;
         }
+        ClientMsg::List | ClientMsg::Browse { .. } | ClientMsg::Mount { .. } => {}
     }
     Ok(())
 }
 
-async fn list(app: &Arc<App>, tx: &mpsc::Sender<Frame>) -> Result<(), HandleError> {
+async fn browse(
+    app: Arc<App>,
+    device: Option<String>,
+    path: Option<String>,
+    tx: mpsc::Sender<Frame>,
+) {
+    let (from_device, from_path) = (device.clone(), path.clone());
+    let listing = spawn_blocking(move || {
+        workspace::browse(&app.workspace_cmd, from_device.as_deref(), from_path.as_deref())
+    })
+    .await
+    .unwrap_or_else(|error| Err(error.to_string()));
+    let msg = match listing {
+        Ok(listing) => ServerMsg::Browse {
+            device,
+            path: listing.path,
+            parent: listing.parent,
+            entries: listing.entries,
+            error: None,
+        },
+        Err(error) => ServerMsg::Browse {
+            device,
+            path,
+            parent: None,
+            entries: Vec::new(),
+            error: Some(error),
+        },
+    };
+    let _ = tx.send(Frame { session: None, msg }).await;
+}
+
+async fn mount(app: Arc<App>, device: String, path: String, tx: mpsc::Sender<Frame>) {
+    let (from_device, from_path) = (device.clone(), path.clone());
+    let mounted = spawn_blocking(move || {
+        workspace::mount(&app.workspace_cmd, &from_device, &from_path)
+    })
+    .await
+    .unwrap_or_else(|error| Err(error.to_string()));
+    let (cwd, error) = match mounted {
+        Ok(cwd) => (Some(cwd), None),
+        Err(error) => (None, Some(error)),
+    };
+    let msg = ServerMsg::Mounted {
+        device,
+        path,
+        cwd,
+        error,
+    };
+    let _ = tx.send(Frame { session: None, msg }).await;
+}
+
+async fn list(app: Arc<App>, tx: mpsc::Sender<Frame>) {
     let host = app.clone();
-    let sessions =
-        spawn_blocking(move || host.sessions.list(|id, dir| host.host.is_running(id, dir)))
-            .await
-            .map_err(|error| (None, error.to_string()))?;
+    let Ok(sessions) =
+        spawn_blocking(move || host.sessions.list(|id, dir| host.host.is_running(id, dir))).await
+    else {
+        return;
+    };
     let frame = Frame {
         session: None,
         msg: ServerMsg::Sessions {
@@ -209,9 +318,7 @@ async fn list(app: &Arc<App>, tx: &mpsc::Sender<Frame>) -> Result<(), HandleErro
             mem_available_mb: mem_available_mb(),
         },
     };
-    tx.send(frame)
-        .await
-        .map_err(|_| (None, "连接已关闭".to_string()))
+    let _ = tx.send(frame).await;
 }
 
 fn mem_available_mb() -> Option<u64> {

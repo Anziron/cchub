@@ -673,7 +673,11 @@ async fn lists_started_sessions_with_title_and_memory() {
                 ..
             }) = serde_json::from_str(text.as_str())
             {
-                return (sessions, mem_available_mb);
+                // 列表不等进程启动完，所以启动前可能看到未运行，再问一次。
+                if sessions.iter().all(|session| session.running) {
+                    return (sessions, mem_available_mb);
+                }
+                send(&mut socket, ClientMsg::List).await;
             }
         }
     })
