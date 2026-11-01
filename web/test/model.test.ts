@@ -327,3 +327,10 @@ test("内置命令的回传显示成原命令，重放时排回回复前面", ()
   assert.equal(replay.items[0].kind, "user");
   assert.equal(replay.items[1].kind, "text");
 });
+
+test("后台任务的通知不显示成用户消息", () => {
+  const thread = newThread();
+  apply(thread, JSON.stringify({ type: "user", isReplay: true, origin: { kind: "task-notification" }, message: { role: "user", content: "<task-notification>\n<task-id>b1</task-id>\n</task-notification>" } }));
+  assert.equal(thread.items.length, 0);
+  assert.equal(thread.phase, "thinking");
+});

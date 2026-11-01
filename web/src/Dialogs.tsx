@@ -275,7 +275,7 @@ export function TasksDialog({ store, session }: { store: Store; session: Session
       <div className="tasks">
         {!tasks.length ? <p className="empty">没有后台任务</p> : null}
         {tasks.map((task) => (
-          <div key={task.id} className={`task ${task.status}`}>
+          <div key={task.id} className={`task task-${task.status}`}>
             <div className="task-head">
               <button type="button" className="task-main" aria-expanded={task.id === openId} onClick={() => setOpenId(task.id === openId ? null : task.id)}>
                 <span className="task-title" title={task.description}>{task.description ?? task.id}</span>
