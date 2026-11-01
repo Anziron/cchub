@@ -1,7 +1,6 @@
 # cchub 设计方案（讨论稿）
 
-> 状态：可验证的框架已完成（私有仓库 `Anziron/cchub`），业务功能未开始。项目名 `cchub` 为暂定。
-> 最后更新：2026-10-31。讨论来自 Windows 设备（pc-company）上的一次会话。
+> 状态：早期开发中，桌面端和 `hubd` 已可日常使用。项目名 `cchub` 为暂定。
 
 ## 0. 项目目标（2026-10-31 确定）
 
@@ -99,7 +98,7 @@
 | 审批 | 沿用服务器自己的权限模式（当前是 `auto`），需要人决定的在桌面端弹窗并发系统通知 |
 | 界面风格 | 参考 Claude 桌面端：简约、留白多、浅色和深色主题；不使用 Anthropic 的 logo 和品牌素材 |
 | 兼容 | 原来的 `cc` 命令照常可用；app 开的会话在终端 `/resume` 也能接上 |
-| 代码仓库 | 私有仓库 `Anziron/cchub`，放在 pc-home 的 `D:\cchub` |
+| 代码仓库 | `Anziron/cchub` |
 | 目录结构 | `server/` hubd、`desktop/` Tauri、`web/` 前端、`protocol/` 共用类型 |
 
 轻量原则：服务器端只做转发和进程管理，只解析事件信封（类型、序号、状态），不解析正文，不渲染。Markdown、diff、高亮、搜索全部在桌面端做。
@@ -155,7 +154,7 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 
 ### 介入类消息实测（2026-10-31，claude 2.1.314）
 
-实验脚本在 `docs/experiments/`；脱敏的回放数据在 `testdata/recordings/`，由 `tools/record/record.py` 生成。人工介入都经 `can_use_tool` 到达；`AskUserQuestion`、`ExitPlanMode` 带 `requires_user_interaction: true`，可用来区分“要人回答”和普通审批。
+实验脚本依赖作者的环境，没有放进仓库；脱敏的回放数据在 `testdata/recordings/`，由 `tools/record/record.py` 生成。人工介入都经 `can_use_tool` 到达；`AskUserQuestion`、`ExitPlanMode` 带 `requires_user_interaction: true`，可用来区分“要人回答”和普通审批。
 
 | 操作 | 格式与结果 |
 |---|---|
@@ -167,7 +166,7 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 
 模型可能把前台命令自行改成 `run_in_background: true`，这时一轮会先结束、任务还在跑，界面不能把“一轮结束”等同于“任务完成”。
 
-### 控制消息和内置命令（2026-10-31 实测，脚本 `docs/experiments/cli.py`）
+### 控制消息和内置命令（2026-10-31 实测）
 
 - 切换模型用控制消息 `{"type":"control_request","request_id":"…","request":{"subtype":"set_model","model":"sonnet"}}`，返回 `control_response` 带完整模型 ID，下一轮生效。
 - **`/model haiku` 不可靠**：回复“Set model to Haiku”，但之后的请求仍用原模型。界面的模型切换必须走 `set_model`，不能发 `/model`。
@@ -213,7 +212,7 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 
 ## 5.0 设备离线时的行为
 
-实测（2026-10-31，claude 2.1.314，sshfs 参数与 `cc-mount` 相同）。用单独的测试挂载经本地转发器走 SSH，冻结转发器模拟断网，脚本在 `docs/experiments/`（`offline.py`、`fwd.py`）。
+实测（2026-10-31，claude 2.1.314，sshfs 参数与 `cc-mount` 相同）。用单独的测试挂载经本地转发器走 SSH，冻结转发器模拟断网。
 
 | 场景 | 结果 |
 |---|---|
@@ -227,9 +226,9 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 - `claude` 不会自己暂停，模型把断网当作普通文件错误，可能据此得出错误结论。不能依赖 CLI 的行为来实现“暂停并提示”。
 - `hubd` 独立探测每个挂载的健康状态，作为协议里单独的“设备状态”，与连接状态、会话状态分开显示。
 - 设备离线时：通知用户；用户消息由客户端暂存，审批回复照常发送；不在该目录冷启动进程。正在运行的这一轮不打断，但醒目提示其中的文件错误可能由离线造成。
-- 探测方式（2026-10-31 实测，脚本 `docs/experiments/freeze.sh`）：`hubd --probe` 子进程查一个每次都新的文件名，答复“不存在”算在线，5 秒超时或其他错误算失败，连续 2 次失败判离线，一次成功恢复。断网后 `stat` 已缓存的文件 0 秒成功，所以不能查已有文件。卡住的探测进程收到 `SIGKILL` 后进入 D 状态，恢复网络才退出，因此同一路径同时只跑一个探测；恢复网络后 1 秒内探测成功。
+- 探测方式（2026-10-31 实测）：`hubd --probe` 子进程查一个每次都新的文件名，答复“不存在”算在线，5 秒超时或其他错误算失败，连续 2 次失败判离线，一次成功恢复。断网后 `stat` 已缓存的文件 0 秒成功，所以不能查已有文件。卡住的探测进程收到 `SIGKILL` 后进入 D 状态，恢复网络才退出，因此同一路径同时只跑一个探测；恢复网络后 1 秒内探测成功。
 - 写到一半断网（2026-10-31 实测）：`dd` 约 60 秒后返回错误，设备上留下只写了一部分的文件（200MB 中的 2.6MB）。恢复后不会自动清理，界面要提示离线期间的写入可能不完整。
-- 模型的反应（2026-10-31 实测一次，haiku，脚本 `docs/experiments/react.py`）：断网后工具卡到 120 秒超时被转到后台，结果里有 Python 报错但 `is_error: false`，170 秒时这一轮仍未结束，设备上留下 4.8MB 的残缺文件。模型不会及时判断出断网，界面的设备状态提示不能省。
+- 模型的反应（2026-10-31 实测一次，haiku）：断网后工具卡到 120 秒超时被转到后台，结果里有 Python 报错但 `is_error: false`，170 秒时这一轮仍未结束，设备上留下 4.8MB 的残缺文件。模型不会及时判断出断网，界面的设备状态提示不能省。
 - 未验证：真实关机或休眠、`max_conns` 下的并发。
 
 ## 5.1 消息同步要求（硬性）
@@ -242,7 +241,7 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 4. **状态分开显示**：界面上分开显示“连接状态”（已连接、重连中、已断开）和“会话状态”（执行中第几步、等待审批、空闲），用户能分清是在等 Claude 还是在等网络。
 5. **心跳**：WebSocket 心跳约 15 秒，断线后自动重连并补齐，不需要用户操作。
 
-参考数据（2026-10-30，pc-company 到服务器，Tailscale 直连）：往返约 168ms，执行完成到桌面端收到约 0.1 秒；偶发抖动 1～2 秒。
+参考数据（2026-10-30，设备到服务器，Tailscale 直连）：往返约 168ms，执行完成到桌面端收到约 0.1 秒；偶发抖动 1～2 秒。
 
 ## 6. 通用化（给别人部署）
 
@@ -254,11 +253,11 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 
 ```
 ┌────────────┬─────────────────────────────────────┐
-│ 新建会话     │  litellm_work · pc-company    ⚙     │
+│ 新建会话     │  demo-api · laptop            ⚙     │
 │            ├─────────────────────────────────────┤
 │ 项目        │   你：帮我修一下登录接口              │
-│ ▸ litellm  ●│   Claude：先看一下现有代码。          │
-│ ▸ docshub  ○│   ▸ 读取 auth.py                    │
+│ ▸ demo-api ●│   Claude：先看一下现有代码。          │
+│ ▸ docs-site○│   ▸ 读取 auth.py                    │
 │ 最近会话     │   ▸ 运行 pytest（3 个失败）          │
 │  修登录接口  │   ┌ 需要审批：rm -rf build ──────┐  │
 │            │   │ [允许] [拒绝] [总是允许]      │  │
@@ -302,9 +301,9 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 3. 条款：程序化驱动 `claude -p` 用订阅账号是否合规，自用和分发给别人分开判断，公开发布前查清。
 4. 正式项目名。
 
-## 9. 相关的服务器现状
+## 9. 参考环境
 
-- 中枢服务器 1GB 内存、2GB swap、2 核。2026-10-30 已把 3x-ui 面板改为按需启动（平时只跑独立 `xray.service`），可用内存约 400MB，实际能同时跑 2 个左右 `claude`。详见技能 `vps-notes`。
+- 服务器 1GB 内存、2GB swap、2 核，可用内存约 400MB，实际能同时跑 2 个左右 `claude`。
 
 ## 讨论记录
 
@@ -313,7 +312,7 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 - 2026-10-30：加入消息同步硬性要求（只传内容、积压时跳过中间状态、序号补齐、连接和会话状态分开显示、15 秒心跳）。
 - 2026-10-30：界面加入执行状态行（简单版：状态、用时、中断、动态点）。
 - 2026-10-30：验证 `/usage`、`/context`、`/cost` 在无界面模式可用（本地生成、不耗额度），按普通回复显示；修正此前“交互命令不可用”的说法。
-- 2026-10-31：确定代码仓库位置和目录结构，搭建框架并推送到私有仓库 `Anziron/cchub`。
+- 2026-10-31：确定代码仓库位置和目录结构，搭建框架并推送到代码仓库。
 - 2026-10-31：经深层分析，项目目标改为“注意力优先的长任务监督系统”，加入 4 条硬约束和验收指标；修正 `MemoryMax` 的 cgroup 错误和“不解析内容”的矛盾。
 - 2026-10-31：实测进程托管方案（独立 unit + FIFO + 文件）能扛住 `hubd` 被杀；实测提问、方案确认、拒绝、中断的消息格式，录制数据已归档。
 - 2026-10-31：实测设备离线行为（见 5.0），确定由 `hubd` 独立探测设备状态；CI 上线并全绿。
@@ -322,3 +321,4 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 - 2026-10-31：实现 inotify、设备身份校验、设备状态探测、日志清理；实测探测和写入中断；Codex 完成静态界面原型 `docs/prototype/index.html`，待用户确认。
 - 2026-10-31：实测 `set_model` 可用、`/model` 不生效、内置命令输出写入会话记录、写入中断时模型的反应；补录提问、方案确认、中断的回放数据。
 - 2026-11-01：界面优化：连接改弹窗只填 IP；模型列表取自 `initialize`；发送立刻显示；工作区改为弹窗浏览设备目录（`hubd` 调外部命令 `cc-workspace`）；`hubd` 每个会话一个有序队列，启动进程不再挡住其他消息；侧边栏每个工作区默认显示 5 个会话。
+- 2026-11-01：仓库公开：实验脚本移出仓库，文档和示例数据去掉作者的设备名、项目名和服务器环境细节。

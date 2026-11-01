@@ -64,10 +64,10 @@ export const demoHub: Hub = {
   onEvent: async (handler) => { emit = handler; },
   send: async (msg) => {
     if (msg.type === "browse") {
-      if (!msg.device) emit({ type: "browse", device: null, path: null, parent: null, entries: ["pc-home", "pc-company"], error: null });
-      else if (msg.device === "pc-company") emit({ type: "browse", device: msg.device, path: null, parent: null, entries: [], error: "读取目录失败：设备离线、没有权限或路径不存在" });
+      if (!msg.device) emit({ type: "browse", device: null, path: null, parent: null, entries: ["laptop", "office-pc"], error: null });
+      else if (msg.device === "office-pc") emit({ type: "browse", device: msg.device, path: null, parent: null, entries: [], error: "读取目录失败：设备离线、没有权限或路径不存在" });
       else if (!msg.path) emit({ type: "browse", device: msg.device, path: null, parent: null, entries: ["C:\\", "D:\\"], error: null });
-      else emit({ type: "browse", device: msg.device, path: msg.path, parent: msg.path.length > 3 ? "D:\\" : null, entries: ["cchub", "litellm_work", "docshub"].map((name) => `${msg.path!.replace(/\\$/, "")}\\${name}`), error: null });
+      else emit({ type: "browse", device: msg.device, path: msg.path, parent: msg.path.length > 3 ? "D:\\" : null, entries: ["cchub", "demo-api", "docs-site"].map((name) => `${msg.path!.replace(/\\$/, "")}\\${name}`), error: null });
     } else if (msg.type === "task_output") {
       emit({ type: "task_output", path: msg.path, text: "tick 1\ntick 2\n构建完成\n", error: null });
     } else if (msg.type === "mount") {
@@ -96,7 +96,7 @@ export const demoHub: Hub = {
       emit({
         type: "sessions",
         mem_available_mb: 412,
-        sessions: SESSIONS.map((s, i) => ({ id: s.id, title: s.title, cwd: "/mnt/workstation/d/litellm_work", running: s.running, updated: now - i * 60 })),
+        sessions: SESSIONS.map((s, i) => ({ id: s.id, title: s.title, cwd: "/mnt/laptop/d/demo-api", running: s.running, updated: now - i * 60 })),
       });
     } else if (msg.type === "attach") {
       const session = SESSIONS.find((s) => s.id === msg.session);
