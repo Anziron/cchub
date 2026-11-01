@@ -1,13 +1,13 @@
 # cchub
 
-注意力优先的 Claude 长任务监督系统。任务在服务器上持续运行，关掉电脑也不会中断；只有需要你决定时才通知你。
+用于监督 Claude Code 长任务的自托管工具，注意力优先。任务在服务器上持续运行，关掉电脑也不会中断；只有需要你决定时才通知你。
 
 - **`hubd`**：服务器上的常驻服务，用 systemd 托管官方 `claude` CLI 进程，只做转发和进程管理。
 - **桌面端**（Tauri + React）：对话、查看进度、审批和回答提问，断线后自动补齐消息。
 
 > **早期项目。** 作者自己在日常使用，接口和部署方式还会变，暂时没有安装包和安装脚本。
 >
-> 这是个人项目，与 Anthropic 没有关联，也未获其认可。它调用你自己安装并登录的 `claude` CLI，请自行确认你的用法符合所用账号的服务条款。
+> 这是个人项目，与 Anthropic 没有关联，也未获其认可。
 
 设计和实测记录见 [docs/DESIGN.md](docs/DESIGN.md)。
 
@@ -35,6 +35,17 @@
 - 只允许监听回环或 Tailscale 地址，连接没有加密层和令牌认证，不要用反向代理暴露到公网。
 - 监听 Tailscale 地址时必须设置 `HUBD_ALLOWED_USERS`。
 - 会话目录保存完整的对话日志，注意目录权限。
+
+## 使用规则
+
+cchub 只启动你自己安装的官方 `claude` CLI，不修改它，也不读取、保存或转发任何 Claude 凭据。登录由 CLI 自己完成，用量算在你自己的账号上。使用时仍须遵守 [Claude Code 的法律与合规说明](https://code.claude.com/docs/en/legal-and-compliance) 和对应的服务条款：
+
+- **自己用**：部署在自己的服务器上，用自己的账号登录。不要共享账号，也不要让别人使用你的账号。
+- **订阅账号的用量**：官方说明里的订阅额度以普通的个人使用为前提。
+- **做成产品或服务给别人用**：官方要求开发者使用 API Key（或受支持的云服务商），不得代用户转发订阅账号的请求，也不得代为购买或转售用量。在产品或服务里运行 Claude Code 还需要同意商业条款，每个用户都要用自己的凭据认证。cchub 的 MIT 许可证只覆盖本仓库代码，不包含任何 Claude 或 Claude Code 的使用权。
+- **名称和商标**：Claude 和 Anthropic 是 Anthropic 的商标，不能用于你自己的产品名或 logo，也不能暗示获得了对方认可。
+
+以上是作者对官方文档的理解，不构成法律意见，条款也可能变化，以官方最新内容为准。拿不准时请直接询问 Anthropic。
 
 ## 目录
 
@@ -74,7 +85,7 @@ CI 会构建 `hubd` 静态二进制和 Windows 桌面端，产物在 Actions 页
 | `HUBD_STATE_DIR` | `/var/lib/hubd` | 会话目录 |
 | `HUBD_RETENTION_DAYS` | `7` | 进程已结束的会话日志保留天数 |
 | `HUBD_HOST` | `systemd` | 进程托管方式：`systemd` 或 `direct` |
-| `HUBD_CLAUDE_CMD` | `claude -p …` | 启动命令 |
+| `HUBD_CLAUDE_CMD` | `claude -p …` | 启动命令。要用 API Key 时，在 `hubd` 的环境里设置 `ANTHROPIC_API_KEY`，`-p` 模式下会优先使用它 |
 | `HUBD_SESSION_MEMORY_MAX_MB` | `600` | 每个会话的内存上限，`0` 表示不限 |
 | `HUBD_MIN_AVAILABLE_MB` | `300` | 可用内存低于此值时拒绝启动新会话，`0` 表示不检查 |
 | `HUBD_WORKSPACE_CMD` | `cc-workspace` | 工作区命令，见下 |
@@ -108,4 +119,4 @@ cargo test -p hubd --test e2e -- --ignored
 
 ## 许可证
 
-暂未选择开源许可证。在添加许可证之前，代码版权归作者所有，公开只代表可以查看。
+[MIT](LICENSE)
