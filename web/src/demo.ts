@@ -45,6 +45,14 @@ const rich = [
   assistant("m1", [{ type: "tool_use", id: "t4", name: "Bash", input: { command: "sleep 60; echo ready" } }]),
   JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t4", is_error: true, content: "<tool_use_error>Blocked: sleep 60 followed by: echo ready</tool_use_error>" }] } }),
   assistant("m1", [{ type: "text", text: "测试结果如下，错误密码的用例现在已经通过：\n\n| 用例 | 结果 | 耗时 |\n| --- | --- | ---: |\n| 登录成功 | 通过 | 41 ms |\n| 错误密码 | 通过 | 38 ms |\n| 账号不存在 | 通过 | 35 ms |" }]),
+  assistant("m2", [{ type: "thinking", thinking: "" }]),
+  assistant("m2", [{ type: "tool_use", id: "s1", name: "Skill", input: { skill: "hub-ops" } }]),
+  result("s1", "Launching skill: hub-ops"),
+  JSON.stringify({ type: "user", isSynthetic: true, message: { content: [{ type: "text", text: "Base directory for this skill: /root/.claude/skills/hub-ops\n\n# 中枢运维\n\n这段是技能正文，不是用户说的话。" }] } }),
+  assistant("m3", [{ type: "tool_use", id: "t6", name: "Read", input: { file_path: "/work/src/missing.py" } }]),
+  JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t6", is_error: true, content: "<tool_use_error>File does not exist.</tool_use_error>" }] } }),
+  assistant("m3", [{ type: "tool_use", id: "t7", name: "Bash", input: { command: "sleep 60; pytest" } }]),
+  JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t7", is_error: true, content: "<tool_use_error>Blocked: sleep 60 followed by: pytest\n第二行详情\n第三行详情</tool_use_error>" }] } }),
   assistant("m1", [{ type: "tool_use", id: "t5", name: "Bash", input: { command: "pytest tests/auth_test.py -q" } }]),
 ];
 

@@ -14,6 +14,7 @@ import {
   hubUrl,
   isSending,
   isWaiting,
+  markInterrupting,
   newThread,
   onProcessExit,
   matchCommands,
@@ -183,7 +184,7 @@ test("CLI 拦截的结果带原文标记", () => {
     JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: blocked, is_error: true }] } }),
   );
   const tool = thread.items[0];
-  assert.ok(tool.kind === "tool" && tool.blocked && tool.result === blocked);
+  assert.ok(tool.kind === "tool" && tool.blocked && tool.result === "Blocked: sleep 60 followed by: echo");
 });
 
 test("普通错误显示出来；进程退出后卡片作废；待办原地更新；后台任务单独记录", () => {
@@ -333,4 +334,66 @@ test("后台任务的通知不显示成用户消息", () => {
   apply(thread, JSON.stringify({ type: "user", isReplay: true, origin: { kind: "task-notification" }, message: { role: "user", content: "<task-notification>\n<task-id>b1</task-id>\n</task-notification>" } }));
   assert.equal(thread.items.length, 0);
   assert.equal(thread.phase, "thinking");
+});
+
+const assistantLine = (content: unknown[], id = "m1") => JSON.stringify({ type: "assistant", message: { id, content } });
+
+test("空思考块不显示，有内容的照常显示", () => {
+  const thread = newThread();
+  apply(thread, assistantLine([{ type: "thinking", thinking: "" }]));
+  assert.equal(thread.items.length, 0);
+  assert.equal(thread.phase, "thinking");
+  apply(thread, assistantLine([{ type: "thinking", thinking: "想一想" }]));
+  assert.deepEqual(thread.items.map((item) => item.kind), ["thinking"]);
+});
+
+test("技能正文折叠进工具行，不显示成用户消息", () => {
+  const thread = newThread();
+  apply(thread, assistantLine([{ type: "tool_use", id: "s1", name: "Skill", input: { skill: "hub-ops" } }]));
+  const body = "Base directory for this skill: /x\n\n# 技能";
+  const message = { content: [{ type: "tool_result", tool_use_id: "s1", content: "Launching skill: hub-ops" }] };
+  apply(thread, JSON.stringify({ type: "user", message }));
+  apply(thread, JSON.stringify({ type: "user", isSynthetic: true, message: { content: [{ type: "text", text: body }] } }));
+  assert.deepEqual(thread.items.map((item) => item.kind), ["tool"]);
+  const tool = thread.items[0];
+  assert.equal(tool.kind === "tool" && tool.detail, body);
+});
+
+test("注入消息按 sourceToolUseID 对应，字符串内容也不显示", () => {
+  const thread = newThread();
+  apply(thread, assistantLine([
+    { type: "tool_use", id: "s1", name: "Skill", input: {} },
+    { type: "tool_use", id: "s2", name: "Skill", input: {} },
+  ]));
+  const body = "Base directory for this skill: /a";
+  apply(thread, JSON.stringify({ type: "user", isMeta: true, sourceToolUseID: "s1", message: { content: body } }));
+  apply(thread, JSON.stringify({ type: "user", isSynthetic: true, message: { content: "其他注入内容" } }));
+  const [first, second] = thread.items;
+  assert.equal(first.kind === "tool" && first.detail, body);
+  assert.equal(second.kind === "tool" && second.detail, undefined);
+  assert.ok(!thread.items.some((item) => item.kind === "user"));
+});
+
+test("真实用户消息和中断标记不受注入过滤影响", () => {
+  const thread = newThread();
+  apply(thread, JSON.stringify({ type: "user", uuid: "u1", message: { content: "你好" } }));
+  apply(thread, JSON.stringify({ type: "user", uuid: "u2", message: { content: [{ type: "text", text: "补充" }] } }));
+  apply(thread, JSON.stringify({ type: "user", uuid: "u3", isSynthetic: true, message: { content: [{ type: "text", text: "[Request interrupted by user]" }] } }));
+  assert.deepEqual(thread.items.map((item) => item.kind), ["user", "user", "interrupted"]);
+});
+
+test("中断状态：空闲时不记，重复按不重置时间，一轮结束或进程退出时清除", () => {
+  const thread = newThread();
+  markInterrupting(thread, 1);
+  assert.equal(thread.interruptAt, undefined);
+  addSending(thread, "u1", "你好");
+  markInterrupting(thread, 2);
+  markInterrupting(thread, 3);
+  assert.equal(thread.interruptAt, 2);
+  apply(thread, JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true }));
+  assert.equal(thread.interruptAt, undefined);
+  addSending(thread, "u2", "再来");
+  markInterrupting(thread, 4);
+  onProcessExit(thread);
+  assert.equal(thread.interruptAt, undefined);
 });

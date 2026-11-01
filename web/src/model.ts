@@ -33,6 +33,8 @@ export interface ToolItem {
   isError?: boolean;
   /** CLI 自己拦下的调用，要原样显示。 */
   blocked?: boolean;
+  /** 工具调用之外的补充内容，目前是技能正文。 */
+  detail?: string;
   /** 子代理里调用的工具数。 */
   children: number;
 }
@@ -76,6 +78,8 @@ export interface Thread {
   /** 正在运行的工具，用于状态行。 */
   activeTool?: string;
   turnStartedAt?: number;
+  /** 发出中断的时间，这一轮结束时清除。 */
+  interruptAt?: number;
   claudeSessionId?: string;
   model?: string;
   cwd?: string;
@@ -189,7 +193,7 @@ function onToolResult(thread: Thread, part: Json): void {
   const text = resultText(part.content);
   replaceItem(thread, index, {
     ...tool,
-    result: text.slice(0, MAX_RESULT),
+    result: text.replace(/<\/?tool_use_error>/g, "").slice(0, MAX_RESULT),
     truncated: text.length > MAX_RESULT,
     isError: part.is_error === true,
     blocked: text.includes("<tool_use_error>Blocked:"),
@@ -202,6 +206,21 @@ function commandText(content: string): string | null {
   if (!name) return null;
   const args = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(content)?.[1];
   return args ? `${name} ${args}` : name;
+}
+
+/** CLI 注入给模型的消息，不是用户说的话。 */
+const isInjected = (event: Json): boolean => event.isSynthetic === true || event.isMeta === true;
+
+/** 技能正文折叠进对应的工具行，其他注入内容不显示。 */
+function onInjected(thread: Thread, event: Json, text: string): void {
+  if (!text.startsWith("Base directory for this skill")) return;
+  const id: string | undefined = event.sourceToolUseID;
+  const index = findLast(
+    thread,
+    (item) => item.kind === "tool" && (id ? item.id === id : item.name === "Skill" && !item.detail),
+  );
+  if (index < 0) return;
+  replaceItem(thread, index, { ...(thread.items[index] as ToolItem), detail: text.slice(0, MAX_RESULT) });
 }
 
 function ensureTask(thread: Thread, id: string): Task {
@@ -325,6 +344,10 @@ function onUser(thread: Thread, event: Json): void {
       thread.activeTool = undefined;
       return;
     }
+    if (isInjected(event)) {
+      onInjected(thread, event, content);
+      return;
+    }
     const command = commandText(content);
     // 发送时已经先显示了，回传只是确认送达。
     const sent = findLast(thread, (item) => item.kind === "user" && item.id === event.uuid);
@@ -355,6 +378,8 @@ function onUser(thread: Thread, event: Json): void {
     } else if (part.type === "text" && !event.parent_tool_use_id) {
       if (String(part.text).startsWith("[Request interrupted")) {
         thread.items.push({ kind: "interrupted", id: event.uuid ?? `i${thread.items.length}` });
+      } else if (isInjected(event)) {
+        onInjected(thread, event, String(part.text));
       } else {
         thread.items.push({ kind: "user", id: event.uuid ?? `u${thread.items.length}`, text: part.text });
       }
@@ -396,8 +421,10 @@ function onAssistant(thread: Thread, event: Json): void {
       }
       thread.phase = "replying";
     } else if (block.type === "thinking") {
-      const id = `${message.id}:t${thread.items.length}`;
-      thread.items.push({ kind: "thinking", id, text: block.thinking ?? "" });
+      // CLI 常发内容为空的思考块，没有东西可看，“思考中”由状态行显示。
+      if (block.thinking) {
+        thread.items.push({ kind: "thinking", id: `${message.id}:t${thread.items.length}`, text: block.thinking });
+      }
       thread.phase = "thinking";
     } else if (block.type === "tool_use") {
       if (block.name === "TodoWrite" && Array.isArray(block.input?.todos)) {
@@ -436,6 +463,7 @@ function onStreamEvent(thread: Thread, outer: Json): void {
 
 function onResult(thread: Thread, event: Json): void {
   clearAsks(thread);
+  thread.interruptAt = undefined;
   const models: Json = event.modelUsage ?? {};
   const max = (models[thread.model ?? ""] ?? (Object.values(models)[0] as Json | undefined))?.contextWindow;
   if (thread.context && max) thread.context.max = max;
@@ -504,6 +532,7 @@ export function onProcessExit(thread: Thread): void {
   clearAsks(thread);
   thread.phase = "idle";
   thread.activeTool = undefined;
+  thread.interruptAt = undefined;
   for (const task of thread.tasks.values()) {
     if (task.status === "running") {
       task.status = "stopped";
@@ -539,6 +568,12 @@ export function failSending(thread: Thread): void {
   );
   thread.phase = "idle";
   thread.turnStartedAt = undefined;
+  thread.interruptAt = undefined;
+}
+
+/** 记下发出中断的时间。进程卡住时不会有回复，界面靠它判断要不要提示。 */
+export function markInterrupting(thread: Thread, now = Date.now()): void {
+  if (thread.phase !== "idle") thread.interruptAt ??= now;
 }
 
 export function removeItem(thread: Thread, id: string): void {

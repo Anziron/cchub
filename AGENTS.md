@@ -48,4 +48,7 @@
 - `/` 命令的回传带同一个 `uuid`，但正文变成 `<command-name>` 标记，且排在回复之后 → 显示时要还原。
 - 后台 Bash 可能先 `task_started`（`is_backgrounded: false`）再由 `task_updated` 转后台，以 `background_tasks_changed` 为准；这些事件没有时间戳，开始时间只能由客户端记。
 - 额度和上下文不要调用 `/usage`、`/context`（写进会话记录）→ 用 `rate_limit_event` 和最后一条 `assistant` 的 `usage`。
+- CLI 常发内容为空的思考块，同一条消息里还可能一空一实 → 空块不显示，不要当成“思考过”。
+- 技能正文等 CLI 注入的消息也是 `type: user`，实时事件带 `isSynthetic`，`.jsonl` 里带 `isMeta` → 两个都要过滤，不能显示成用户气泡。
+- `input` 只是写进 FIFO，进程卡住或没启动时不报错也没有回复 → 中断要靠客户端超时提示，不能只等 `result`。
 - `ClientMsg::List` 不等进程启动 → `Start` 之后马上 `List` 可能看到 `running: false`，测试要重试。

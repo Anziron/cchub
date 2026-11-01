@@ -12,6 +12,7 @@ import {
   mergeRateLimits,
   initializeLine,
   interruptLine,
+  markInterrupting,
   isWaiting,
   newThread,
   onProcessExit,
@@ -461,7 +462,9 @@ export class Store {
     this.reply(session, ask, answerLine(ask, answers));
 
   interrupt(session: Session): void {
+    markInterrupting(session.thread);
     void this.send({ type: "input", session: session.id, line: interruptLine() });
+    this.changed();
   }
 
   /** 正在干活时先确认，空闲时结束没有损失，直接结束。 */
@@ -484,6 +487,8 @@ export class Store {
     void this.send({ type: "stop", session: session.id });
     session.running = false;
     onProcessExit(session.thread);
+    // 进程没回传的消息不算送达，留下重试入口。
+    failSending(session.thread);
     this.initialized.delete(session.id);
     // 不刷新列表：`stop` 可能还没执行完，会把会话又标回运行中。状态由 hubd 推送。
     this.changed();
