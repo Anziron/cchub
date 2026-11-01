@@ -9,4 +9,4 @@ export type Frame = { session?: string | null, } & ({ "type": "event", seq: numb
 /**
  * `claude` 输出的一行原文，`hubd` 不解析正文。
  */
-payload: string, } | { "type": "skipped", seq: number, next: number, } | { "type": "device", online: boolean, } | { "type": "status", running: boolean, } | { "type": "sessions", sessions: Array<SessionInfo>, mem_available_mb: number | null, } | { "type": "error", message: string, });
+payload: string, } | { "type": "skipped", seq: number, next: number, } | { "type": "device", online: boolean, } | { "type": "status", running: boolean, } | { "type": "sessions", sessions: Array<SessionInfo>, mem_available_mb: number | null, } | { "type": "browse", device: string | null, path: string | null, parent: string | null, entries: Array<string>, error: string | null, } | { "type": "mounted", device: string, path: string, cwd: string | null, error: string | null, } | { "type": "error", message: string, });
