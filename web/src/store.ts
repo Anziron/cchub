@@ -252,7 +252,11 @@ export class Store {
         this.error = event.message;
         if (event.session) {
           const session = this.sessions.get(event.session);
-          if (session) failSending(session.thread);
+          if (session) {
+            failSending(session.thread);
+            // 启动可能失败了，问一次真实状态，下次发送才会重新启动进程。
+            this.refresh();
+          }
         }
         break;
     }
