@@ -194,6 +194,7 @@ impl Inbound {
             | ServerMsg::Sessions { .. }
             | ServerMsg::Browse { .. }
             | ServerMsg::Mounted { .. }
+            | ServerMsg::TaskOutput { .. }
             | ServerMsg::Error { .. } => None,
         }
     }

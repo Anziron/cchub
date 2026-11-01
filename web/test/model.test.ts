@@ -16,7 +16,13 @@ import {
   isWaiting,
   newThread,
   onProcessExit,
+  matchCommands,
+  mergeRateLimits,
+  parseCommands,
   parseModels,
+  parseRateLimits,
+  runningTasks,
+  taskOutputPath,
   type Thread,
 } from "../src/model.ts";
 
@@ -197,11 +203,11 @@ test("普通错误显示出来；进程退出后卡片作废；待办原地更�
   assert.ok(!thread.items.some((item) => item.kind === "tool"));
 
   apply(thread, JSON.stringify({ type: "system", subtype: "task_started", task_id: "b1", is_backgrounded: true }));
-  assert.equal(thread.background.size, 1);
+  assert.equal(runningTasks(thread).length, 1);
   apply(thread, JSON.stringify({ type: "result", subtype: "success" }));
-  assert.equal(thread.background.size, 1, "一轮结束不等于后台任务结束");
+  assert.equal(runningTasks(thread).length, 1, "一轮结束不等于后台任务结束");
   apply(thread, JSON.stringify({ type: "system", subtype: "task_notification", task_id: "b1" }));
-  assert.equal(thread.background.size, 0);
+  assert.equal(runningTasks(thread).length, 0);
 });
 
 test("发送的消息立刻显示，回传后不重复", () => {
@@ -246,4 +252,78 @@ test("服务器地址只填 IP 也能补全", () => {
   assert.equal(hubUrl(""), null);
   assert.equal(hubUrl("a b"), null);
   assert.equal(hubHost("ws://100.90.166.47:7878/ws"), "100.90.166.47");
+});
+
+test("命令转入后台要靠 task_updated，停止后不再算运行中", () => {
+  const thread = newThread();
+  const system = (o: object) => apply(thread, JSON.stringify({ type: "system", ...o }));
+  system({ subtype: "task_started", task_id: "f", is_backgrounded: false, description: "前台" });
+  assert.equal(runningTasks(thread).length, 0, "前台命令不算后台任务");
+  system({ subtype: "task_updated", task_id: "f", patch: { is_backgrounded: true } });
+  assert.equal(runningTasks(thread).length, 1);
+  system({ subtype: "task_updated", task_id: "f", patch: { status: "killed", end_time: 123 } });
+  assert.equal(runningTasks(thread).length, 0);
+  assert.equal(thread.tasks.get("f")?.status, "stopped");
+  assert.equal(thread.tasks.get("f")?.endedAt, 123);
+  system({ subtype: "background_tasks_changed", tasks: [{ task_id: "g", task_type: "local_bash", description: "构建" }] });
+  assert.equal(runningTasks(thread)[0].description, "构建");
+  onProcessExit(thread);
+  assert.equal(runningTasks(thread).length, 0, "进程结束后任务都不在运行");
+});
+
+test("运行中任务的输出路径来自工具结果，结束后用 output_file", () => {
+  const thread = newThread();
+  apply(thread, JSON.stringify({ type: "assistant", message: { id: "m", content: [{ type: "tool_use", id: "t", name: "Bash", input: { command: "x" } }] } }));
+  apply(thread, JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t", content: "Output is being written to: /tmp/claude-0/p/s/tasks/b1.output" }] } }));
+  apply(thread, JSON.stringify({ type: "system", subtype: "task_started", task_id: "b1", tool_use_id: "t", is_backgrounded: true }));
+  const task = thread.tasks.get("b1")!;
+  assert.equal(taskOutputPath(thread, task), "/tmp/claude-0/p/s/tasks/b1.output");
+  apply(thread, JSON.stringify({ type: "system", subtype: "task_notification", task_id: "b1", status: "failed", output_file: "/tmp/claude-0/p/s/tasks/final.output" }));
+  assert.equal(taskOutputPath(thread, task), "/tmp/claude-0/p/s/tasks/final.output");
+  assert.equal(task.status, "failed");
+});
+
+test("上下文取最后一条消息的 usage，上限来自 result", () => {
+  const thread = newThread();
+  apply(thread, JSON.stringify({ type: "assistant", message: { id: "m", model: "x", content: [], usage: { input_tokens: 2, cache_read_input_tokens: 10309, cache_creation_input_tokens: 14098 } } }));
+  assert.deepEqual(thread.context, { used: 24409 });
+  apply(thread, JSON.stringify({ type: "result", subtype: "success", modelUsage: { x: { contextWindow: 1000000 } } }));
+  assert.deepEqual(thread.context, { used: 24409, max: 1000000 });
+  apply(thread, JSON.stringify({ type: "assistant", parent_tool_use_id: "p", message: { id: "s", content: [], usage: { input_tokens: 5 } } }));
+  assert.equal(thread.context?.used, 24409, "子代理的用量不算");
+});
+
+test("额度合并：重放旧数据不能盖掉新的", () => {
+  const line = (utilization: number, resetsAt: number) => JSON.stringify({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { five_hour: { utilization, resetsAt } } } });
+  const now = parseRateLimits(line(0.5, 100))!;
+  assert.equal(mergeRateLimits(now, parseRateLimits(line(0.2, 100))!).fiveHour?.utilization, 0.5, "同一窗口取更高");
+  assert.equal(mergeRateLimits(now, parseRateLimits(line(0.9, 50))!).fiveHour?.utilization, 0.5, "旧窗口不算");
+  assert.equal(mergeRateLimits(now, parseRateLimits(line(0.1, 200))!).fiveHour?.utilization, 0.1, "新窗口重新算");
+  assert.equal(parseRateLimits("{\"type\":\"user\"}"), null);
+});
+
+test("命令菜单只在输入 / 词时出现，前缀匹配排在前面", () => {
+  const commands = [{ name: "autocompact" }, { name: "compact" }, { name: "clear" }];
+  assert.deepEqual(matchCommands(commands, "/").map((c) => c.name), ["autocompact", "compact", "clear"]);
+  assert.deepEqual(matchCommands(commands, "/comp").map((c) => c.name), ["compact", "autocompact"]);
+  assert.deepEqual(matchCommands(commands, "/compact 说明"), []);
+  assert.deepEqual(matchCommands(commands, "你好 /c"), []);
+  assert.deepEqual(matchCommands(commands, ""), []);
+  const reply = JSON.stringify({ type: "control_response", response: { request_id: "r", response: { commands: [{ name: "x", description: "d" }, { bad: 1 }] } } });
+  assert.deepEqual(parseCommands(reply, "r"), [{ name: "x", description: "d" }]);
+  assert.equal(parseCommands(reply, "other"), null);
+});
+
+test("内置命令的回传显示成原命令，重放时排回回复前面", () => {
+  const echo = (uuid: string) => JSON.stringify({ type: "user", uuid, message: { role: "user", content: "<command-name>/context</command-name>\n<command-args></command-args>" } });
+  const live = newThread();
+  addSending(live, "u1", "/context");
+  apply(live, echo("u1"));
+  assert.deepEqual(live.items, [{ kind: "user", id: "u1", text: "/context" }]);
+
+  const replay = newThread();
+  apply(replay, JSON.stringify({ type: "assistant", message: { id: "m", content: [{ type: "text", text: "结果" }] } }));
+  apply(replay, echo("u1"));
+  assert.equal(replay.items[0].kind, "user");
+  assert.equal(replay.items[1].kind, "text");
 });

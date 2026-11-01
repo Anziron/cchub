@@ -113,6 +113,10 @@ async fn serve(app: Arc<App>, socket: WebSocket) {
                 tokio::spawn(mount(app.clone(), device, path, tx.clone()));
                 continue;
             }
+            ClientMsg::TaskOutput { path } => {
+                tokio::spawn(task_output(path.clone(), tx.clone()));
+                continue;
+            }
             ClientMsg::Start { session, .. }
             | ClientMsg::Attach { session, .. }
             | ClientMsg::Input { session, .. }
@@ -251,7 +255,10 @@ async fn handle(
             })
             .await?;
         }
-        ClientMsg::List | ClientMsg::Browse { .. } | ClientMsg::Mount { .. } => {}
+        ClientMsg::List
+        | ClientMsg::Browse { .. }
+        | ClientMsg::Mount { .. }
+        | ClientMsg::TaskOutput { .. } => {}
     }
     Ok(())
 }
@@ -307,6 +314,19 @@ async fn mount(app: Arc<App>, device: String, path: String, tx: mpsc::Sender<Fra
         cwd,
         error,
     };
+    let _ = tx.send(Frame { session: None, msg }).await;
+}
+
+async fn task_output(path: String, tx: mpsc::Sender<Frame>) {
+    let from = path.clone();
+    let output = spawn_blocking(move || workspace::read_task_output(&from))
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()));
+    let (text, error) = match output {
+        Ok(text) => (Some(text), None),
+        Err(error) => (None, Some(error)),
+    };
+    let msg = ServerMsg::TaskOutput { path, text, error };
     let _ = tx.send(Frame { session: None, msg }).await;
 }
 

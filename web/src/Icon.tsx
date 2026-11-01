@@ -13,6 +13,7 @@ const PATHS: Record<string, string> = {
   check: "m3.500 8.500 3 3 6-7",
   close: "m4 4 8 8M12 4l-8 8",
   back: "M10 3.500 5.500 8l4.500 4.500",
+  tasks: "M3 4.500h10M3 8h10M3 11.500h6",
   alert: "M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2ZM8 5v3.500M8 11v.01",
 };
 

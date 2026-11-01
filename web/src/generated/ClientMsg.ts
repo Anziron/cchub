@@ -8,4 +8,4 @@ cwd?: string | null,
 /**
  * 显示在会话列表里的标题。
  */
-title?: string | null, } | { "type": "list" } | { "type": "attach", session: string, after: number, } | { "type": "input", session: string, line: string, } | { "type": "stop", session: string, } | { "type": "browse", device?: string | null, path?: string | null, } | { "type": "mount", device: string, path: string, };
+title?: string | null, } | { "type": "list" } | { "type": "attach", session: string, after: number, } | { "type": "input", session: string, line: string, } | { "type": "stop", session: string, } | { "type": "browse", device?: string | null, path?: string | null, } | { "type": "mount", device: string, path: string, } | { "type": "task_output", path: string, };

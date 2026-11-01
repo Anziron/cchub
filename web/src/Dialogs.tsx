@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./Icon";
-import { findModel, hubHost, hubUrl, type ModelOption } from "./model";
-import { describeCwd, type Store } from "./store";
+import { backgroundTasks, findModel, hubHost, hubUrl, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
+import { describeCwd, type Session, type Store } from "./store";
 
 /** 弹窗。Esc 只关弹窗，不能冒泡到窗口上变成中断任务。 */
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
@@ -188,5 +188,114 @@ export function ModelMenu({ models, model, onChange }: { models: ModelOption[]; 
         </div>
       ) : null}
     </div>
+  );
+}
+
+export function CommandMenu({ commands, selected, onChoose }: { commands: SlashCommand[]; selected: number; onChoose: (command: SlashCommand) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.children[selected]?.scrollIntoView({ block: "nearest" });
+  }, [selected]);
+  return (
+    <div className="commands" role="listbox" aria-label="命令" ref={ref}>
+      {commands.map((command, i) => (
+        <button
+          type="button"
+          key={command.name}
+          role="option"
+          aria-selected={i === selected}
+          className={i === selected ? "on" : ""}
+          // 用 mousedown，不让输入框失去焦点。
+          onMouseDown={(event) => { event.preventDefault(); onChoose(command); }}
+        >
+          <b>/{command.name}{command.argumentHint ? <em> {command.argumentHint}</em> : null}</b>
+          {command.description ? <small>{command.description}</small> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function ConfirmDialog({ store, session }: { store: Store; session: Session }) {
+  const tasks = runningTasks(session.thread).length;
+  return (
+    <Modal title="结束这个会话？" onClose={() => store.cancelStop()}>
+      <p className="help first">
+        「{session.title}」还在工作{tasks ? `，后台有 ${tasks} 个任务` : ""}。结束后正在执行的操作会被终止，可能留下没做完的改动。
+        之后在这个会话里发消息可以接着聊。
+      </p>
+      <div className="actions end">
+        <button className="btn quiet" autoFocus onClick={() => store.cancelStop()}>继续运行</button>
+        <button className="btn solid" onClick={() => store.stopSession(session)}>结束会话</button>
+      </div>
+    </Modal>
+  );
+}
+
+const TASK_TYPES: Record<string, string> = { local_bash: "命令", local_agent: "子任务", remote_agent: "远程子任务" };
+const TASK_STATUS: Record<Task["status"], string> = { running: "运行中", completed: "已完成", failed: "失败", stopped: "已停止" };
+
+function taskDuration(task: Task): string {
+  if (!task.startedAt) return "";
+  const ms = (task.endedAt ?? Date.now()) - task.startedAt;
+  if (ms < 0) return "";
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds / 60) % 60}m`;
+}
+
+/** 后台任务：能看到做什么、跑了多久、状态、输出的最后一段，也能单独停掉。 */
+export function TasksDialog({ store, session }: { store: Store; session: Session }) {
+  const tasks = backgroundTasks(session.thread);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [, setTick] = useState(0);
+  const open = tasks.find((task) => task.id === openId);
+  const path = open ? taskOutputPath(session.thread, open) : null;
+  const running = open?.status === "running";
+  const output = store.taskOutput?.path === path ? store.taskOutput : null;
+  const pre = useRef<HTMLPreElement>(null);
+  // 打开时刷新：用时每秒，输出在任务运行时每 3 秒。窗口不在前台时不刷新。
+  useEffect(() => {
+    const timer = setInterval(() => { if (document.hasFocus()) setTick(Date.now()); }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (!path) return;
+    store.readTaskOutput(path);
+    if (!running) return;
+    const timer = setInterval(() => { if (document.hasFocus()) store.readTaskOutput(path); }, 3000);
+    return () => clearInterval(timer);
+  }, [store, path, running]);
+  useEffect(() => {
+    if (pre.current) pre.current.scrollTop = pre.current.scrollHeight;
+  }, [output?.text]);
+  return (
+    <Modal title="后台任务" onClose={() => store.closeTasks()}>
+      <div className="tasks">
+        {!tasks.length ? <p className="empty">没有后台任务</p> : null}
+        {tasks.map((task) => (
+          <div key={task.id} className={`task ${task.status}`}>
+            <div className="task-head">
+              <button type="button" className="task-main" aria-expanded={task.id === openId} onClick={() => setOpenId(task.id === openId ? null : task.id)}>
+                <span className="task-title" title={task.description}>{task.description ?? task.id}</span>
+                <small>{TASK_TYPES[task.type ?? ""] ?? task.type ?? "任务"} · {TASK_STATUS[task.status]}{taskDuration(task) ? ` · ${taskDuration(task)}` : ""}</small>
+              </button>
+              {task.status === "running" ? <button type="button" className="btn quiet" onClick={() => store.stopTask(session, task.id)}>停止</button> : null}
+            </div>
+            {task.id === openId ? (
+              <div className="task-body">
+                {task.summary ? <p className="help first">{task.summary}</p> : null}
+                {!path ? <p className="empty">这个任务没有可查看的输出文件</p> : null}
+                {output?.error ? <p className="empty bad">{output.error}</p> : null}
+                {path && !output?.error ? (
+                  <pre className="output" ref={pre}>{output?.text == null ? "正在读取…" : output.text || "还没有输出"}</pre>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </Modal>
   );
 }

@@ -238,6 +238,10 @@ impl State {
                 });
                 Vec::new()
             }
+            ServerMsg::TaskOutput { path, text, error } => {
+                on_event(UiEvent::TaskOutput { path, text, error });
+                Vec::new()
+            }
             ServerMsg::Error { message } => {
                 on_event(UiEvent::Error { session, message });
                 Vec::new()
