@@ -319,6 +319,12 @@ function onUser(thread: Thread, event: Json): void {
   const content = event.message?.content;
   if (typeof content === "string") {
     if (event.parent_tool_use_id) return;
+    // 后台任务结束时 CLI 发给模型的通知，不是用户说的话，内容在后台任务面板里。
+    if (event.origin?.kind === "task-notification" || content.startsWith("<task-notification>")) {
+      thread.phase = "thinking";
+      thread.activeTool = undefined;
+      return;
+    }
     const command = commandText(content);
     // 发送时已经先显示了，回传只是确认送达。
     const sent = findLast(thread, (item) => item.kind === "user" && item.id === event.uuid);

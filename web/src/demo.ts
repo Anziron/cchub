@@ -106,7 +106,8 @@ export const demoHub: Hub = {
       event({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.34, resetsAt: hours }, seven_day: { utilization: 0.86, resetsAt: hours + 400000 } } } });
       event({ type: "assistant", message: { id: "usage", usage: { input_tokens: 2, cache_read_input_tokens: 240000, cache_creation_input_tokens: 4000 }, content: [] } });
       if (msg.session === "rich") {
-        event({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "b1", task_type: "local_bash", description: "运行完整测试 npm test" }, { task_id: "b2", task_type: "local_bash", description: "构建桌面端" }] });
+        event({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "b1", task_type: "local_bash", description: "运行完整测试 npm test" }, { task_id: "b2", task_type: "local_bash", description: "构建桌面端" }, { task_id: "b3", task_type: "local_bash", description: "Run read-only codex test task in background" }] });
+        event({ type: "system", subtype: "task_notification", task_id: "b3", status: "stopped", output_file: "/tmp/claude-0/x/tasks/b3.output" });
         event({ type: "system", subtype: "task_notification", task_id: "b2", status: "completed", summary: "构建完成", output_file: "/tmp/claude-0/x/tasks/b2.output" });
       }
       if (scene === "offline") emit({ type: "device", session: msg.session, online: false });
