@@ -64,7 +64,9 @@ pub fn mount(program: &str, device: &str, path: &str) -> Result<String, String> 
 fn is_task_output(path: &str) -> bool {
     let path = Path::new(path);
     let mut parts = path.components();
-    let safe = path.components().all(|part| !matches!(part, Component::ParentDir));
+    let safe = path
+        .components()
+        .all(|part| !matches!(part, Component::ParentDir));
     let in_tmp = matches!(parts.next(), Some(Component::RootDir))
         && matches!(parts.next(), Some(Component::Normal(dir)) if dir == "tmp")
         && matches!(parts.next(), Some(Component::Normal(dir))
