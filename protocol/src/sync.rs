@@ -192,6 +192,8 @@ impl Inbound {
             ServerMsg::Status { .. }
             | ServerMsg::Device { .. }
             | ServerMsg::Sessions { .. }
+            | ServerMsg::Browse { .. }
+            | ServerMsg::Mounted { .. }
             | ServerMsg::Error { .. } => None,
         }
     }
