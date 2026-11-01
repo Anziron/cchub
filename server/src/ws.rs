@@ -181,8 +181,19 @@ async fn session_worker(
     tx: mpsc::Sender<Frame>,
 ) {
     let mut reader = None;
+    let mut start_failed = false;
     while let Some(msg) = messages.recv().await {
-        if let Err(message) = handle(&app, &session, msg, &tx, &mut reader).await {
+        // 启动失败时，客户端已经因为同一个错误把消息标成没发出去。这里写进 FIFO
+        // 会留到下次启动，和用户重发的消息一起被处理。
+        if start_failed && matches!(msg, ClientMsg::Input { .. }) {
+            continue;
+        }
+        let is_start = matches!(msg, ClientMsg::Start { .. });
+        let result = handle(&app, &session, msg, &tx, &mut reader).await;
+        if is_start {
+            start_failed = result.is_err();
+        }
+        if let Err(message) = result {
             if send_error(&tx, Some(session.clone()), message)
                 .await
                 .is_err()
@@ -226,14 +237,20 @@ async fn handle(
                         app.min_available_mb
                     )));
                 }
-                // 在断开的挂载里启动进程不会报错，只会一直没有输出，所以先探测。
+                // 先记下目录：探测失败后重试时不带目录，也不能退回会话目录。
                 if let Some(cwd) = &cwd {
-                    if !device::probe(cwd) {
-                        return Err(std::io::Error::other("设备离线，无法启动会话"));
-                    }
                     app.sessions.set_cwd(&id, cwd)?;
                 }
-                let workdir = app.sessions.cwd(&id).unwrap_or_else(|| dir.clone());
+                let workdir = match app.sessions.cwd(&id) {
+                    Some(workdir) => {
+                        // 在断开的挂载里启动进程不会报错，只会一直没有输出，所以先探测。
+                        if !device::probe(&workdir) {
+                            return Err(std::io::Error::other("设备离线，无法启动会话"));
+                        }
+                        workdir
+                    }
+                    None => dir.clone(),
+                };
                 app.host.start(&id, &dir, &workdir, resume.as_deref())
             })
             .await?;

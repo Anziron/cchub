@@ -2,6 +2,8 @@
 #![cfg(unix)]
 
 use std::collections::HashSet;
+use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -464,6 +466,87 @@ async fn reports_device_online_for_project_dir() {
         },
     )
     .await;
+}
+
+#[tokio::test]
+async fn failed_start_keeps_cwd_and_drops_input() {
+    let temp = Temp::new("failed-start");
+    // 把目录位置占成普通文件，探测会失败，效果和挂载断开相同。
+    let project = temp.0.join("project");
+    std::fs::write(&project, "").unwrap();
+    let (mut hubd, addr) = spawn_hubd(&temp.0).await;
+    let mut socket = connect(&addr).await;
+    let start = |cwd: Option<String>| ClientMsg::Start {
+        session: "s1".into(),
+        title: None,
+        resume: None,
+        cwd,
+    };
+    let path = project.display().to_string();
+    send(&mut socket, start(Some(path.clone()))).await;
+    send(
+        &mut socket,
+        ClientMsg::Input {
+            session: "s1".into(),
+            line: "不该留下".into(),
+        },
+    )
+    .await;
+    // 重试不带目录，也不能退回会话目录启动。
+    send(&mut socket, start(None)).await;
+    let errors = async {
+        let mut count = 0;
+        while count < 2 {
+            let message = socket.next().await.expect("连接断开").unwrap();
+            let Message::Text(text) = message else {
+                continue;
+            };
+            let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
+            if let ServerMsg::Error { message } = frame.msg {
+                assert!(message.contains("设备离线"), "{message}");
+                count += 1;
+            }
+        }
+    };
+    tokio::time::timeout(TIMEOUT, errors).await.unwrap();
+
+    let mut fifo = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(temp.0.join("s1").join("in"))
+        .unwrap();
+    let error = fifo.read(&mut [0; 64]).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+    drop(fifo);
+
+    // 恢复后不带目录也回到原来的目录。
+    std::fs::remove_file(&project).unwrap();
+    std::fs::create_dir(&project).unwrap();
+    send(&mut socket, start(None)).await;
+    send(&mut socket, ClientMsg::List).await;
+    let listed = tokio::time::timeout(TIMEOUT, async {
+        loop {
+            let message = socket.next().await.expect("连接断开").unwrap();
+            let Message::Text(text) = message else {
+                continue;
+            };
+            let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
+            match frame.msg {
+                ServerMsg::Sessions { sessions, .. } => {
+                    if sessions.iter().all(|session| session.running) {
+                        return sessions;
+                    }
+                    send(&mut socket, ClientMsg::List).await;
+                }
+                ServerMsg::Error { message } => panic!("hubd 报错：{message}"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(listed[0].cwd.as_deref(), Some(path.as_str()));
+    let _ = hubd.kill().await;
 }
 
 #[tokio::test]
