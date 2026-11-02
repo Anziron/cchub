@@ -3,7 +3,6 @@ package dev.anziron.cchub.bridge
 import android.Manifest
 import android.app.Activity
 import android.app.Application
-import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
@@ -15,6 +14,7 @@ import android.os.Process
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import android.view.ViewGroup
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -22,23 +22,11 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import app.tauri.annotation.Command
-import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import org.json.JSONObject
-
-@InvokeArg
-class StatusArgs {
-    var text: String = ""
-}
-
-@InvokeArg
-class NotifyArgs {
-    var session: String = ""
-    var body: String = ""
-}
 
 @TauriPlugin
 class BridgePlugin(private val activity: Activity) : Plugin(activity) {
@@ -78,7 +66,15 @@ class BridgePlugin(private val activity: Activity) : Plugin(activity) {
             override fun onActivityPaused(a: Activity) {}
             override fun onActivityStopped(a: Activity) {}
             override fun onActivitySaveInstanceState(a: Activity, state: Bundle) {}
-            override fun onActivityDestroyed(a: Activity) {}
+            override fun onActivityDestroyed(a: Activity) {
+                if (a !== activity) return
+                // 界面没了但页面脚本还会跑，它发起的调用找不到 Activity，会让整个进程 panic。
+                webView?.let { view ->
+                    (view.parent as? ViewGroup)?.removeView(view)
+                    view.destroy()
+                }
+                webView = null
+            }
         })
     }
 
@@ -126,11 +122,11 @@ class BridgePlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     override fun onResume(activity: AppCompatActivity) {
-        inForeground = true
+        KeepAliveService.inForeground = true
     }
 
     override fun onPause(activity: AppCompatActivity) {
-        inForeground = false
+        KeepAliveService.inForeground = false
     }
 
     @Command
@@ -146,40 +142,6 @@ class BridgePlugin(private val activity: Activity) : Plugin(activity) {
             app.startForegroundService(intent)
         } else {
             app.startService(intent)
-        }
-        invoke.resolve()
-    }
-
-    @Command
-    fun setStatus(invoke: Invoke) {
-        Log.i(TAG, "setStatus")
-        val args = invoke.parseArgs(StatusArgs::class.java)
-        KeepAliveService.lastStatus = args.text
-        manager().notify(KeepAliveService.STATUS_ID, KeepAliveService.build(app, args.text))
-        invoke.resolve()
-    }
-
-    @Command
-    fun notify(invoke: Invoke) {
-        Log.i(TAG, "notify foreground=$inForeground")
-        val args = invoke.parseArgs(NotifyArgs::class.java)
-        // 前台时界面上已经能看到，不再打扰。
-        if (!inForeground) {
-            val id = NOTIFY_BASE + (args.session.hashCode() and 0xFFFF)
-            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                Notification.Builder(app, KeepAliveService.ASK_CHANNEL)
-            } else {
-                @Suppress("DEPRECATION")
-                Notification.Builder(app).setPriority(Notification.PRIORITY_HIGH)
-            }
-            val notification = builder
-                .setSmallIcon(R.drawable.ic_cchub_status)
-                .setContentTitle("cchub")
-                .setContentText(args.body)
-                .setAutoCancel(true)
-                .setContentIntent(KeepAliveService.openApp(app, args.session, id))
-                .build()
-            manager().notify(id, notification)
         }
         invoke.resolve()
     }
@@ -216,10 +178,6 @@ class BridgePlugin(private val activity: Activity) : Plugin(activity) {
         const val EXTRA_SESSION = "dev.anziron.cchub.SESSION"
         private const val TAG = "cchub-bridge"
         private const val PERMISSION_REQUEST = 4101
-        private const val NOTIFY_BASE = 0x10000
-
-        @Volatile
-        private var inForeground = false
 
         @Volatile
         private var pendingSession: String? = null

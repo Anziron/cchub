@@ -11,13 +11,90 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.Process
+import android.net.LocalServerSocket
+import android.util.Log
+import java.io.IOException
+import kotlin.concurrent.thread
+import org.json.JSONObject
 
 /**
  * 只负责让进程留在前台优先级，WebSocket 在 Rust 里。
  * 进程被系统杀掉后不自动拉起：拉起的进程里没有 Rust 连接，常驻通知会误导用户。
  */
 class KeepAliveService : Service() {
+    private var server: LocalServerSocket? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        val socket = LocalServerSocket(SOCKET_NAME)
+        server = socket
+        thread(name = "cchub-bridge", isDaemon = true) { serve(socket) }
+    }
+
+    override fun onDestroy() {
+        server?.close()
+        server = null
+        super.onDestroy()
+    }
+
+    /**
+     * 通知和状态由 Rust 经本地 socket 发来。不能走 Tauri 插件：
+     * 划掉任务后 Activity 没了，插件调用会让进程 panic，而这时正需要通知。
+     */
+    private fun serve(socket: LocalServerSocket) {
+        while (true) {
+            val client = try {
+                socket.accept()
+            } catch (_: IOException) {
+                return
+            }
+            try {
+                client.use {
+                    // 抽象地址谁都能连，只接受自己。
+                    if (it.peerCredentials.uid != Process.myUid()) return@use
+                    val line = it.inputStream.bufferedReader().readLine() ?: return@use
+                    handle(JSONObject(line))
+                }
+            } catch (error: Exception) {
+                Log.w(TAG, "bad message", error)
+            }
+        }
+    }
+
+    private fun handle(message: JSONObject) {
+        val manager = getSystemService(NotificationManager::class.java)
+        when (message.getString("cmd")) {
+            "status" -> {
+                lastStatus = message.getString("text")
+                manager.notify(STATUS_ID, build(this, lastStatus))
+            }
+            "notify" -> {
+                Log.i(TAG, "notify foreground=$inForeground")
+                // 前台时界面上已经能看到，不再打扰。
+                if (inForeground) return
+                val session = message.getString("session")
+                val id = NOTIFY_BASE + (session.hashCode() and 0xFFFF)
+                val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    Notification.Builder(this, ASK_CHANNEL)
+                } else {
+                    @Suppress("DEPRECATION")
+                    Notification.Builder(this).setPriority(Notification.PRIORITY_HIGH)
+                }
+                manager.notify(
+                    id,
+                    builder
+                        .setSmallIcon(R.drawable.ic_cchub_status)
+                        .setContentTitle("cchub")
+                        .setContentText(message.getString("body"))
+                        .setAutoCancel(true)
+                        .setContentIntent(openApp(this, session, id))
+                        .build(),
+                )
+            }
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_EXIT) {
@@ -38,6 +115,14 @@ class KeepAliveService : Service() {
 
     companion object {
         const val STATUS_ID = 1
+        private const val NOTIFY_BASE = 0x10000
+        private const val TAG = "cchub-bridge"
+        /** 和 `desktop/src/mobile.rs` 里的一致。 */
+        private const val SOCKET_NAME = "dev.anziron.cchub.bridge"
+
+        @Volatile
+        var inForeground = false
+
         const val STATUS_CHANNEL = "cchub-status"
         const val ASK_CHANNEL = "cchub-ask"
         const val ACTION_EXIT = "dev.anziron.cchub.EXIT"

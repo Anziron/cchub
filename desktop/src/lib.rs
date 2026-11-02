@@ -88,11 +88,10 @@ fn hub_connect(app: AppHandle, hub: State<'_, Hub>, url: String) -> ConnectionSt
     let notifications = Arc::new(Notifications::load(&app));
     #[cfg(mobile)]
     let on_watched = {
-        let handle = app.clone();
         let notifications = notifications.clone();
         move |session: &str, seq: u64, class: EventClass| {
             if notifications.observe(session, seq, class) {
-                mobile::notify(&handle, session, class);
+                mobile::notify(session, class);
             }
         }
     };
@@ -101,7 +100,7 @@ fn hub_connect(app: AppHandle, hub: State<'_, Hub>, url: String) -> ConnectionSt
             UiEvent::Connection { state: current } => {
                 *lock(&state) = Some(*current);
                 #[cfg(mobile)]
-                mobile::connection_changed(&handle, *current);
+                mobile::connection_changed(*current);
             }
             UiEvent::Event {
                 session,
@@ -112,9 +111,13 @@ fn hub_connect(app: AppHandle, hub: State<'_, Hub>, url: String) -> ConnectionSt
                 #[cfg(desktop)]
                 desktop::notify(&handle, *class);
                 #[cfg(mobile)]
-                mobile::notify(&handle, session, *class);
+                mobile::notify(session, *class);
             }
             _ => {}
+        }
+        #[cfg(mobile)]
+        if !mobile::ui_alive() {
+            return;
         }
         // 窗口关闭后没有接收方，发送没有开销。
         let _ = handle.emit("hub", event);

@@ -1,21 +1,11 @@
-//! Android 上维持连接和发通知要用系统接口，这里只转发给 `android/` 里的 Kotlin 代码。
+//! 要用到界面的系统调用，转发给 `android/` 里的 Kotlin 代码。
+//! 这些调用只能在 Activity 存在时用：没有 Activity 时 wry 会直接 panic。
 
 use serde::{Deserialize, Serialize};
 use tauri::plugin::{Builder, PluginHandle, TauriPlugin};
 use tauri::{Manager, Runtime};
 
 pub struct Bridge<R: Runtime>(PluginHandle<R>);
-
-#[derive(Serialize)]
-struct Status<'a> {
-    text: &'a str,
-}
-
-#[derive(Serialize)]
-struct Notify<'a> {
-    session: &'a str,
-    body: &'a str,
-}
 
 #[derive(Deserialize)]
 struct Opened {
@@ -39,15 +29,6 @@ impl<R: Runtime> Bridge<R> {
     /// 启动前台服务，并在第一次时请求通知权限。
     pub fn start_service(&self) -> Result<(), String> {
         self.call("startService", ()).map(|_| ())
-    }
-
-    /// 常驻通知上显示的连接状态。
-    pub fn set_status(&self, text: &str) -> Result<(), String> {
-        self.call("setStatus", Status { text }).map(|_| ())
-    }
-
-    pub fn notify(&self, session: &str, body: &str) -> Result<(), String> {
-        self.call("notify", Notify { session, body }).map(|_| ())
     }
 
     /// 从通知点进来时要打开的会话，取走后清空。
