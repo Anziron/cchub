@@ -85,8 +85,18 @@ fn hub_connect(app: AppHandle, hub: State<'_, Hub>, url: String) -> ConnectionSt
     mobile::start_service(&app);
     let handle = app.clone();
     let state = hub.state.clone();
-    let notifications = Notifications::load(&app);
-    let (client, task) = HubClient::new(url.clone(), INITIAL_BACKOFF, move |event| {
+    let notifications = Arc::new(Notifications::load(&app));
+    #[cfg(mobile)]
+    let on_watched = {
+        let handle = app.clone();
+        let notifications = notifications.clone();
+        move |session: &str, seq: u64, class: EventClass| {
+            if notifications.observe(session, seq, class) {
+                mobile::notify(&handle, session, class);
+            }
+        }
+    };
+    let on_event = move |event: UiEvent| {
         match &event {
             UiEvent::Connection { state: current } => {
                 *lock(&state) = Some(*current);
@@ -108,7 +118,17 @@ fn hub_connect(app: AppHandle, hub: State<'_, Hub>, url: String) -> ConnectionSt
         }
         // 窗口关闭后没有接收方，发送没有开销。
         let _ = handle.emit("hub", event);
-    });
+    };
+    #[cfg(desktop)]
+    let (client, task) = HubClient::new(url.clone(), INITIAL_BACKOFF, on_event);
+    #[cfg(mobile)]
+    let (client, task) = HubClient::watching(
+        url.clone(),
+        INITIAL_BACKOFF,
+        mobile::WATCH_INTERVAL,
+        on_event,
+        on_watched,
+    );
     tauri::async_runtime::spawn(task);
     // 换掉旧句柄后，旧的连接循环会自己结束。
     *connection = Some(Connection { url, client });

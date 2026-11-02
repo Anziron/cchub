@@ -1,11 +1,16 @@
 use std::sync::mpsc::{channel, Sender};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use cchub_protocol::{ConnectionState, EventClass};
 use tauri::AppHandle;
 use tauri_plugin_cchub_bridge::{Background, BridgeExt};
 
 use crate::{notification_body, Hub};
+
+/// 和 `hubd` 的心跳同频，网络本来就醒着，不额外耗电。
+/// 这也是别处新开的会话最晚多久能发出第一条通知。
+pub(crate) const WATCH_INTERVAL: Duration = Duration::from_secs(15);
 
 type Job = Box<dyn FnOnce(&AppHandle) + Send>;
 
@@ -55,7 +60,10 @@ pub(crate) fn connection_changed(app: &AppHandle, state: ConnectionState) {
 pub(crate) fn notify(app: &AppHandle, session: &str, class: EventClass) {
     let session = session.to_owned();
     in_background(app, move |app| {
-        report("notify", app.bridge().notify(&session, notification_body(class)));
+        report(
+            "notify",
+            app.bridge().notify(&session, notification_body(class)),
+        );
     });
 }
 

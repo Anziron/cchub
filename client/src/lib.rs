@@ -7,11 +7,12 @@ use std::time::Duration;
 
 use cchub_protocol::{
     is_user_message, ClientMsg, ConnectionState, EventClass, Frame, Inbound, InboundAction,
-    ServerMsg, UiEvent,
+    ServerMsg, SessionInfo, UiEvent,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const IDLE_TIMEOUT: Duration = Duration::from_secs(45);
@@ -30,7 +31,24 @@ impl HubClient {
         on_event: impl Fn(UiEvent) + Send + Sync + 'static,
     ) -> (Self, impl Future<Output = ()> + Send) {
         let (tx, rx) = mpsc::unbounded_channel();
-        (Self { tx }, run(url, backoff, rx, on_event))
+        (Self { tx }, run(url, backoff, None, rx, on_event, |_, _, _| {}))
+    }
+
+    /// 界面可能不在时用：定时取会话列表，自己订阅运行中的会话，这样别处新开的会话也能发通知。
+    /// `hubd` 不主动推送列表，所以只能取。这些事件交给 `on_watched`，不进界面；
+    /// 界面之后自己订阅时会从头重放，不会显示两遍。
+    pub fn watching(
+        url: String,
+        backoff: Duration,
+        interval: Duration,
+        on_event: impl Fn(UiEvent) + Send + Sync + 'static,
+        on_watched: impl Fn(&str, u64, EventClass) + Send + Sync + 'static,
+    ) -> (Self, impl Future<Output = ()> + Send) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (
+            Self { tx },
+            run(url, backoff, Some(interval), rx, on_event, on_watched),
+        )
     }
 
     pub fn send(&self, msg: ClientMsg) -> Result<(), String> {
@@ -46,10 +64,15 @@ enum Ended {
 async fn run(
     url: String,
     initial_backoff: Duration,
+    watch: Option<Duration>,
     mut rx: mpsc::UnboundedReceiver<ClientMsg>,
     on_event: impl Fn(UiEvent),
+    on_watched: impl Fn(&str, u64, EventClass),
 ) {
-    let mut state = State::default();
+    let mut state = State {
+        watch,
+        ..State::default()
+    };
     let mut backoff = initial_backoff;
 
     loop {
@@ -61,7 +84,7 @@ async fn run(
             on_event(UiEvent::Connection {
                 state: ConnectionState::Connected,
             });
-            match connected(socket, &mut rx, &mut state, &on_event).await {
+            match connected(socket, &mut rx, &mut state, &on_event, &on_watched).await {
                 Ended::Closed => return,
                 Ended::Lost => {}
             }
@@ -91,6 +114,7 @@ async fn connected<S>(
     rx: &mut mpsc::UnboundedReceiver<ClientMsg>,
     state: &mut State,
     on_event: &impl Fn(UiEvent),
+    on_watched: &impl Fn(&str, u64, EventClass),
 ) -> Ended
 where
     S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
@@ -114,8 +138,21 @@ where
         state.pending.remove(0);
     }
 
+    let mut ticker = state.watch.map(|period| {
+        let mut ticker = tokio::time::interval(period);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        ticker
+    });
+    // 按截止时间算，不能每轮重新计时：定时发送的消息会让断线一直检测不出来。
+    let mut deadline = Instant::now() + IDLE_TIMEOUT;
+
     loop {
         tokio::select! {
+            _ = async { ticker.as_mut().expect("前置条件已检查").tick().await }, if ticker.is_some() => {
+                if send(&mut socket, &ClientMsg::List).await.is_err() {
+                    return Ended::Lost;
+                }
+            }
             msg = rx.recv() => {
                 let Some(msg) = msg else { return Ended::Closed };
                 if state.deliver(&mut socket, msg.clone()).await.is_err() {
@@ -124,11 +161,12 @@ where
                 }
             }
             // hubd 约 15 秒发一次心跳，这么久没有任何数据就当断线。
-            incoming = tokio::time::timeout(IDLE_TIMEOUT, socket.next()) => {
+            incoming = tokio::time::timeout_at(deadline, socket.next()) => {
                 let Ok(Some(Ok(message))) = incoming else { return Ended::Lost };
+                deadline = Instant::now() + IDLE_TIMEOUT;
                 let Message::Text(text) = message else { continue };
                 let Ok(frame) = serde_json::from_str::<Frame>(text.as_str()) else { continue };
-                for msg in state.on_frame(frame, on_event) {
+                for msg in state.on_frame(frame, on_event, on_watched) {
                     if send(&mut socket, &msg).await.is_err() {
                         state.pending.push(msg);
                         return Ended::Lost;
@@ -147,6 +185,10 @@ struct State {
     offline: HashSet<String>,
     /// 设备离线期间的用户消息，恢复后再发。
     held: Vec<ClientMsg>,
+    /// 取会话列表的间隔，`None` 表示订阅全由界面决定。
+    watch: Option<Duration>,
+    /// 自动订阅、界面还没要的会话。
+    watched: HashSet<String>,
 }
 
 impl State {
@@ -159,6 +201,7 @@ impl State {
             // 窗口重建后要从头重放，所以这里按调用方给的偏移重置。
             // 重连和缺口补齐走 `send`，不经过这里，用的是 `Inbound` 记录的偏移。
             self.sessions.insert(session.clone(), Inbound::new(*after));
+            self.watched.remove(session);
         }
         if let ClientMsg::Input { session, line } = &msg {
             if self.offline.contains(session) && is_user_message(line) {
@@ -170,7 +213,12 @@ impl State {
     }
 
     /// 返回要发回服务器的消息。
-    fn on_frame(&mut self, frame: Frame, on_event: &impl Fn(UiEvent)) -> Vec<ClientMsg> {
+    fn on_frame(
+        &mut self,
+        frame: Frame,
+        on_event: &impl Fn(UiEvent),
+        on_watched: &impl Fn(&str, u64, EventClass),
+    ) -> Vec<ClientMsg> {
         let session = frame.session;
         match frame.msg {
             ServerMsg::Status { running } => {
@@ -202,11 +250,12 @@ impl State {
                 sessions,
                 mem_available_mb,
             } => {
+                let attach = self.watch_running(&sessions);
                 on_event(UiEvent::Sessions {
                     sessions,
                     mem_available_mb,
                 });
-                Vec::new()
+                attach
             }
             ServerMsg::Browse {
                 device,
@@ -260,6 +309,10 @@ impl State {
                         seq,
                         payload,
                     } => {
+                        if self.watched.contains(&id) {
+                            on_watched(&id, seq, class);
+                            return Vec::new();
+                        }
                         on_event(UiEvent::Event {
                             session: id,
                             class,
@@ -275,6 +328,27 @@ impl State {
                 }
             }
         }
+    }
+}
+
+impl State {
+    /// 运行中但还没人订阅的会话，返回要发的订阅消息。
+    fn watch_running(&mut self, sessions: &[SessionInfo]) -> Vec<ClientMsg> {
+        if self.watch.is_none() {
+            return Vec::new();
+        }
+        let mut attach = Vec::new();
+        for session in sessions {
+            if session.running && !self.sessions.contains_key(&session.id) {
+                self.sessions.insert(session.id.clone(), Inbound::new(0));
+                self.watched.insert(session.id.clone());
+                attach.push(ClientMsg::Attach {
+                    session: session.id.clone(),
+                    after: 0,
+                });
+            }
+        }
+        attach
     }
 }
 
@@ -381,6 +455,76 @@ mod tests {
         next_client_msg(&mut server).await;
         server.send(first).await.unwrap();
         assert_eq!(next_payload().await, "first");
+    }
+
+    #[tokio::test]
+    async fn watching_attaches_running_sessions_without_touching_the_ui() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (events_tx, mut events) = mpsc::unbounded_channel();
+        let (watched_tx, mut watched) = mpsc::unbounded_channel();
+        let (client, task) = HubClient::watching(
+            url,
+            Duration::from_millis(10),
+            Duration::from_secs(3600),
+            move |event| {
+                let _ = events_tx.send(event);
+            },
+            move |session, seq, class| {
+                let _ = watched_tx.send((session.to_string(), seq, class));
+            },
+        );
+        tokio::spawn(task);
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut server = accept_async(stream).await.unwrap();
+        assert_eq!(next_client_msg(&mut server).await, ClientMsg::List);
+
+        let info = |id: &str, running| SessionInfo {
+            id: id.into(),
+            title: None,
+            cwd: None,
+            running,
+            updated: None,
+        };
+        let list = Frame {
+            session: None,
+            msg: ServerMsg::Sessions {
+                sessions: vec![info("s1", true), info("ended", false)],
+                mem_available_mb: None,
+            },
+        };
+        let list = Message::Text(serde_json::to_string(&list).unwrap().into());
+        server.send(list.clone()).await.unwrap();
+        let attach = ClientMsg::Attach {
+            session: "s1".into(),
+            after: 0,
+        };
+        // 只订阅运行中的，已结束的不订阅。
+        assert_eq!(next_client_msg(&mut server).await, attach);
+
+        let first = Message::Text(event(0, 5, "first").into());
+        server.send(first.clone()).await.unwrap();
+        let received = tokio::time::timeout(Duration::from_secs(5), watched.recv());
+        assert_eq!(
+            received.await.unwrap().unwrap(),
+            ("s1".to_string(), 0, EventClass::Durable)
+        );
+
+        // 同一个会话不重复订阅：下一条客户端消息是界面发的，不是自动的。
+        server.send(list).await.unwrap();
+        client.send(attach.clone()).unwrap();
+        assert_eq!(next_client_msg(&mut server).await, attach);
+
+        // 界面订阅后，事件改走界面，从头重放。
+        server.send(first).await.unwrap();
+        loop {
+            let received = tokio::time::timeout(Duration::from_secs(5), events.recv());
+            if let UiEvent::Event { payload, .. } = received.await.unwrap().unwrap() {
+                assert_eq!(payload, "first");
+                break;
+            }
+        }
+        assert!(watched.try_recv().is_err());
     }
 
     #[tokio::test]
