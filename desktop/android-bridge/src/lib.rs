@@ -81,8 +81,7 @@ impl<R: Runtime, T: Manager<R>> BridgeExt<R> for T {
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("cchub-bridge")
         .setup(|app, api| {
-            let handle =
-                api.register_android_plugin("dev.anziron.cchub.bridge", "BridgePlugin")?;
+            let handle = api.register_android_plugin("dev.anziron.cchub.bridge", "BridgePlugin")?;
             app.manage(Bridge(handle));
             Ok(())
         })

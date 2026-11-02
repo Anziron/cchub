@@ -2,7 +2,7 @@ use cchub_protocol::{ConnectionState, EventClass};
 use tauri::AppHandle;
 use tauri_plugin_cchub_bridge::{Background, BridgeExt};
 
-use crate::{hub_connect, hub_send, notification_body, Hub};
+use crate::{notification_body, Hub};
 
 /// 调 Kotlin 要等主线程回复，不能挡住连接循环和界面命令。
 fn in_background(app: &AppHandle, job: impl FnOnce(&AppHandle) + Send + 'static) {
@@ -54,8 +54,8 @@ pub(crate) fn run() {
         .plugin(tauri_plugin_cchub_bridge::init())
         .manage(Hub::default())
         .invoke_handler(tauri::generate_handler![
-            hub_connect,
-            hub_send,
+            crate::hub_connect,
+            crate::hub_send,
             take_opened_session,
             background_status,
             request_battery_unrestricted

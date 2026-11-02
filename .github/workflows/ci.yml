@@ -93,6 +93,8 @@ jobs:
           targets: aarch64-linux-android,x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: 安装 NDK
         run: |
           sdkmanager "ndk;27.0.12077973" "build-tools;35.0.0" "platforms;android-36"

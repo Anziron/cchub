@@ -7,7 +7,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::{hub_connect, hub_send, notification_body, Hub};
+use crate::{notification_body, Hub};
 
 const MAIN: &str = "main";
 /// 只在回环上占用，用来保证单实例；连接它等于请求已有实例打开窗口。
@@ -71,7 +71,7 @@ pub(crate) fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(Hub::default())
-        .invoke_handler(tauri::generate_handler![hub_connect, hub_send])
+        .invoke_handler(tauri::generate_handler![crate::hub_connect, crate::hub_send])
         .setup(move |app| {
             if let Some(listener) = instance {
                 listen_for_reopen(app.handle(), listener);
