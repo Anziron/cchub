@@ -27,9 +27,17 @@ fn in_background(app: &AppHandle, job: impl FnOnce(&AppHandle) + Send + 'static)
     let _ = jobs.send(Box::new(job));
 }
 
+/// 通知发不出去用户看不到，至少留下日志（logcat 的 RustStdoutStderr）。
+fn report(command: &str, result: Result<(), String>) {
+    match result {
+        Ok(()) => eprintln!("cchub-bridge: {command} ok"),
+        Err(error) => eprintln!("cchub-bridge: {command} failed: {error}"),
+    }
+}
+
 pub(crate) fn start_service(app: &AppHandle) {
     in_background(app, |app| {
-        let _ = app.bridge().start_service();
+        report("startService", app.bridge().start_service());
     });
 }
 
@@ -40,14 +48,14 @@ pub(crate) fn connection_changed(app: &AppHandle, state: ConnectionState) {
         ConnectionState::Disconnected => "连接已断开，任务仍在服务器上运行，暂时收不到通知",
     };
     in_background(app, move |app| {
-        let _ = app.bridge().set_status(text);
+        report("setStatus", app.bridge().set_status(text));
     });
 }
 
 pub(crate) fn notify(app: &AppHandle, session: &str, class: EventClass) {
     let session = session.to_owned();
     in_background(app, move |app| {
-        let _ = app.bridge().notify(&session, notification_body(class));
+        report("notify", app.bridge().notify(&session, notification_body(class)));
     });
 }
 

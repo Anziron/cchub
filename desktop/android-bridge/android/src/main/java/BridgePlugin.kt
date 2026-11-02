@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.util.Log
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -104,6 +105,7 @@ class BridgePlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun startService(invoke: Invoke) {
+        Log.i(TAG, "startService")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -120,6 +122,7 @@ class BridgePlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun setStatus(invoke: Invoke) {
+        Log.i(TAG, "setStatus")
         val args = invoke.parseArgs(StatusArgs::class.java)
         KeepAliveService.lastStatus = args.text
         manager().notify(KeepAliveService.STATUS_ID, KeepAliveService.build(app, args.text))
@@ -128,6 +131,7 @@ class BridgePlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun notify(invoke: Invoke) {
+        Log.i(TAG, "notify foreground=$inForeground")
         val args = invoke.parseArgs(NotifyArgs::class.java)
         // 前台时界面上已经能看到，不再打扰。
         if (!inForeground) {
@@ -180,6 +184,7 @@ class BridgePlugin(private val activity: Activity) : Plugin(activity) {
 
     companion object {
         const val EXTRA_SESSION = "dev.anziron.cchub.SESSION"
+        private const val TAG = "cchub-bridge"
         private const val PERMISSION_REQUEST = 4101
         private const val NOTIFY_BASE = 0x10000
 
