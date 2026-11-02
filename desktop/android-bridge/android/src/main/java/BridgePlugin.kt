@@ -2,6 +2,7 @@ package dev.anziron.cchub.bridge
 
 import android.Manifest
 import android.app.Activity
+import android.app.Application
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
@@ -9,6 +10,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
+import android.os.Process
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
@@ -48,8 +51,35 @@ class BridgePlugin(private val activity: Activity) : Plugin(activity) {
         KeepAliveService.createChannels(app)
         pendingSession = activity.intent?.getStringExtra(EXTRA_SESSION) ?: pendingSession
         activity.intent?.removeExtra(EXTRA_SESSION)
+        restartWhenRecreated()
         fitSystemBars()
         handleBack(webView)
+    }
+
+    /**
+     * 划掉任务后进程还在维持连接，但 Tauri 不能在同一进程里重建界面，直接显示会是白屏。
+     * 所以新的 Activity 一出现就换一个干净的进程；连接会自动恢复，通知水位在磁盘上，不会重复提醒。
+     */
+    private fun restartWhenRecreated() {
+        val mainClass = activity.javaClass
+        activity.application.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+            override fun onActivityCreated(created: Activity, state: Bundle?) {
+                if (created.javaClass != mainClass || created === activity) return
+                Log.i(TAG, "activity recreated, restarting process")
+                created.startActivity(
+                    Intent(created, RestartActivity::class.java)
+                        .putExtra(EXTRA_SESSION, created.intent?.getStringExtra(EXTRA_SESSION)),
+                )
+                Process.killProcess(Process.myPid())
+            }
+
+            override fun onActivityStarted(a: Activity) {}
+            override fun onActivityResumed(a: Activity) {}
+            override fun onActivityPaused(a: Activity) {}
+            override fun onActivityStopped(a: Activity) {}
+            override fun onActivitySaveInstanceState(a: Activity, state: Bundle) {}
+            override fun onActivityDestroyed(a: Activity) {}
+        })
     }
 
     /** targetSdk 35 起内容默认铺到系统栏和键盘下面，这里统一留出空间。 */

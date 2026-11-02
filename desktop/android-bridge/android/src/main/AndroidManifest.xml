@@ -16,5 +16,13 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps a connection to the user's own server to deliver approval requests." />
         </service>
+        <!-- 单独的进程：主进程结束后由它重新打开界面。 -->
+        <activity
+            android:name="dev.anziron.cchub.bridge.RestartActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:process=":restart"
+            android:theme="@android:style/Theme.NoDisplay" />
     </application>
 </manifest>
