@@ -13,7 +13,7 @@ mkdir -p "$shots"
 fail() {
   echo "失败：$1" >&2
   adb shell dumpsys notification --noredact | grep -E "android.(title|text)=" | tail -20 >&2 || true
-  adb logcat -d | grep -E "FATAL|AndroidRuntime|RustStdoutStderr|cchub" | tail -60 >&2 || true
+  adb logcat -d | grep -E "FATAL|AndroidRuntime|RustStdoutStderr|cchub" | grep -v s_gl | tail -60 >&2 || true
   adb exec-out screencap -p >"$shots/failure.png" || true
   exit 1
 }
@@ -40,7 +40,12 @@ adb logcat -c
 adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 >/dev/null
 sleep 8
 shot 1-connect
+# 先点输入框：没有焦点时回车会落到列表的第一个按钮上。坐标按默认模拟器的屏幕换算。
+read -r width height < <(adb shell wm size | sed -E 's/.*: ([0-9]+)x([0-9]+).*/\1 \2/' | tr -d '\r')
+adb shell input tap $((width / 2)) $((height * 291 / 640))
+sleep 2
 adb shell input text 127.0.0.1
+shot 1b-typed
 adb shell input keyevent 66
 wait_notification "已连接"
 shot 2-list

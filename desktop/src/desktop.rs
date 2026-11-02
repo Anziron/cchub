@@ -71,7 +71,10 @@ pub(crate) fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(Hub::default())
-        .invoke_handler(tauri::generate_handler![crate::hub_connect, crate::hub_send])
+        .invoke_handler(tauri::generate_handler![
+            crate::hub_connect,
+            crate::hub_send
+        ])
         .setup(move |app| {
             if let Some(listener) = instance {
                 listen_for_reopen(app.handle(), listener);

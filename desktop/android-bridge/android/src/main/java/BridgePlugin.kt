@@ -53,16 +53,18 @@ class BridgePlugin(private val activity: Activity) : Plugin(activity) {
 
     /** targetSdk 35 起内容默认铺到系统栏和键盘下面，这里统一留出空间。 */
     private fun fitSystemBars() {
-        val root = activity.findViewById<android.view.View>(android.R.id.content)
-        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+        // 监听装在 decorView 上：content 视图收到系统栏信息之前可能已被 AppCompat 的外层消费。
+        val decor = activity.window.decorView
+        val content = activity.findViewById<android.view.View>(android.R.id.content)
+        ViewCompat.setOnApplyWindowInsetsListener(decor) { view, insets ->
             val bars = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
             )
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-            view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
-            WindowInsetsCompat.CONSUMED
+            content.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
+            ViewCompat.onApplyWindowInsets(view, insets)
         }
-        ViewCompat.requestApplyInsets(root)
+        ViewCompat.requestApplyInsets(decor)
     }
 
     /** 界面先处理（关弹窗、回列表），没有可退的就退到后台，不销毁 Activity。 */
