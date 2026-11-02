@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use cchub_protocol::{ConnectionState, EventClass};
-use tauri::AppHandle;
+use tauri::{AppHandle, RunEvent};
 use tauri_plugin_cchub_bridge::{Background, BridgeExt};
 
 use crate::{notification_body, Hub};
@@ -93,6 +93,15 @@ pub(crate) fn run() {
             background_status,
             request_battery_unrestricted
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run cchub");
+        .build(tauri::generate_context!())
+        .expect("failed to build cchub")
+        .run(|_, event| {
+            // 划掉任务只销毁界面，进程要留下来维持连接和通知；退出走常驻通知上的按钮。
+            if let RunEvent::ExitRequested {
+                api, code: None, ..
+            } = event
+            {
+                api.prevent_exit();
+            }
+        });
 }
