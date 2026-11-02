@@ -3,7 +3,9 @@
 # 用法：android-smoke.sh <apk> <hubd> <fake-claude> <录制文件> <截图目录>
 set -euo pipefail
 
-apk=$1 hubd=$2 fake=$3 recording=$4 shots=$5
+apk=$1 hubd=$2 shots=$5
+# 会话在临时目录里启动，这两个必须是绝对路径。
+fake=$(realpath "$3") recording=$(realpath "$4")
 pkg=dev.anziron.cchub
 port=7878
 state=$(mktemp -d)

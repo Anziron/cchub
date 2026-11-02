@@ -31,7 +31,10 @@ impl HubClient {
         on_event: impl Fn(UiEvent) + Send + Sync + 'static,
     ) -> (Self, impl Future<Output = ()> + Send) {
         let (tx, rx) = mpsc::unbounded_channel();
-        (Self { tx }, run(url, backoff, None, rx, on_event, |_, _, _| {}))
+        (
+            Self { tx },
+            run(url, backoff, None, rx, on_event, |_, _, _| {}),
+        )
     }
 
     /// 界面可能不在时用：定时取会话列表，自己订阅运行中的会话，这样别处新开的会话也能发通知。
