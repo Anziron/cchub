@@ -2,6 +2,7 @@ import type { ConnectionState } from "./generated/ConnectionState";
 import type { SessionInfo } from "./generated/SessionInfo";
 import type { UiEvent } from "./generated/UiEvent";
 import type { Hub } from "./hub";
+import { isNarrow } from "./platform";
 import {
   addSending,
   allowLine,
@@ -97,6 +98,8 @@ export class Store {
   commands = loadJson<SlashCommand[]>(COMMANDS_KEY, []);
   limits = loadJson<RateLimits>(LIMITS_KEY, {});
   showTasks = false;
+  /** 窄屏下会话列表是否展开，手机上打开 App 先看列表。 */
+  showDrawer = isNarrow();
   /** 等确认结束的会话。 */
   stopping: Session | null = null;
   taskOutput: { path: string; text: string | null; error: string | null } | null = null;
@@ -342,12 +345,29 @@ export class Store {
   select(id: string | null): void {
     this.selected = id;
     this.showSettings = false;
+    this.showDrawer = false;
     const session = id ? this.sessions.get(id) : undefined;
     if (session) {
       this.attach(session);
       if (session.running) this.requestInit(session);
     }
     this.changed();
+  }
+
+  openDrawer(): void {
+    this.showDrawer = true;
+    this.changed();
+  }
+
+  /** 系统返回键：先关弹窗，再回会话列表；已在列表时返回 false，由系统退到后台。 */
+  back(): boolean {
+    if (this.stopping) this.cancelStop();
+    else if (this.showTasks) this.closeTasks();
+    else if (this.showWorkspace) this.closeWorkspace();
+    else if (this.showSettings && this.url) this.toggleSettings();
+    else if (!this.showDrawer) this.openDrawer();
+    else return false;
+    return true;
   }
 
   dismissError(): void {
@@ -414,6 +434,7 @@ export class Store {
     session.running = true;
     session.attached = true;
     this.selected = id;
+    this.showDrawer = false;
     void this.send({ type: "start", session: id, cwd, title });
     void this.send({ type: "attach", session: id, after: 0 });
     this.requestInit(session);

@@ -244,6 +244,7 @@ kbd { margin-left: 8px; padding: 0 4px; border-radius: 4px; box-shadow: inset 0 
 
 
 [hidden] { display: none !important; }
+.drawer-open { display: none; }
 @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
 body.blurred .dot.run, body.blurred .pulse { animation-play-state: paused; }
@@ -376,3 +377,48 @@ html, body, #root { height: 100%; }
 .task-failed .task-main small { color: var(--del); }
 .task-body { padding: 0 8px 10px; }
 .task-body .output { max-height: 240px; padding: 8px 10px; border-radius: 8px; background: var(--code-bg); color: var(--text-2); }
+
+/* 窄屏：会话列表和对话是两个页面 */
+@media (max-width: 860px) {
+  .app { height: 100dvh; }
+  .app.drawer .side { position: fixed; inset: 0; z-index: 30; display: flex; background: var(--side); }
+  .drawer-open { display: grid; flex: none; margin-left: -12px; }
+  .top { gap: 8px; padding-left: 16px; }
+  .crumb { flex: 1; overflow: hidden; }
+  .crumb b { overflow: hidden; text-overflow: ellipsis; }
+  .crumb .sep, .crumb span { display: none; }
+  .stream { scrollbar-gutter: auto; }
+  .column, .todo, .dock, .notice { width: calc(100% - 28px); }
+  .dock { padding-bottom: 8px; }
+  .welcome { width: calc(100% - 28px); }
+  .welcome h1 { font-size: 26px; }
+  .overlay { padding: 12px; }
+  .modal { max-height: 100%; overflow-y: auto; }
+  .manual { flex-basis: 100%; }
+  .actions.end { flex-wrap: wrap; }
+  .menu { width: min(280px, calc(100vw - 40px)); }
+  .context { overflow: hidden; text-overflow: ellipsis; }
+  .tools { min-width: 0; }
+  .cmd, .output, .codeblock { max-width: 100%; overflow-x: auto; }
+}
+
+/* 触屏：按钮够大，不依赖悬停和键盘 */
+@media (pointer: coarse) {
+  body { font-size: 14.5px; }
+  .row { min-height: 44px; }
+  .row-wrap .row { min-height: 48px; padding-right: 44px; }
+  .row.more, .row.project { min-height: 38px; }
+  .icon { width: 40px; height: 40px; }
+  .btn { min-height: 42px; }
+  .btn kbd { display: none; }
+  .send { width: 40px; height: 40px; }
+  .pick { min-height: 46px; }
+  .tools .model, .workspace { height: 38px; }
+  .row-stop { top: 50%; right: 2px; width: 40px; height: 40px; opacity: .7; transform: translateY(-50%); }
+  .activity .esc { padding: 6px 0 6px 12px; color: var(--accent); font-size: 13px; }
+  .activity-right button { padding: 6px 0; font-size: 13px; }
+  .composer textarea { font-size: 16px; }
+  .field input, .manual input { height: 44px; font-size: 16px; }
+}
+
+.link-btn { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }

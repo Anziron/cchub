@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["protocol", "client", "server", "desktop"]
+members = ["protocol", "client", "server", "desktop", "desktop/android-bridge"]
 default-members = ["protocol", "client", "server"]
 
 [workspace.package]
