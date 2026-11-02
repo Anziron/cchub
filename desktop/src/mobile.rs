@@ -1,13 +1,30 @@
+use std::sync::mpsc::{channel, Sender};
+use std::sync::OnceLock;
+
 use cchub_protocol::{ConnectionState, EventClass};
 use tauri::AppHandle;
 use tauri_plugin_cchub_bridge::{Background, BridgeExt};
 
 use crate::{notification_body, Hub};
 
+type Job = Box<dyn FnOnce(&AppHandle) + Send>;
+
+static JOBS: OnceLock<Sender<Job>> = OnceLock::new();
+
 /// 调 Kotlin 要等主线程回复，不能挡住连接循环和界面命令。
+/// 用同一个线程按顺序执行，否则旧的连接状态可能盖掉新的。
 fn in_background(app: &AppHandle, job: impl FnOnce(&AppHandle) + Send + 'static) {
-    let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || job(&app));
+    let jobs = JOBS.get_or_init(|| {
+        let (tx, rx) = channel::<Job>();
+        let app = app.clone();
+        std::thread::spawn(move || {
+            for job in rx {
+                job(&app);
+            }
+        });
+        tx
+    });
+    let _ = jobs.send(Box::new(job));
 }
 
 pub(crate) fn start_service(app: &AppHandle) {

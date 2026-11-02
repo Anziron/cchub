@@ -110,7 +110,6 @@ class BridgePlugin(private val activity: Activity) : Plugin(activity) {
             activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), PERMISSION_REQUEST)
         }
         val intent = Intent(app, KeepAliveService::class.java)
-            .putExtra(KeepAliveService.EXTRA_TEXT, KeepAliveService.lastStatus)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             app.startForegroundService(intent)
         } else {

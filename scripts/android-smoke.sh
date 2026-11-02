@@ -12,6 +12,10 @@ mkdir -p "$shots"
 
 fail() {
   echo "失败：$1" >&2
+  # 存进产物：运行记录的日志可能被删，产物下载后还在。
+  echo "$1" >"$shots/failure.txt"
+  adb shell dumpsys notification --noredact >"$shots/notifications.txt" || true
+  adb logcat -d | grep -v s_gl >"$shots/logcat.txt" || true
   adb shell dumpsys notification --noredact | grep -E "android.(title|text)=" | tail -20 >&2 || true
   adb logcat -d | grep -E "FATAL|AndroidRuntime|RustStdoutStderr|cchub" | grep -v s_gl | tail -60 >&2 || true
   adb exec-out screencap -p >"$shots/failure.png" || true

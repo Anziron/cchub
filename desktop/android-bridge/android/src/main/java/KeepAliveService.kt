@@ -26,7 +26,8 @@ class KeepAliveService : Service() {
             Process.killProcess(Process.myPid())
             return START_NOT_STICKY
         }
-        val notification = build(this, intent?.getStringExtra(EXTRA_TEXT) ?: lastStatus)
+        // 服务启动是异步的，这时状态可能已经更新过，所以读最新值。
+        val notification = build(this, lastStatus)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(STATUS_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
@@ -39,9 +40,9 @@ class KeepAliveService : Service() {
         const val STATUS_ID = 1
         const val STATUS_CHANNEL = "cchub-status"
         const val ASK_CHANNEL = "cchub-ask"
-        const val EXTRA_TEXT = "text"
         const val ACTION_EXIT = "dev.anziron.cchub.EXIT"
 
+        @Volatile
         var lastStatus = "正在连接服务器"
 
         fun createChannels(context: Context) {
