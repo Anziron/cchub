@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./Icon";
 import { backgroundTasks, findModel, hubHost, hubUrl, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
+import { backgroundStatus, isAndroid, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
 import { describeCwd, type Session, type Store } from "./store";
 
 /** 弹窗。Esc 只关弹窗，不能冒泡到窗口上变成中断任务。 */
@@ -39,6 +40,27 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
+/** 通知依赖后台连接，权限没开时要让用户看得到。 */
+function BackgroundPanel() {
+  const [status, setStatus] = useState<BackgroundStatus | null>(null);
+  useEffect(() => {
+    const load = () => { void backgroundStatus().then(setStatus); };
+    load();
+    addEventListener("focus", load);
+    document.addEventListener("visibilitychange", load);
+    return () => { removeEventListener("focus", load); document.removeEventListener("visibilitychange", load); };
+  }, []);
+  if (!status) return null;
+  return (
+    <div className="background">
+      {!status.notificationsAllowed ? <p className="help bad">通知权限已关闭，需要你决定时不会提醒。请到系统设置里打开。</p> : null}
+      {status.batteryUnrestricted
+        ? <p className="help">后台运行不受电池优化限制。</p>
+        : <p className="help">系统可能在息屏后断开连接。<button type="button" className="link-btn" onClick={() => void requestBatteryUnrestricted()}>允许后台运行</button></p>}
+    </div>
+  );
+}
+
 export function ConnectDialog({ store }: { store: Store }) {
   const [host, setHost] = useState(() => hubHost(store.url));
   const [tried, setTried] = useState(false);
@@ -56,10 +78,11 @@ export function ConnectDialog({ store }: { store: Store }) {
       <form onSubmit={(event) => { event.preventDefault(); if (url) { setTried(true); void store.connect(url); } }}>
         <label className="field">
           <span>服务器 IP</span>
-          <input autoFocus spellCheck={false} placeholder="100.x.x.x" value={host} onChange={(event) => { setHost(event.target.value); setTried(false); }} />
+          <input autoFocus inputMode="url" autoCapitalize="none"spellCheck={false} placeholder="100.x.x.x" value={host} onChange={(event) => { setHost(event.target.value); setTried(false); }} />
         </label>
-        <p className="help">填服务器的 Tailscale 地址（在服务器上运行 <code>tailscale ip -4</code> 查看）。本机 <code>ipconfig</code> 显示的是这台电脑自己的地址，不是服务器的。</p>
+        <p className="help">填服务器的 Tailscale 地址（在服务器上运行 <code>tailscale ip -4</code> 查看）。{isAndroid ? "手机上要先打开 Tailscale 并登录同一账号。" : <>本机 <code>ipconfig</code> 显示的是这台电脑自己的地址，不是服务器的。</>}</p>
         {status ? <p className={`help${store.connection === "disconnected" ? " bad" : ""}`} role="status">{status}</p> : null}
+        {isAndroid ? <BackgroundPanel /> : null}
         <div className="actions end">
           <button type="button" className="btn quiet" onClick={() => store.toggleSettings()}>取消</button>
           <button className="btn solid" disabled={!url}>连接</button>
@@ -98,6 +121,8 @@ export function WorkspaceDialog({ store }: { store: Store }) {
           </div>
         </section>
       ) : null}
+      {/* 第一版手机端不浏览和挂载新项目。 */}
+      {isAndroid ? (!recent.length ? <p className="empty">还没有用过的工作区，可以手动输入路径。</p> : null) : (
       <section className="picker">
         {device ? (
           <div className="crumbs">
@@ -126,6 +151,7 @@ export function WorkspaceDialog({ store }: { store: Store }) {
             : null}
         </div>
       </section>
+      )}
       {store.mountError ? <p className="help bad" role="alert">{store.mountError}</p> : null}
       <div className="actions end">
         {!device ? (

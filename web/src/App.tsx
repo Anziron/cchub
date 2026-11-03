@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { CommandMenu, ConfirmDialog, ConnectDialog, ModelMenu, TasksDialog, WorkspaceDialog } from "./Dialogs";
 import { Icon } from "./Icon";
+import { isAndroid, isTouch, takeOpenedSession } from "./platform";
 import { firstAsk, isSending, isWaiting, matchCommands, runningTasks, type Ask, type SlashCommand, type Todo } from "./model";
 import { describeCwd, NEW_DRAFT, type Session, type Store } from "./store";
 import { describeTool, ThreadView } from "./Thread";
@@ -179,6 +180,7 @@ function TopBar({ store, session, toggleTheme }: { store: Store; session?: Sessi
   const offline = session && !session.deviceOnline;
   return (
     <header className="top">
+      <button className="icon drawer-open" aria-label="会话列表" onClick={() => store.openDrawer()}><Icon name="back" /></button>
       <div className="crumb">
         <b>{session?.title ?? "新会话"}</b>
         {project ? <><span className="sep">/</span><span>{project}</span><span className="sep">/</span><span>{device}</span></> : null}
@@ -293,7 +295,7 @@ function Activity({ store, session }: { store: Store; session: Session }) {
       <span className="activity-right">
         {hasTasks ? <button onClick={() => store.openTasks()}><Icon name="tasks" size={13} />后台任务{background ? ` ${background}` : ""}</button> : null}
         {unresponsive ? <button onClick={() => store.askStop(session)}>结束会话</button> : null}
-        {busy && interruptAt == null ? <span className="esc" role="button" onClick={() => store.interrupt(session)}>Esc 中断</span> : null}
+        {busy && interruptAt == null ? <span className="esc" role="button" onClick={() => store.interrupt(session)}>{isTouch ? "中断" : "Esc 中断"}</span> : null}
       </span>
     </div>
   );
@@ -344,7 +346,8 @@ function Composer({ store, session }: { store: Store; session: Session }) {
   const commands = useCommandMenu(store.commandsFor(session), text, setText, submit);
   // 有卡片等决定时不抢焦点，回车和 Esc 留给卡片。
   useEffect(() => {
-    if (!firstAsk(session.thread)) ref.current?.focus();
+    // 触屏上聚焦会弹出键盘，挡住内容。
+    if (!isTouch && !firstAsk(session.thread)) ref.current?.focus();
   }, [session]);
   useEffect(() => {
     const el = ref.current;
@@ -372,7 +375,7 @@ function Composer({ store, session }: { store: Store; session: Session }) {
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
           if (commands.onKeyDown(event)) return;
-          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+          if (!isTouch && event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault();
             send();
           }
@@ -418,14 +421,14 @@ function Welcome({ store }: { store: Store }) {
       <form className="composer" onSubmit={(event) => { event.preventDefault(); send(); }}>
         {commands.menu}
         <textarea
-          autoFocus
+          autoFocus={!isTouch}
           aria-label="输入任务"
           placeholder="描述任务，它会在后台持续运行，需要你时再叫你"
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
             if (commands.onKeyDown(event)) return;
-            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+            if (!isTouch && event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               send();
             }
@@ -459,9 +462,21 @@ export function App({ store }: { store: Store }) {
     return () => { removeEventListener("focus", onFocus); removeEventListener("blur", onBlur); };
   }, [store]);
 
+  // Android 上由系统回调：返回键，以及从通知跳到对应会话。
+  useEffect(() => {
+    if (!isAndroid) return;
+    const hooks = window as unknown as Record<string, unknown>;
+    hooks.__cchubBack = () => store.back();
+    hooks.__cchubOpen = (id: string) => { store.select(id); return true; };
+    void takeOpenedSession().then((id) => { if (id) store.select(id); });
+    const onVisible = () => { if (!document.hidden && store.connection === "connected") store.refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [store]);
+
   const conn = store.connection;
   return (
-    <div className="app">
+    <div className={`app${store.showDrawer ? " drawer" : ""}`}>
       <Sidebar store={store} />
       <main className="main">
         <TopBar store={store} session={session} toggleTheme={toggleTheme} />
