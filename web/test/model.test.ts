@@ -13,6 +13,7 @@ import {
   hubHost,
   hubUrl,
   isSending,
+  isTranscript,
   isWaiting,
   markInterrupting,
   newThread,
@@ -22,6 +23,7 @@ import {
   parseCommands,
   parseModels,
   parseRateLimits,
+  parseTranscript,
   runningTasks,
   taskOutputPath,
   type Thread,
@@ -452,4 +454,19 @@ test("子代理的工具结果不改变主线程状态", () => {
   // 主线程自己的工具结果仍切到思考中
   apply(running, ev({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "X", content: "done" }] } }));
   assert.equal(running.phase, "thinking");
+});
+
+test("子代理记录按对话解析：提示、文字、工具调用和结果", () => {
+  const text = [
+    JSON.stringify({ type: "user", isSidechain: true, uuid: "u1", message: { role: "user", content: "查一下文档" } }),
+    JSON.stringify({ type: "assistant", isSidechain: true, message: { id: "m1", role: "assistant", content: [{ type: "text", text: "我先读文件" }] } }),
+    JSON.stringify({ type: "assistant", isSidechain: true, message: { id: "m1", role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/a.md" } }] } }),
+    JSON.stringify({ type: "user", isSidechain: true, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "内容" }] } }),
+  ].join("\n");
+  assert.ok(isTranscript(text));
+  assert.ok(!isTranscript("npm test\nok"));
+  const items = parseTranscript(text);
+  assert.deepEqual(items.map((item) => item.kind), ["user", "text", "tool"]);
+  const tool = items[2];
+  assert.ok(tool.kind === "tool" && tool.name === "Read" && tool.result === "内容");
 });

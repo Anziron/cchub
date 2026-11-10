@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./Icon";
 import { FONTS, SIZES, THEMES, type Appearance } from "./appearance";
-import { backgroundTasks, findModel, hubHost, hubUrl, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
+import { backgroundTasks, findModel, hubHost, hubUrl, isTranscript, parseTranscript, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
 import { backgroundStatus, isAndroid, pageVisible, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
 import { formatAgo } from "./sidebar";
 import { describeCwd, type Session, type Store } from "./store";
+import { TranscriptView } from "./Thread";
 
 /** 弹窗。Esc 只关弹窗，不能冒泡到窗口上变成中断任务。 */
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+/** `local`：只盖住对话区并在其中居中（和输入框对齐），要放在 `.main` 里渲染。 */
+function Modal({ title, onClose, children, className, local }: { title: string; onClose: () => void; children: ReactNode; className?: string; local?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!ref.current?.contains(document.activeElement)) ref.current?.focus();
@@ -23,10 +25,10 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
     return () => removeEventListener("keydown", onKey, true);
   }, [onClose]);
   return (
-    <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className={local ? "overlay local" : "overlay"} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div
         ref={ref}
-        className="modal"
+        className={className ? `modal ${className}` : "modal"}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -328,7 +330,11 @@ export function TasksDialog({ store, session }: { store: Store; session: Session
   const path = open ? taskOutputPath(session.thread, open) : null;
   const running = open?.status === "running";
   const output = store.taskOutput?.path === path ? store.taskOutput : null;
-  const pre = useRef<HTMLPreElement>(null);
+  const pre = useRef<HTMLDivElement & HTMLPreElement>(null);
+  const transcript = useMemo(
+    () => (output?.text && isTranscript(output.text) ? parseTranscript(output.text) : null),
+    [output?.text],
+  );
   // 打开时刷新：用时每秒，输出在任务运行时每 3 秒。窗口看不见时不刷新（失去焦点照常刷新）。
   useEffect(() => {
     const timer = setInterval(() => { if (pageVisible()) setTick(Date.now()); }, 1000);
@@ -345,7 +351,7 @@ export function TasksDialog({ store, session }: { store: Store; session: Session
     if (pre.current) pre.current.scrollTop = pre.current.scrollHeight;
   }, [output?.text]);
   return (
-    <Modal title="后台任务" onClose={() => store.closeTasks()}>
+    <Modal title="后台任务" className="tasks-modal" local onClose={() => store.closeTasks()}>
       <div className="tasks">
         {!tasks.length ? <p className="empty">没有后台任务</p> : null}
         {tasks.map((task) => (
@@ -362,7 +368,9 @@ export function TasksDialog({ store, session }: { store: Store; session: Session
                 {task.summary ? <p className="help first">{task.summary}</p> : null}
                 {!path ? <p className="empty">这个任务没有可查看的输出文件</p> : null}
                 {output?.error ? <p className="empty bad">{output.error}</p> : null}
-                {path && !output?.error ? (
+                {path && !output?.error && transcript ? (
+                  <div className="output transcript" ref={pre}><TranscriptView items={transcript} cwd={session.cwd} /></div>
+                ) : path && !output?.error ? (
                   <pre className="output" ref={pre}>{output?.text == null ? "正在读取…" : output.text || "还没有输出"}</pre>
                 ) : null}
               </div>

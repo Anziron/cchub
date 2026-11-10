@@ -70,6 +70,50 @@ pub fn is_message_end(line: &str) -> bool {
         .is_ok_and(|envelope| matches!(envelope.kind, Some("assistant" | "result")))
 }
 
+/// 对话本身的一行（`user` / `assistant`），其余是 CLI 的内部记录。
+pub fn is_conversation_line(line: &str) -> bool {
+    serde_json::from_str::<Envelope>(line)
+        .is_ok_and(|envelope| matches!(envelope.kind, Some("user" | "assistant")))
+}
+
+#[derive(Deserialize)]
+struct TaskList {
+    #[serde(default)]
+    tasks: Vec<serde::de::IgnoredAny>,
+}
+
+/// 日志末尾这一轮已经结束，且没有后台任务在跑：结束进程不会打断任何事。
+///
+/// 从后往前扫：在 `assistant` / `control_request` 之前先遇到 `result` 才算结束；
+/// 最近一条 `background_tasks_changed` 是后台任务的完整快照，必须为空，没出现视为没有。
+/// 用户输入和 `set_model` 的回显是 `user`，不影响判定。
+pub fn turn_finished(log: &str) -> bool {
+    let mut ended = false;
+    let mut tasks_known = false;
+    for line in log.lines().rev() {
+        let Ok(envelope) = serde_json::from_str::<Envelope>(line) else {
+            continue;
+        };
+        match (envelope.kind, envelope.subtype) {
+            (Some("system"), Some("background_tasks_changed")) if !tasks_known => {
+                tasks_known = true;
+                let empty =
+                    serde_json::from_str::<TaskList>(line).is_ok_and(|list| list.tasks.is_empty());
+                if !empty {
+                    return false;
+                }
+            }
+            (Some("assistant" | "control_request"), _) if !ended => return false,
+            (Some("result"), _) => ended = true,
+            _ => {}
+        }
+        if ended && tasks_known {
+            return true;
+        }
+    }
+    ended
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,6 +171,50 @@ mod tests {
         assert_eq!(
             classify(r#"{"type":"control_request","request":{"subtype":"can_use_tool"}}"#),
             EventClass::Approval
+        );
+    }
+
+    #[test]
+    fn conversation_lines_are_user_and_assistant() {
+        assert!(is_conversation_line(r#"{"type":"user","message":{}}"#));
+        assert!(is_conversation_line(r#"{"type":"assistant","message":{}}"#));
+        assert!(!is_conversation_line(r#"{"type":"api-request-blob"}"#));
+        assert!(!is_conversation_line(r#"{"type":"attachment"}"#));
+        assert!(!is_conversation_line(r#"{"type":"user""#));
+    }
+
+    #[test]
+    fn turn_finished_only_after_result_without_background_tasks() {
+        let user = r#"{"type":"user","message":{}}"#;
+        let assistant = r#"{"type":"assistant","message":{}}"#;
+        let result = r#"{"type":"result","subtype":"success"}"#;
+        let ask = r#"{"type":"control_request","request":{"subtype":"can_use_tool"}}"#;
+        let none = r#"{"type":"system","subtype":"background_tasks_changed","tasks":[]}"#;
+        let some =
+            r#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"b1"}]}"#;
+        let set_model = r#"{"type":"user","message":{"content":"<local-command-stdout>Set model to x</local-command-stdout>"}}"#;
+        let log = |lines: &[&str]| lines.join("\n");
+
+        assert!(!turn_finished(""));
+        assert!(!turn_finished(&log(&[user, assistant])), "回复中");
+        assert!(!turn_finished(&log(&[user, assistant, ask])), "等审批");
+        assert!(turn_finished(&log(&[user, assistant, result])));
+        assert!(
+            turn_finished(&log(&[user, assistant, result, "{\"type\":\"res"])),
+            "末尾半行"
+        );
+        assert!(turn_finished(&log(&[result, set_model])), "set_model 回显");
+        assert!(!turn_finished(&log(&[result, user, assistant])), "新一轮");
+        assert!(
+            !turn_finished(&log(&[user, some, assistant, result])),
+            "后台任务未完"
+        );
+        assert!(turn_finished(&log(&[
+            some, assistant, result, none, user, assistant, result
+        ])));
+        assert!(
+            !turn_finished(&log(&[none, assistant, result, some])),
+            "结束后又转入后台"
         );
     }
 }

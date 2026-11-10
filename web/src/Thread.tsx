@@ -168,6 +168,34 @@ const ItemView = memo(function ItemView({ item, store, session, askSent }: { ite
   }
 });
 
+/** 只读的对话（后台子代理的记录）：没有审批、重试这些操作。 */
+export function TranscriptView({ items, cwd }: { items: Item[]; cwd?: string }) {
+  return (
+    <>
+      {items.map((item) => {
+        switch (item.kind) {
+          case "user":
+            return <div key={item.id} className="user"><div>{item.text}</div></div>;
+          case "text":
+            return <Markdown key={item.id} text={item.text} />;
+          case "thinking":
+            return <Step key={item.id} icon="think" label="思考过程"><div className="body">{item.text}</div></Step>;
+          case "tool":
+            return <Tool key={item.id} tool={item} cwd={cwd} />;
+          case "interrupted":
+            return <div key={item.id} className="stopped">已中断</div>;
+          case "notice":
+            return <div key={item.id} className="stopped local-note">{item.text}</div>;
+          case "error":
+            return <ErrorBox key={item.id} title="出错了" text={item.text} />;
+          default:
+            return null;
+        }
+      })}
+    </>
+  );
+}
+
 export function ThreadView({ store, session }: { store: Store; session: Session }) {
   const ref = useRef<HTMLElement>(null);
   const column = useRef<HTMLDivElement>(null);
