@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { AppearanceMenu, CommandMenu, ConfirmDialog, ConnectDialog, ModelMenu, TasksDialog, WorkspaceDialog } from "./Dialogs";
+import { AppearanceMenu, CommandMenu, ConfirmDialog, ConnectDialog, ModelMenu, ResumeDialog, TasksDialog, WorkspaceDialog } from "./Dialogs";
 import { loadAppearance, resolveTheme, saveAppearance, type Appearance } from "./appearance";
 import { Icon } from "./Icon";
 import { isAndroid, isTouch, takeOpenedSession } from "./platform";
 import { firstAsk, isSending, isWaiting, matchCommands, runningTasks, type Ask, type SlashCommand, type Todo } from "./model";
 import { formatAgo, groupProjects, recentSessions, type ProjectGroupData } from "./sidebar";
-import { describeCwd, NEW_DRAFT, type Session, type Store } from "./store";
+import { describeCwd, isResumeCommand, NEW_DRAFT, type Session, type Store } from "./store";
 import { describeTool, ThreadView } from "./Thread";
 
 function askHint(ask?: Ask): string {
@@ -48,8 +48,9 @@ function SessionRow({ store, session, project, ago }: { store: Store; session: S
         {ago ? <span className="ago">{ago}</span> : null}
       </button>
       {session.running ? (
-        <button className="row-stop" aria-label={`结束会话 ${session.title}`} title="结束会话" onClick={() => store.askStop(session)}><Icon name="close" size={12} /></button>
+        <button className="row-stop" aria-label={`结束会话 ${session.title}`} title="结束会话（之后发消息可接着聊）" onClick={() => store.askStop(session)}><Icon name="stop" size={12} /></button>
       ) : null}
+      <button className="row-close" aria-label={`关闭会话 ${session.title}`} title="关闭会话（/resume 找回）" onClick={() => store.askArchive(session)}><Icon name="close" size={12} /></button>
     </div>
   );
 }
@@ -114,7 +115,7 @@ function useTick(active: boolean) {
 }
 
 function Sidebar({ store }: { store: Store }) {
-  const sessions = [...store.sessions.values()];
+  const sessions = [...store.sessions.values()].filter((s) => !s.archived);
   useTick(sessions.some((s) => s.running));
   const groups = groupProjects(sessions);
   const recent = recentSessions(sessions, RECENT_LIMIT);
@@ -428,6 +429,11 @@ function Welcome({ store }: { store: Store }) {
   };
   const submit = (message: string) => {
     if (!message.trim()) return;
+    if (isResumeCommand(message)) {
+      setText("");
+      store.openResume();
+      return;
+    }
     // 还没选工作区时先选，文字留在输入框里。
     if (!store.cwd) {
       setText(message);
@@ -530,6 +536,7 @@ export function App({ store }: { store: Store }) {
       {store.showSettings ? <ConnectDialog store={store} /> : null}
       {store.showWorkspace ? <WorkspaceDialog store={store} /> : null}
       {store.stopping ? <ConfirmDialog store={store} session={store.stopping} /> : null}
+      {store.showResume ? <ResumeDialog store={store} /> : null}
       {store.showTasks && session ? <TasksDialog store={store} session={session} /> : null}
     </div>
   );

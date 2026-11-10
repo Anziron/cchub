@@ -3,6 +3,7 @@ import { Icon } from "./Icon";
 import { FONTS, SIZES, THEMES, type Appearance } from "./appearance";
 import { backgroundTasks, findModel, hubHost, hubUrl, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
 import { backgroundStatus, isAndroid, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
+import { formatAgo } from "./sidebar";
 import { describeCwd, type Session, type Store } from "./store";
 
 /** 弹窗。Esc 只关弹窗，不能冒泡到窗口上变成中断任务。 */
@@ -246,15 +247,61 @@ export function CommandMenu({ commands, selected, onChoose }: { commands: SlashC
 export function ConfirmDialog({ store, session }: { store: Store; session: Session }) {
   const tasks = runningTasks(session.thread).length;
   return (
-    <Modal title="结束这个会话？" onClose={() => store.cancelStop()}>
+    <Modal title={store.archiveAfterStop ? "关闭这个会话？" : "结束这个会话？"} onClose={() => store.cancelStop()}>
       <p className="help first">
         「{session.title}」还在工作{tasks ? `，后台有 ${tasks} 个任务` : ""}。结束后正在执行的操作会被终止，可能留下没做完的改动。
         之后在这个会话里发消息可以接着聊。
       </p>
       <div className="actions end">
         <button className="btn quiet" autoFocus onClick={() => store.cancelStop()}>继续运行</button>
-        <button className="btn solid" onClick={() => store.stopSession(session)}>结束会话</button>
+        {store.archiveAfterStop
+          ? <button className="btn solid" onClick={() => store.archive(session)}>关闭会话</button>
+          : <button className="btn solid" onClick={() => store.stopSession(session)}>结束会话</button>}
       </div>
+    </Modal>
+  );
+}
+
+/** `/resume`：已关闭的会话，按标题或项目名搜索，选中后回到侧边栏并打开。 */
+export function ResumeDialog({ store }: { store: Store }) {
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState(0);
+  const q = query.trim().toLowerCase();
+  const sessions = store.archivedSessions().filter((s) => !q || `${s.title} ${describeCwd(s.cwd).project}`.toLowerCase().includes(q));
+  const now = Math.floor(Date.now() / 1000);
+  const pick = (session?: Session) => { if (session) store.unarchive(session); };
+  return (
+    <Modal title="找回已关闭的会话" onClose={() => store.closeResume()}>
+      <input
+        className="resume-search"
+        autoFocus
+        placeholder="搜索标题或项目"
+        value={query}
+        onChange={(event) => { setQuery(event.target.value); setSelected(0); }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown") { event.preventDefault(); setSelected((i) => Math.min(i + 1, sessions.length - 1)); }
+          else if (event.key === "ArrowUp") { event.preventDefault(); setSelected((i) => Math.max(i - 1, 0)); }
+          else if (event.key === "Enter") { event.preventDefault(); pick(sessions[selected]); }
+        }}
+      />
+      <div className="resume-list" role="listbox">
+        {!sessions.length ? <p className="empty">{q ? "没有匹配的会话" : "没有已关闭的会话"}</p> : null}
+        {sessions.map((session, index) => (
+          <button
+            key={session.id}
+            role="option"
+            aria-selected={index === selected}
+            className={`resume-item${index === selected ? " current" : ""}`}
+            onMouseEnter={() => setSelected(index)}
+            onClick={() => pick(session)}
+          >
+            <span className="title">{session.title}</span>
+            <em>{describeCwd(session.cwd).project || "服务器"}</em>
+            <span className="ago">{session.updated ? formatAgo(session.updated, now) : ""}</span>
+          </button>
+        ))}
+      </div>
+      <p className="help">关闭超过 7 天没有更新的会话会被自动清理。</p>
     </Modal>
   );
 }
