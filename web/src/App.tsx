@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent a
 import { AppearanceMenu, CommandMenu, ConfirmDialog, ConnectDialog, ModelMenu, ResumeDialog, TasksDialog, WorkspaceDialog } from "./Dialogs";
 import { loadAppearance, resolveTheme, saveAppearance, type Appearance } from "./appearance";
 import { Icon } from "./Icon";
-import { isAndroid, isTouch, takeOpenedSession } from "./platform";
+import { isAndroid, isTouch, pageVisible, takeOpenedSession } from "./platform";
 import { firstAsk, isSending, isWaiting, matchCommands, runningTasks, type Ask, type SlashCommand, type Todo } from "./model";
 import { formatAgo, groupProjects, recentSessions, type ProjectGroupData } from "./sidebar";
 import { describeCwd, isResumeCommand, NEW_DRAFT, type Session, type Store } from "./store";
@@ -104,12 +104,12 @@ function Quota({ label, window }: { label: string; window?: QuotaWindow }) {
   );
 }
 
-/** 有会话在跑时每秒刷新用时，窗口不在前台时不刷新。 */
+/** 有会话在跑时每秒刷新用时，窗口看不见时不刷新（失去焦点照常刷新）。 */
 function useTick(active: boolean) {
   const [, setNow] = useState(0);
   useEffect(() => {
     if (!active) return;
-    const timer = setInterval(() => { if (document.hasFocus()) setNow(Date.now()); }, 1000);
+    const timer = setInterval(() => { if (pageVisible()) setNow(Date.now()); }, 1000);
     return () => clearInterval(timer);
   }, [active]);
 }
@@ -292,11 +292,11 @@ function Activity({ store, session }: { store: Store; session: Session }) {
   const ask = firstAsk(thread);
   const busy = !ask && thread.phase !== "idle";
   const background = runningTasks(thread).length;
-  // 只在运行中每秒刷新用时，窗口不在前台时不刷新。
+  // 只在运行中每秒刷新用时，窗口看不见时不刷新（失去焦点照常刷新）。
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!busy) return;
-    const timer = setInterval(() => document.hasFocus() && setNow(Date.now()), 1000);
+    const timer = setInterval(() => pageVisible() && setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [busy]);
 
@@ -486,12 +486,18 @@ export function App({ store }: { store: Store }) {
 
   // 窗口回到前台时刷新一次会话列表和内存，平时不轮询。
   useEffect(() => {
-    const onFocus = () => { document.body.classList.remove("blurred"); if (store.connection === "connected") store.refresh(); };
-    const onBlur = () => document.body.classList.add("blurred");
+    const onFocus = () => { if (store.connection === "connected") store.refresh(); };
     addEventListener("focus", onFocus);
-    addEventListener("blur", onBlur);
-    return () => { removeEventListener("focus", onFocus); removeEventListener("blur", onBlur); };
+    return () => removeEventListener("focus", onFocus);
   }, [store]);
+
+  // 窗口看不见时暂停动画；只是失去焦点（放在旁边看着）不暂停。
+  useEffect(() => {
+    const sync = () => document.body.classList.toggle("paused", !pageVisible());
+    sync();
+    document.addEventListener("visibilitychange", sync);
+    return () => document.removeEventListener("visibilitychange", sync);
+  }, []);
 
   // Android 上由系统回调：返回键，以及从通知跳到对应会话。
   useEffect(() => {
