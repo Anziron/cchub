@@ -35,6 +35,19 @@ fn unit_name(session: &str) -> String {
     format!("cchub-session-{session}")
 }
 
+/// systemd 把 system 服务放在这里（cgroup v2）。
+const SYSTEM_SLICE: &str = "/sys/fs/cgroup/system.slice";
+
+/// 读 unit 的 `cgroup.procs` 判断进程是否还在。列表和状态检查很频繁，每次起一个
+/// `systemctl` 要约 6ms CPU，空闲时也会持续占用。返回 `None` 表示没有 cgroup v2，要退回 `systemctl`。
+fn cgroup_running(slice: &Path, unit: &str) -> Option<bool> {
+    if !slice.is_dir() {
+        return None;
+    }
+    let procs = slice.join(format!("{unit}.service")).join("cgroup.procs");
+    Some(fs::read_to_string(procs).is_ok_and(|procs| !procs.trim().is_empty()))
+}
+
 impl ProcessHost for SystemdHost {
     fn start(&self, session: &str, dir: &Path, cwd: &Path, resume: Option<&str>) -> io::Result<()> {
         let mut command = Command::new("systemd-run");
@@ -66,9 +79,13 @@ impl ProcessHost for SystemdHost {
     }
 
     fn is_running(&self, session: &str, _dir: &Path) -> bool {
+        let unit = unit_name(session);
+        if let Some(running) = cgroup_running(Path::new(SYSTEM_SLICE), &unit) {
+            return running;
+        }
         Command::new("systemctl")
             .args(["is-active", "--quiet"])
-            .arg(unit_name(session))
+            .arg(unit)
             .status()
             .is_ok_and(|status| status.success())
     }
@@ -154,5 +171,32 @@ mod tests {
             command,
             "exec claude -p --resume id1 <>'/s/a'/in >>'/s/a'/out 2>>'/s/a'/err"
         );
+    }
+
+    #[test]
+    fn cgroup_running_reads_unit_procs() {
+        let slice = std::env::temp_dir().join(format!("hubd-cgroup-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&slice);
+        assert_eq!(
+            cgroup_running(&slice, "cchub-session-a"),
+            None,
+            "没有 cgroup v2"
+        );
+        fs::create_dir_all(slice.join("cchub-session-a.service")).unwrap();
+        fs::create_dir_all(slice.join("cchub-session-b.service")).unwrap();
+        fs::write(slice.join("cchub-session-a.service/cgroup.procs"), "1234\n").unwrap();
+        fs::write(slice.join("cchub-session-b.service/cgroup.procs"), "").unwrap();
+        assert_eq!(cgroup_running(&slice, "cchub-session-a"), Some(true));
+        assert_eq!(
+            cgroup_running(&slice, "cchub-session-b"),
+            Some(false),
+            "进程都退出了"
+        );
+        assert_eq!(
+            cgroup_running(&slice, "cchub-session-c"),
+            Some(false),
+            "unit 已回收"
+        );
+        fs::remove_dir_all(&slice).unwrap();
     }
 }
