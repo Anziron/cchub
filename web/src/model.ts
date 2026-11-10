@@ -284,13 +284,26 @@ export function taskOutputPath(thread: Thread, task: Task): string | null {
   return result?.match(/\/tmp\/claude-[^\s"']+\/tasks\/[^\s"']+\.output/)?.[0] ?? null;
 }
 
+/** 额度事件来自哪里，用来判断新旧。`rank`：运行中的会话用 `Number.MAX_SAFE_INTEGER`，否则用会话日志的最后更新时间。 */
+export interface LimitSource {
+  session: string;
+  seq: number;
+  rank: number;
+}
+
+export interface LimitWindow {
+  utilization: number;
+  resetsAt: number;
+  source?: LimitSource;
+}
+
 export interface RateLimits {
-  fiveHour?: { utilization: number; resetsAt: number };
-  sevenDay?: { utilization: number; resetsAt: number };
+  fiveHour?: LimitWindow;
+  sevenDay?: LimitWindow;
 }
 
 /** 从 `rate_limit_event` 取额度。 */
-export function parseRateLimits(line: string): RateLimits | null {
+export function parseRateLimits(line: string, source?: LimitSource): RateLimits | null {
   if (!line.includes("rate_limit_event")) return null;
   try {
     const event = JSON.parse(line);
@@ -298,7 +311,7 @@ export function parseRateLimits(line: string): RateLimits | null {
     if (!windows) return null;
     const pick = (window: Json) =>
       typeof window?.utilization === "number" && typeof window?.resetsAt === "number"
-        ? { utilization: window.utilization, resetsAt: window.resetsAt }
+        ? { utilization: window.utilization, resetsAt: window.resetsAt, ...(source ? { source } : {}) }
         : undefined;
     return { fiveHour: pick(windows.five_hour), sevenDay: pick(windows.seven_day) };
   } catch {
@@ -306,12 +319,22 @@ export function parseRateLimits(line: string): RateLimits | null {
   }
 }
 
-/** 重放旧日志不能盖掉新数据：重置时间更晚的算新，同一窗口里使用率只增不减。 */
+/**
+ * 重放旧日志不能盖掉新数据。重置时间更晚的窗口算新；同一窗口按来源判断：
+ * 同一会话 seq 大的新，不同会话 `rank` 大的新。使用率不能当新旧依据，官方会提前清零。
+ */
 export function mergeRateLimits(old: RateLimits, next: RateLimits): RateLimits {
-  const newer = (a?: RateLimits["fiveHour"], b?: RateLimits["fiveHour"]) => {
+  const newer = (a?: LimitWindow, b?: LimitWindow) => {
     if (!a || !b) return b ?? a;
     if (b.resetsAt !== a.resetsAt) return b.resetsAt > a.resetsAt ? b : a;
-    return b.utilization >= a.utilization ? b : a;
+    if (!a.source || !b.source) {
+      // 本地缓存的旧数据没有来源，带来源的为准；都没有来源时只能取更高。
+      if (b.source) return b;
+      if (a.source) return a;
+      return b.utilization >= a.utilization ? b : a;
+    }
+    if (a.source.session === b.source.session) return b.source.seq > a.source.seq ? b : a;
+    return b.source.rank >= a.source.rank ? b : a;
   };
   return { fiveHour: newer(old.fiveHour, next.fiveHour), sevenDay: newer(old.sevenDay, next.sevenDay) };
 }

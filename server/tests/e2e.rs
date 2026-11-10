@@ -176,6 +176,7 @@ async fn replay_survives_hubd_kill_and_matches_transcript() {
         ClientMsg::Start {
             session: session.clone(),
             title: None,
+            prompt: None,
             resume: None,
             cwd: None,
         },
@@ -294,6 +295,7 @@ async fn real_claude_under_systemd_survives_hubd_kill() {
         ClientMsg::Start {
             session: session.clone(),
             title: None,
+            prompt: None,
             resume: None,
             cwd: None,
         },
@@ -393,6 +395,7 @@ async fn idle_subscription_does_not_poll() {
         ClientMsg::Start {
             session: "s1".into(),
             title: None,
+            prompt: None,
             resume: None,
             cwd: None,
         },
@@ -435,6 +438,7 @@ async fn reports_device_online_for_project_dir() {
         ClientMsg::Start {
             session: "s1".into(),
             title: None,
+            prompt: None,
             resume: None,
             cwd: Some(project.display().to_string()),
         },
@@ -479,6 +483,7 @@ async fn failed_start_keeps_cwd_and_drops_input() {
     let start = |cwd: Option<String>| ClientMsg::Start {
         session: "s1".into(),
         title: None,
+        prompt: None,
         resume: None,
         cwd,
     };
@@ -559,6 +564,7 @@ async fn attach_beyond_log_end_reports_error() {
         ClientMsg::Start {
             session: "s1".into(),
             title: None,
+            prompt: None,
             resume: None,
             cwd: None,
         },
@@ -616,6 +622,7 @@ async fn replay_scenario(scenario: &str, expected: EventClass) {
         ClientMsg::Start {
             session: session.clone(),
             title: None,
+            prompt: None,
             resume: None,
             cwd: None,
         },
@@ -734,6 +741,7 @@ async fn lists_started_sessions_with_title_and_memory() {
         ClientMsg::Start {
             session: "s1".into(),
             title: Some("修登录".into()),
+            prompt: None,
             resume: None,
             cwd: None,
         },
@@ -796,6 +804,7 @@ async fn invalid_session_id_is_rejected() {
         ClientMsg::Start {
             session: "../x".into(),
             title: None,
+            prompt: None,
             resume: None,
             cwd: None,
         },

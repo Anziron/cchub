@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::auth::is_tailscale_ip;
+use crate::title::DEFAULT_TITLE_CMD;
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:7878";
 const DEFAULT_STATE_DIR: &str = "/var/lib/hubd";
@@ -34,6 +35,10 @@ pub struct Config {
     pub min_available_mb: u64,
     /// 浏览和挂载设备目录的外部命令，协议见 `workspace.rs`。
     pub workspace_cmd: String,
+    /// 把新会话第一条消息概括成标题的命令，协议见 `title.rs`；为空时不生成。
+    pub title_cmd: String,
+    /// systemd 模式下起标题进程的 scope 的 `MemoryMax`。
+    pub title_memory_max_mb: u64,
 }
 
 impl Config {
@@ -79,6 +84,7 @@ impl Config {
         };
         let session_memory_max_mb = megabytes("HUBD_SESSION_MEMORY_MAX_MB", "600")?;
         let min_available_mb = megabytes("HUBD_MIN_AVAILABLE_MB", "300")?;
+        let title_memory_max_mb = megabytes("HUBD_TITLE_MEMORY_MAX_MB", "300")?;
 
         let host = match var("HUBD_HOST", "systemd").as_str() {
             "systemd" => HostKind::Systemd,
@@ -92,6 +98,8 @@ impl Config {
             host,
             claude_cmd: var("HUBD_CLAUDE_CMD", DEFAULT_CLAUDE_CMD),
             workspace_cmd: var("HUBD_WORKSPACE_CMD", "cc-workspace"),
+            title_cmd: var("HUBD_TITLE_CMD", DEFAULT_TITLE_CMD),
+            title_memory_max_mb,
             allowed_users,
             retention: Duration::from_secs(retention_days * 24 * 60 * 60),
             session_memory_max_mb,

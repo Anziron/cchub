@@ -11,6 +11,8 @@ mod runner;
 #[cfg(unix)]
 mod session;
 #[cfg(unix)]
+mod title;
+#[cfg(unix)]
 mod workspace;
 #[cfg(unix)]
 mod ws;
@@ -71,6 +73,11 @@ async fn run(config: config::Config) -> std::io::Result<()> {
         })
     }
 
+    // systemd 模式下 `hubd` 自己有很小的 `MemoryMax`，起标题的进程要放进独立的 scope。
+    let title_memory_mb = match config.host {
+        config::HostKind::Systemd => config.title_memory_max_mb,
+        config::HostKind::Direct => 0,
+    };
     let host: Box<dyn host::ProcessHost> = match config.host {
         config::HostKind::Systemd => Box::new(host::SystemdHost {
             claude_cmd: config.claude_cmd,
@@ -87,6 +94,8 @@ async fn run(config: config::Config) -> std::io::Result<()> {
         allowed_users: config.allowed_users,
         min_available_mb: config.min_available_mb,
         workspace_cmd: config.workspace_cmd,
+        title_cmd: config.title_cmd,
+        title_memory_mb,
     });
 
     let retention = config.retention;

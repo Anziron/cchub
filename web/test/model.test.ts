@@ -300,6 +300,24 @@ test("额度合并：重放旧数据不能盖掉新的", () => {
   assert.equal(mergeRateLimits(now, parseRateLimits(line(0.2, 100))!).fiveHour?.utilization, 0.5, "同一窗口取更高");
   assert.equal(mergeRateLimits(now, parseRateLimits(line(0.9, 50))!).fiveHour?.utilization, 0.5, "旧窗口不算");
   assert.equal(mergeRateLimits(now, parseRateLimits(line(0.1, 200))!).fiveHour?.utilization, 0.1, "新窗口重新算");
+});
+
+test("额度合并：同一窗口官方提前清零也要更新，按来源判断新旧", () => {
+  const line = (utilization: number) => JSON.stringify({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { seven_day: { utilization, resetsAt: 500 } } } });
+  const RUNNING = Number.MAX_SAFE_INTEGER;
+  // 本地缓存里的旧数据没有来源：任何带来源的新事件都能覆盖它。
+  const cached = parseRateLimits(line(0.31))!;
+  const live = mergeRateLimits(cached, parseRateLimits(line(0), { session: "a", seq: 900, rank: RUNNING })!);
+  assert.equal(live.sevenDay?.utilization, 0, "运行中会话报的清零要采用");
+  // 同一会话从头重放：seq 更小，是旧数据。
+  assert.equal(mergeRateLimits(live, parseRateLimits(line(0.31), { session: "a", seq: 10, rank: RUNNING })!).sevenDay?.utilization, 0, "同一会话重放不覆盖");
+  assert.equal(mergeRateLimits(live, parseRateLimits(line(0.01), { session: "a", seq: 1200, rank: RUNNING })!).sevenDay?.utilization, 0.01, "同一会话后面的事件采用");
+  // 已结束的旧会话重放：最后活动时间早于运行中会话，不覆盖。
+  assert.equal(mergeRateLimits(live, parseRateLimits(line(0.31), { session: "old", seq: 99999, rank: 1700000000 })!).sevenDay?.utilization, 0, "旧会话重放不覆盖");
+  // 都已结束时，最后活动更晚的会话为准。
+  const ended = mergeRateLimits({}, parseRateLimits(line(0.2), { session: "b", seq: 5, rank: 1700000100 })!);
+  assert.equal(mergeRateLimits(ended, parseRateLimits(line(0.4), { session: "c", seq: 5, rank: 1700000000 })!).sevenDay?.utilization, 0.2);
+  assert.equal(mergeRateLimits(ended, parseRateLimits(line(0.05), { session: "c", seq: 5, rank: 1700000200 })!).sevenDay?.utilization, 0.05);
   assert.equal(parseRateLimits("{\"type\":\"user\"}"), null);
 });
 

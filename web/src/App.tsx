@@ -3,6 +3,7 @@ import { CommandMenu, ConfirmDialog, ConnectDialog, ModelMenu, TasksDialog, Work
 import { Icon } from "./Icon";
 import { isAndroid, isTouch, takeOpenedSession } from "./platform";
 import { firstAsk, isSending, isWaiting, matchCommands, runningTasks, type Ask, type SlashCommand, type Todo } from "./model";
+import { formatAgo, groupProjects, recentSessions, type ProjectGroupData } from "./sidebar";
 import { describeCwd, NEW_DRAFT, type Session, type Store } from "./store";
 import { describeTool, ThreadView } from "./Thread";
 
@@ -12,20 +13,27 @@ function askHint(ask?: Ask): string {
   return ask?.toolName === "Bash" ? "要运行一条命令" : "要你批准一个操作";
 }
 
-function SessionRow({ store, session }: { store: Store; session: Session }) {
+function StateIcon({ waiting, running }: { waiting: boolean; running: boolean }) {
+  // 空闲不显示图标，但保留占位，标题才能对齐。
+  return <span className={`state${waiting ? " wait" : running ? " run" : ""}`} aria-hidden="true" />;
+}
+
+/** `ago` 有值时是“最近”列表：标题后带项目名，右侧显示相对时间。 */
+function SessionRow({ store, session, project, ago }: { store: Store; session: Session; project?: string; ago?: string }) {
   const waiting = isWaiting(session.thread);
   const current = store.selected === session.id;
   const status = waiting || !session.running ? "" : sessionStatus(session);
   const started = session.thread.phase !== "idle" ? session.thread.turnStartedAt : undefined;
   return (
     <div className="row-wrap">
-      <button className={`row${current ? " current" : ""}`} onClick={() => store.select(session.id)}>
-        <span className={`dot${waiting ? " wait" : session.running ? " run" : ""}`} />
+      <button className={`row session${current ? " current" : ""}`} onClick={() => store.select(session.id)}>
+        <StateIcon waiting={waiting} running={session.running} />
         <span className="name">
-          {session.title}
+          <span className="title">{session.title}{project ? <em>{project}</em> : null}</span>
           {waiting ? <small>{askHint(firstAsk(session.thread))}</small> : null}
           {status ? <small className="status">{status}{started ? ` · ${formatDuration(Date.now() - started)}` : ""}</small> : null}
         </span>
+        {ago ? <span className="ago">{ago}</span> : null}
       </button>
       {session.running ? (
         <button className="row-stop" aria-label={`结束会话 ${session.title}`} title="结束会话" onClick={() => store.askStop(session)}><Icon name="close" size={12} /></button>
@@ -37,26 +45,25 @@ function SessionRow({ store, session }: { store: Store; session: Session }) {
 const VISIBLE_SESSIONS = 5;
 const COLLAPSED_KEY = "cchub.collapsedProjects";
 
-function ProjectGroup({ store, project, sessions, collapsed, toggle }: {
+function ProjectGroup({ store, group, collapsed, toggle }: {
   store: Store;
-  project: string;
-  sessions: Session[];
+  group: ProjectGroupData<Session>;
   collapsed: boolean;
   toggle: () => void;
 }) {
+  const { sessions } = group;
   const [showAll, setShowAll] = useState(false);
-  // 正在看的会话不能被收起来。
-  const shown = sessions.filter((s, i) => (collapsed ? false : showAll || i < VISIBLE_SESSIONS) || s.id === store.selected);
+  // 正在看的会话和等你决定的会话不能被收起来。
+  const shown = sessions.filter((s, i) => (collapsed ? false : showAll || i < VISIBLE_SESSIONS) || s.id === store.selected || isWaiting(s.thread));
   const hidden = collapsed ? 0 : sessions.length - shown.length;
   return (
     <div className={`group${collapsed ? " closed" : ""}`}>
-      <button className="row project" title={sessions[0]?.cwd} aria-expanded={!collapsed} onClick={toggle}>
+      <button className="row project" title={group.key || undefined} aria-expanded={!collapsed} onClick={toggle}>
         <Icon name="chev" size={11} />
-        <span className="name">{project || "未指定目录"}</span>
-        <span className="hint">{sessions.length}</span>
+        <span className="name">{group.project}{group.device ? <em>{group.device}</em> : null}</span>
       </button>
       {shown.map((s) => <SessionRow key={s.id} store={store} session={s} />)}
-      {hidden > 0 ? <button className="row more" onClick={() => setShowAll(true)}>展开其余 {hidden} 个</button> : null}
+      {hidden > 0 ? <button className="row more" onClick={() => setShowAll(true)}>显示更多（{hidden}）</button> : null}
       {showAll && !collapsed && sessions.length > VISIBLE_SESSIONS ? <button className="row more" onClick={() => setShowAll(false)}>收起</button> : null}
     </div>
   );
@@ -90,14 +97,11 @@ function useTick(active: boolean) {
 }
 
 function Sidebar({ store }: { store: Store }) {
-  const { waiting, running, recent } = store.groups();
-  useTick(running.length > 0);
-  const projects = new Map<string, Session[]>();
-  // 按完整路径分组：不同设备上可能有同名项目。
-  for (const session of recent) {
-    const key = session.cwd ?? "";
-    projects.set(key, [...(projects.get(key) ?? []), session]);
-  }
+  const sessions = [...store.sessions.values()];
+  useTick(sessions.some((s) => s.running));
+  const groups = groupProjects(sessions);
+  const recent = recentSessions(sessions);
+  const now = Math.floor(Date.now() / 1000);
   const [collapsed, setCollapsed] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
@@ -116,31 +120,18 @@ function Sidebar({ store }: { store: Store }) {
         <i><Icon name="plus" size={13} /></i><span className="name">新建会话</span>
       </button>
       <div className="side-scroll">
-        {waiting.length ? (
-          <section className="attention">
-            <h2>等你决定</h2>
-            {waiting.map((s) => <SessionRow key={s.id} store={store} session={s} />)}
-          </section>
-        ) : null}
-        {running.length ? (
+        {groups.length ? (
           <section>
-            <h2>进行中</h2>
-            {running.map((s) => <SessionRow key={s.id} store={store} session={s} />)}
+            <h2>项目</h2>
+            {groups.map((g) => (
+              <ProjectGroup key={g.key} store={store} group={g} collapsed={collapsed.includes(g.key)} toggle={() => toggle(g.key)} />
+            ))}
           </section>
         ) : null}
         {recent.length ? (
           <section>
             <h2>最近</h2>
-            {[...projects].map(([key, sessions]) => (
-              <ProjectGroup
-                key={key}
-                store={store}
-                project={describeCwd(key).project}
-                sessions={sessions}
-                collapsed={collapsed.includes(key)}
-                toggle={() => toggle(key)}
-              />
-            ))}
+            {recent.map((r) => <SessionRow key={r.session.id} store={store} session={r.session} project={r.project} ago={formatAgo(r.session.updated, now)} />)}
           </section>
         ) : null}
       </div>
