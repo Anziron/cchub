@@ -13,9 +13,20 @@ function askHint(ask?: Ask): string {
   return ask?.toolName === "Bash" ? "要运行一条命令" : "要你批准一个操作";
 }
 
-function StateIcon({ waiting, running }: { waiting: boolean; running: boolean }) {
-  // 空闲不显示图标，但保留占位，标题才能对齐。
-  return <span className={`state${waiting ? " wait" : running ? " run" : ""}`} aria-hidden="true" />;
+type RowState = "wait" | "busy" | "open" | "";
+
+/** 等你决定 > 正在运行（转圈）> 没结束但空闲（绿点）> 已结束（只占位）。 */
+function rowState(session: Session): RowState {
+  if (isWaiting(session.thread)) return "wait";
+  if (!session.running) return "";
+  return session.thread.phase !== "idle" || isSending(session.thread) ? "busy" : "open";
+}
+
+const STATE_ORDER: RowState[] = ["wait", "busy", "open", ""];
+
+function StateIcon({ state }: { state: RowState }) {
+  // 已结束不显示图标，但保留占位，标题才能对齐。
+  return <span className={`state${state ? ` ${state}` : ""}`} aria-hidden="true" />;
 }
 
 /** `ago` 有值时是“最近”列表：标题后带项目名，右侧显示相对时间。 */
@@ -27,7 +38,7 @@ function SessionRow({ store, session, project, ago }: { store: Store; session: S
   return (
     <div className="row-wrap">
       <button className={`row session${current ? " current" : ""}`} onClick={() => store.select(session.id)}>
-        <StateIcon waiting={waiting} running={session.running} />
+        <StateIcon state={rowState(session)} />
         <span className="name">
           <span className="title">{session.title}{project ? <em>{project}</em> : null}</span>
           {waiting ? <small>{askHint(firstAsk(session.thread))}</small> : null}
@@ -44,6 +55,9 @@ function SessionRow({ store, session, project, ago }: { store: Store; session: S
 
 const VISIBLE_SESSIONS = 5;
 const COLLAPSED_KEY = "cchub.collapsedProjects";
+/** “最近”的收起状态和项目组存在一起，用不会是路径的键。 */
+const RECENT_KEY = "#recent";
+const RECENT_LIMIT = 5;
 
 function ProjectGroup({ store, group, collapsed, toggle }: {
   store: Store;
@@ -53,14 +67,16 @@ function ProjectGroup({ store, group, collapsed, toggle }: {
 }) {
   const { sessions } = group;
   const [showAll, setShowAll] = useState(false);
-  // 正在看的会话和等你决定的会话不能被收起来。
-  const shown = sessions.filter((s, i) => (collapsed ? false : showAll || i < VISIBLE_SESSIONS) || s.id === store.selected || isWaiting(s.thread));
+  // 收起时整组都藏起来，组标题右侧显示组里最要紧的状态，等你决定的不会被漏掉。
+  const shown = collapsed ? [] : sessions.filter((s, i) => showAll || i < VISIBLE_SESSIONS || s.id === store.selected);
   const hidden = collapsed ? 0 : sessions.length - shown.length;
+  const state = collapsed ? STATE_ORDER.find((value) => sessions.some((s) => rowState(s) === value)) ?? "" : "";
   return (
     <div className={`group${collapsed ? " closed" : ""}`}>
       <button className="row project" title={group.key || undefined} aria-expanded={!collapsed} onClick={toggle}>
         <Icon name="chev" size={11} />
         <span className="name">{group.project}{group.device ? <em>{group.device}</em> : null}</span>
+        {state ? <StateIcon state={state} /> : null}
       </button>
       {shown.map((s) => <SessionRow key={s.id} store={store} session={s} />)}
       {hidden > 0 ? <button className="row more" onClick={() => setShowAll(true)}>显示更多（{hidden}）</button> : null}
@@ -100,7 +116,7 @@ function Sidebar({ store }: { store: Store }) {
   const sessions = [...store.sessions.values()];
   useTick(sessions.some((s) => s.running));
   const groups = groupProjects(sessions);
-  const recent = recentSessions(sessions);
+  const recent = recentSessions(sessions, RECENT_LIMIT);
   const now = Math.floor(Date.now() / 1000);
   const [collapsed, setCollapsed] = useState<string[]>(() => {
     try {
@@ -129,9 +145,13 @@ function Sidebar({ store }: { store: Store }) {
           </section>
         ) : null}
         {recent.length ? (
-          <section>
-            <h2>最近</h2>
-            {recent.map((r) => <SessionRow key={r.session.id} store={store} session={r.session} project={r.project} ago={formatAgo(r.session.updated, now)} />)}
+          <section className={`group${collapsed.includes(RECENT_KEY) ? " closed" : ""}`}>
+            <h2>
+              <button className="fold" aria-expanded={!collapsed.includes(RECENT_KEY)} onClick={() => toggle(RECENT_KEY)}>
+                最近<Icon name="chev" size={10} />
+              </button>
+            </h2>
+            {collapsed.includes(RECENT_KEY) ? null : recent.map((r) => <SessionRow key={r.session.id} store={store} session={r.session} project={r.project} ago={formatAgo(r.session.updated, now)} />)}
           </section>
         ) : null}
       </div>

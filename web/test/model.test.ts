@@ -415,3 +415,19 @@ test("中断状态：空闲时不记，重复按不重置时间，一轮结束�
   onProcessExit(thread);
   assert.equal(thread.interruptAt, undefined);
 });
+
+test("切换模型时 CLI 回显的本地命令输出显示成提示，不当成用户消息，也不进入思考", () => {
+  const thread = newThread();
+  apply(thread, JSON.stringify({ type: "user", uuid: "x1", isReplay: true, message: { role: "user", content: "<local-command-stdout>Set model to `opus (claude-opus-5-5)`</local-command-stdout>" } }));
+  assert.deepEqual(thread.items, [{ kind: "notice", id: "x1", text: "已切换模型：opus (claude-opus-5-5)" }]);
+  assert.equal(thread.phase, "idle");
+  // 会话记录里的形式：命令和输出合在一条里。
+  const history = newThread();
+  apply(history, JSON.stringify({ type: "user", uuid: "x2", message: { role: "user", content: "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>\n<local-command-stdout>Set model to `sonnet (claude-sonnet-5-5)`</local-command-stdout>" } }));
+  assert.deepEqual(history.items, [{ kind: "notice", id: "x2", text: "已切换模型：sonnet (claude-sonnet-5-5)" }]);
+  assert.equal(history.phase, "idle");
+  // 其他本地命令的输出原样作为提示。
+  const other = newThread();
+  apply(other, JSON.stringify({ type: "user", uuid: "x3", message: { role: "user", content: "<local-command-stdout>Done</local-command-stdout>" } }));
+  assert.deepEqual(other.items, [{ kind: "notice", id: "x3", text: "Done" }]);
+});

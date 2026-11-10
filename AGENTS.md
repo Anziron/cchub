@@ -49,6 +49,7 @@
 - 后台 Bash 可能先 `task_started`（`is_backgrounded: false`）再由 `task_updated` 转后台，以 `background_tasks_changed` 为准；这些事件没有时间戳，开始时间只能由客户端记。
 - 额度和上下文不要调用 `/usage`、`/context`（写进会话记录）→ 用 `rate_limit_event` 和最后一条 `assistant` 的 `usage`。
 - 官方会在窗口中途把额度清零，`resetsAt` 不变 → 合并额度不能按使用率大小判断新旧，要按事件来源（同一会话比 `seq`，不同会话比运行状态和日志更新时间）。
+- `set_model` 会让 CLI 回显一条 `type: user` 的 `<local-command-stdout>Set model to …</local-command-stdout>`（会话记录里带 `/model` 命令名），模型能看到但不会回复 → 显示成提示，不能当用户消息，也不能把状态改成思考中。
 - 进程已回收时往 FIFO 写 `set_model` 会丢 → 前端记下 `pendingModel`，恢复进程时在用户消息之前补发。
 - 标题由 `hubd` 后台跑 `HUBD_TITLE_CMD`（默认 haiku）生成：`hubd` 的 `MemoryMax` 只有 64M，systemd 模式下必须用 `systemd-run --scope` 放进独立 cgroup；超时要结束整个进程组。
 - CLI 常发内容为空的思考块，同一条消息里还可能一空一实 → 空块不显示，不要当成“思考过”。

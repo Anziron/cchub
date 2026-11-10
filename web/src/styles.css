@@ -15,6 +15,7 @@
   --line-2: rgba(31, 30, 29, .17);
   --accent: #c6613f;
   --accent-soft: rgba(198, 97, 63, .1);
+  --ok: #2f9e62;
   --solid: #1f1e1d;
   --on-solid: #faf9f5;
   --code-bg: #f4f2ec;
@@ -46,6 +47,7 @@
   --line-2: rgba(250, 249, 245, .18);
   --accent: #d97757;
   --accent-soft: rgba(217, 119, 87, .14);
+  --ok: #4cc386;
   --solid: #faf9f5;
   --on-solid: #1f1e1d;
   --code-bg: #1f1e1d;
@@ -88,7 +90,13 @@ svg { display: block; flex: none; }
 .side section:first-child h2 { margin-top: 10px; }
 .state { position: relative; display: block; width: 12px; height: 12px; flex: none; }
 .state.wait::after { content: ""; position: absolute; inset: 2px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: breathe 2s ease-in-out infinite; }
-.state.run::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid var(--line-2); border-top-color: var(--text-2); animation: spin .8s linear infinite; }
+.state.open::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--ok); }
+.project .state { margin-left: auto; }
+.fold { display: inline-flex; align-items: center; gap: 4px; color: inherit; font: inherit; letter-spacing: inherit; }
+.fold:hover { color: var(--text-2); }
+.fold svg { transition: transform .15s var(--ease); transform: rotate(90deg); }
+.group.closed .fold svg { transform: none; }
+.state.busy::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid var(--line-2); border-top-color: var(--text-2); animation: spin .8s linear infinite; }
 .session { gap: 8px; }
 .session .title { display: flex; align-items: baseline; gap: 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .row em { flex: none; color: var(--faint); font-size: 11.5px; font-style: normal; }
@@ -252,7 +260,7 @@ kbd { margin-left: 8px; padding: 0 4px; border-radius: 4px; box-shadow: inset 0 
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
-body.blurred .state.wait::after, body.blurred .state.run::after, body.blurred .pulse { animation-play-state: paused; }
+body.blurred .state.wait::after, body.blurred .state.busy::after, body.blurred .pulse { animation-play-state: paused; }
 @media (max-width: 860px) { .app { grid-template-columns: 1fr; } .main { margin: 0; border-radius: 0; } .side { display: none; } .health { display: none; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
