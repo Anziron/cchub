@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { Icon } from "./Icon";
 import { FONTS, SIZES, THEMES, type Appearance } from "./appearance";
 import { backgroundTasks, effortsFor, findModel, hubHost, hubUrl, isTranscript, parseTranscript, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
@@ -176,6 +176,32 @@ export function WorkspaceDialog({ store }: { store: Store }) {
 }
 
 /**
+ * 弹出菜单放在按钮上方还是下方，最高多高。新会话页的输入框在窗口中间，
+ * 上方空间不够时菜单会被 `.main` 的 `overflow: hidden` 裁掉，滚也滚不到被裁的部分。
+ */
+function useMenuFit(anchor: RefObject<HTMLElement | null>, open: boolean, deps: unknown[]): CSSProperties {
+  const [fit, setFit] = useState<CSSProperties>({});
+  useLayoutEffect(() => {
+    if (!open || !anchor.current) return;
+    const measure = () => {
+      const box = anchor.current!.getBoundingClientRect();
+      const bounds = anchor.current!.closest(".main")?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight };
+      const gap = 6 + 8;
+      const above = box.top - bounds.top - gap;
+      const below = bounds.bottom - box.bottom - gap;
+      const menu = anchor.current!.querySelector<HTMLElement>(".menu");
+      const need = menu ? menu.scrollHeight : 0;
+      const down = above < need && below > above;
+      setFit(down ? { top: "calc(100% + 6px)", bottom: "auto", maxHeight: below } : { maxHeight: above });
+    };
+    measure();
+    addEventListener("resize", measure);
+    return () => removeEventListener("resize", measure);
+  }, [open, ...deps]);
+  return fit;
+}
+
+/**
  * 模型和推理强度（参考 Codex）：主视图是强度滑块，上面显示强度和当前模型，点模型名换成模型列表。
  * 拖滑块不关菜单；右上角恢复成模型默认强度。
  */
@@ -197,6 +223,7 @@ export function ModelMenu({ models, model, effort, onChange, onEffort }: {
   // 没设过强度时滑块停在“中”附近，只是示意，标题显示“默认”。
   const position = index >= 0 ? index : Math.max(0, efforts.findIndex((e) => e.value === "medium"));
   const close = () => { setOpen(false); setPicking(false); };
+  const fit = useMenuFit(ref, open, [picking, models.length]);
   // 最高档有“升级”的波动动效（CSS），切到别的档位就停。
   useEffect(() => {
     if (!open) return;
@@ -224,7 +251,7 @@ export function ModelMenu({ models, model, effort, onChange, onEffort }: {
         <Icon name="down" size={12} />
       </button>
       {open && picking ? (
-        <div className="menu" role="menu">
+        <div className="menu" role="menu" style={fit}>
           <button type="button" className="menu-back" onClick={() => setPicking(false)}><Icon name="back" size={13} />模型</button>
           {models.map((option) => (
             <button
@@ -240,7 +267,7 @@ export function ModelMenu({ models, model, effort, onChange, onEffort }: {
           ))}
         </div>
       ) : open ? (
-        <div className="menu effort-card">
+        <div className="menu effort-card" style={fit}>
           {effortLabel ? (
             <button type="button" className="effort-reset" title="恢复默认强度" aria-label="恢复默认强度" onClick={() => onEffort(undefined)}><Icon name="reset" size={14} /></button>
           ) : null}

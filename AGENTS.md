@@ -71,3 +71,4 @@
 - 子代理任务的 `output_file` 是指向子代理完整记录 `.jsonl` 的符号链接，夹着 `api-request-*`、`attachment` 等内部记录，单行可达几十 KB → `read_task_output` 对 `.jsonl` 只回整行的 `user` / `assistant`，前端用 `parseTranscript` 按对话显示；普通任务仍是纯文本末尾。
 - 空闲回收（`idle.rs`）判定只看 `out` 末尾的信封：`result` 要在最后的 `assistant` / `control_request` 之后，最近的 `background_tasks_changed` 快照要为空；用户输入和 `set_model` 回显是 `user`，不算活动。被回收的会话前端照常走 `--resume` 恢复。
 - 推理强度用 `apply_flag_settings` 的 `{effortLevel}`（`null` 恢复默认，`max` 也可用），不要发 `/effort`；它只在当前进程有效，`--resume` 后要重发；实时事件不带当前强度，只有 `.jsonl` 的 `assistant` 带 `effort`。
+- 新会话页输入框在窗口中间，向上弹的菜单在矮窗口里会被 `.main` 裁掉、滚不到 → 弹出菜单用 `Dialogs.tsx` 的 `useMenuFit` 按上下剩余空间定方向和最大高度；改菜单后用 900×460 窗口检查新会话页。

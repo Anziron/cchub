@@ -471,10 +471,11 @@ html, body, #root { height: 100%; }
 .effort-slider input:focus-visible { outline: none; }
 .effort-slider input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--accent-soft), 0 1px 3px rgba(0, 0, 0, .3); }
 /* 最高档：已选部分流光，滑块向外扩散波纹，文字呼吸。 */
-.effort-slider.max::before { background: linear-gradient(100deg, var(--accent) 0%, var(--accent) 35%, color-mix(in srgb, var(--accent), #fff 45%) 50%, var(--accent) 65%, var(--accent) 100%) 0 0 / 220% 100%; animation: effort-sheen 1.8s linear infinite; }
+.effort-slider.max::before { background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, .5) 50%, transparent 70%) no-repeat, var(--accent); background-size: 60% 100%, auto; animation: effort-sheen 2.2s ease-in-out infinite; }
 .effort-slider.max::after { content: ""; position: absolute; top: 0; left: calc((100% - var(--h)) * var(--pos)); width: var(--h); height: var(--h); border-radius: 50%; box-shadow: 0 0 0 0 var(--accent); pointer-events: none; animation: effort-ripple 1.6s var(--ease) infinite; }
 .effort-card strong.max { animation: effort-glow 1.6s ease-in-out infinite; }
-@keyframes effort-sheen { from { background-position: 110% 0; } to { background-position: -110% 0; } }
+/* 高光层不平铺：每轮从左边外面进、右边外面出，再停一会儿，不会半路跳回。60% 宽时 -150%/250% 正好完全在两侧外面。 */
+@keyframes effort-sheen { 0% { background-position: -150% 0, 0 0; } 70%, 100% { background-position: 250% 0, 0 0; } }
 @keyframes effort-ripple { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); } 100% { box-shadow: 0 0 0 12px transparent; } }
 @keyframes effort-glow { 50% { text-shadow: 0 0 10px color-mix(in srgb, var(--accent) 60%, transparent); } }
 @media (prefers-reduced-motion: reduce) { .effort-slider.max::before, .effort-slider.max::after, .effort-card strong.max { animation: none; } }
