@@ -47,6 +47,8 @@ pub enum ClientMsg {
     Input { session: String, line: String },
     /// 结束会话进程。
     Stop { session: String },
+    /// 关闭会话：从侧边栏移走，进程在运行就一起结束；`archived: false` 时恢复。再次 `Start` 也会恢复。
+    Archive { session: String, archived: bool },
     /// 浏览设备目录。省略 `device` 时列设备，省略 `path` 时从设备的起始位置开始。
     Browse {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -70,6 +72,9 @@ pub struct SessionInfo {
     /// 日志最后更新时间，Unix 秒。
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub updated: Option<u64>,
+    /// 已关闭：不显示在侧边栏，可用 `/resume` 找回。
+    #[serde(default)]
+    pub archived: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

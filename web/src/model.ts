@@ -46,6 +46,8 @@ export type Item =
   | ToolItem
   | { kind: "ask"; id: string; requestId: string }
   | { kind: "interrupted"; id: string }
+  /** 本地命令的输出（如切换模型），不是用户说的话，也不会让模型开始回复。 */
+  | { kind: "notice"; id: string; text: string }
   | { kind: "error"; id: string; text: string };
 
 export interface Todo {
@@ -206,6 +208,19 @@ function commandText(content: string): string | null {
   if (!name) return null;
   const args = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(content)?.[1];
   return args ? `${name} ${args}` : name;
+}
+
+/**
+ * 本地命令的输出：`set_model` 时 CLI 回显 `<local-command-stdout>Set model to …`，
+ * 会话记录里还带着 `/model` 命令本身。其他带命令名的仍按内置命令回传处理。
+ */
+function localNotice(content: string): string | null {
+  const output = /<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/.exec(content)?.[1]?.trim();
+  if (output === undefined) return null;
+  const command = commandText(content);
+  if (command && !command.startsWith("/model")) return null;
+  const model = /^Set model to `?([^`]+?)`?$/.exec(output)?.[1];
+  return model ? `已切换模型：${model}` : output;
 }
 
 /** CLI 注入给模型的消息，不是用户说的话。 */
@@ -369,6 +384,11 @@ function onUser(thread: Thread, event: Json): void {
     }
     if (isInjected(event)) {
       onInjected(thread, event, content);
+      return;
+    }
+    const notice = localNotice(content);
+    if (notice !== null) {
+      thread.items.push({ kind: "notice", id: event.uuid ?? `n${thread.items.length}`, text: notice });
       return;
     }
     const command = commandText(content);

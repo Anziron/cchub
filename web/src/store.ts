@@ -46,6 +46,8 @@ export interface Session {
   commands?: SlashCommand[];
   /** 进程没在运行时选的模型：写进 FIFO 会丢，等下次启动时在用户消息之前补发。 */
   pendingModel?: string;
+  /** 已关闭：不在侧边栏显示，用 `/resume` 找回。 */
+  archived: boolean;
 }
 
 const URL_KEY = "cchub.url";
@@ -107,6 +109,10 @@ export class Store {
   showDrawer = isNarrow();
   /** 等确认结束的会话。 */
   stopping: Session | null = null;
+  /** 确认结束后是关闭会话还是只结束进程。 */
+  archiveAfterStop = false;
+  /** `/resume` 弹窗。 */
+  showResume = false;
   taskOutput: { path: string; text: string | null; error: string | null } | null = null;
   /** 新会话要用的工作区，服务器上的路径。 */
   cwd = localStorage.getItem(CWD_KEY) ?? "";
@@ -188,6 +194,7 @@ export class Store {
         running: false,
         updated: 0,
         logUpdated: 0,
+        archived: false,
         deviceOnline: true,
         attached: false,
         thread: newThread(),
@@ -210,6 +217,7 @@ export class Store {
           session.cwd = info.cwd ?? session.cwd;
           session.updated = info.updated ?? session.updated;
           session.logUpdated = info.updated ?? session.logUpdated;
+          session.archived = info.archived ?? false;
           session.running = info.running;
           // 运行中的都订阅，这样才能知道哪个在等人决定。
           if (info.running || info.id === this.selected) this.attach(session);
@@ -341,7 +349,8 @@ export class Store {
   }
 
   commandsFor(session?: Session): SlashCommand[] {
-    return session?.commands ?? this.commands;
+    const commands = session?.commands ?? this.commands;
+    return commands.some((c) => c.name === "resume") ? commands : [RESUME_COMMAND, ...commands];
   }
 
   private attach(session: Session): void {
@@ -370,6 +379,7 @@ export class Store {
   /** 系统返回键：先关弹窗，再回会话列表；已在列表时返回 false，由系统退到后台。 */
   back(): boolean {
     if (this.stopping) this.cancelStop();
+    else if (this.showResume) this.closeResume();
     else if (this.showTasks) this.closeTasks();
     else if (this.showWorkspace) this.closeWorkspace();
     else if (this.showSettings && this.url) this.toggleSettings();
@@ -437,7 +447,7 @@ export class Store {
   newSession(text: string, cwd: string, model: string): void {
     const id = crypto.randomUUID();
     const title = text.split("\n")[0].slice(0, 40);
-    const session = this.session({ id, title, cwd, running: true, updated: null });
+    const session = this.session({ id, title, cwd, running: true, updated: null, archived: false });
     session.cwd = cwd;
     session.running = true;
     session.attached = true;
@@ -459,6 +469,10 @@ export class Store {
   }
 
   sendText(session: Session, text: string): void {
+    if (isResumeCommand(text)) {
+      this.openResume();
+      return;
+    }
     if (!session.running) {
       // 进程已回收：用记录的 ID 恢复，消息写进 FIFO 等它读。
       void this.send({
@@ -521,6 +535,7 @@ export class Store {
 
   cancelStop(): void {
     this.stopping = null;
+    this.archiveAfterStop = false;
     this.changed();
   }
 
@@ -535,6 +550,54 @@ export class Store {
     this.initialized.delete(session.id);
     // 不刷新列表：`stop` 可能还没执行完，会把会话又标回运行中。状态由 hubd 推送。
     this.changed();
+  }
+
+  /** 关闭会话：从侧边栏移走，进程在运行就一起结束。正在干活时先确认。 */
+  askArchive(session: Session): void {
+    const working = session.thread.phase !== "idle" || runningTasks(session.thread).length > 0;
+    if (working) {
+      this.stopping = session;
+      this.archiveAfterStop = true;
+      this.changed();
+    } else this.archive(session);
+  }
+
+  archive(session: Session): void {
+    this.stopping = null;
+    this.archiveAfterStop = false;
+    void this.send({ type: "archive", session: session.id, archived: true });
+    if (session.running) {
+      session.running = false;
+      onProcessExit(session.thread);
+      failSending(session.thread);
+      this.initialized.delete(session.id);
+    }
+    session.archived = true;
+    if (this.selected === session.id) this.selected = null;
+    this.changed();
+  }
+
+  openResume(): void {
+    this.showResume = true;
+    this.changed();
+  }
+
+  closeResume(): void {
+    this.showResume = false;
+    this.changed();
+  }
+
+  /** 找回关闭的会话：回到侧边栏并打开，发消息时用 `--resume` 接着聊。 */
+  unarchive(session: Session): void {
+    void this.send({ type: "archive", session: session.id, archived: false });
+    session.archived = false;
+    this.showResume = false;
+    this.select(session.id);
+    this.changed();
+  }
+
+  archivedSessions(): Session[] {
+    return [...this.sessions.values()].filter((s) => s.archived).sort((a, b) => b.updated - a.updated);
   }
 
   openTasks(): void {
@@ -567,6 +630,11 @@ export class Store {
     this.changed();
   }
 }
+
+const RESUME_COMMAND: SlashCommand = { name: "resume", description: "找回已关闭的会话" };
+
+/** `/resume` 由界面处理（CLI 的无界面模式没有这个命令），不发给 CLI。 */
+export const isResumeCommand = (text: string): boolean => /^\/resume\s*$/.test(text.trim());
 
 /** `/mnt/<设备>/...` 是挂载的设备目录，其他是服务器本地目录。 */
 export function describeCwd(cwd?: string): { project: string; device: string } {

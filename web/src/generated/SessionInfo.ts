@@ -4,4 +4,8 @@ export type SessionInfo = { id: string, title: string | null, cwd: string | null
 /**
  * 日志最后更新时间，Unix 秒。
  */
-updated: number | null, };
+updated: number | null, 
+/**
+ * 已关闭：不显示在侧边栏，可用 `/resume` 找回。
+ */
+archived: boolean, };

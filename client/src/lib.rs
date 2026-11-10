@@ -488,6 +488,7 @@ mod tests {
             cwd: None,
             running,
             updated: None,
+            archived: false,
         };
         let list = Frame {
             session: None,

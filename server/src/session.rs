@@ -48,6 +48,16 @@ impl Sessions {
         fs::write(self.dir(session).join("cwd"), cwd.as_os_str().as_bytes())
     }
 
+    /// 关闭标记是会话目录里的空文件，手机端和桌面端看到的一致。
+    pub fn set_archived(&self, session: &str, archived: bool) -> io::Result<()> {
+        let path = self.dir(session).join("archived");
+        match (archived, fs::remove_file(&path)) {
+            (true, _) => fs::write(path, ""),
+            (false, Err(error)) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            (false, _) => Ok(()),
+        }
+    }
+
     pub fn set_title(&self, session: &str, title: &str) -> io::Result<()> {
         fs::write(self.dir(session).join("title"), title)
     }
@@ -79,6 +89,7 @@ impl Sessions {
                     cwd: fs::read_to_string(dir.join("cwd")).ok(),
                     running: is_running(&id, &dir),
                     updated,
+                    archived: dir.join("archived").exists(),
                     id,
                 })
             })
@@ -213,6 +224,22 @@ mod tests {
         assert_eq!(list[0].title.as_deref(), Some("修登录"));
         assert_eq!(list[0].cwd.as_deref(), Some("/work"));
         assert!(list[0].running);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn archived_flag_round_trips() {
+        let root = std::env::temp_dir().join(format!("hubd-archive-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let sessions = Sessions::new(root.clone());
+        sessions.prepare("a").unwrap();
+        assert!(!sessions.list(|_, _| false)[0].archived);
+        sessions.set_archived("a", true).unwrap();
+        sessions.set_archived("a", true).unwrap();
+        assert!(sessions.list(|_, _| false)[0].archived);
+        sessions.set_archived("a", false).unwrap();
+        sessions.set_archived("a", false).unwrap();
+        assert!(!sessions.list(|_, _| false)[0].archived);
         fs::remove_dir_all(&root).unwrap();
     }
 

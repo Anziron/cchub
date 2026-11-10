@@ -38,6 +38,7 @@
 - CLI 会拦截 `sleep 60; ...` 这类命令，实验里要用脚本文件代替。
 - `hubd` 不认任何参数（除 `--probe`），`hubd --version` 会真的启动并用默认状态目录 → 手动运行时必须设临时 `HUBD_STATE_DIR` 和回环端口。
 - 部署 `hubd` 用 CI 产物 `hubd-linux-musl`，服务器和设备都没有 Rust。
+- 列表和状态检查很频繁，不要在热路径上起子进程（每次 `systemctl` 约 6ms CPU，空闲时曾累计每 30 秒 400ms）→ 会话是否运行读 cgroup 的 `cgroup.procs`。
 - 弱网测试不要动服务器真实网卡（代理和会话都走它）→ 用 `ip netns` 建独立命名空间，在其回环上加 `netem`。
 - 桌面端关窗后进程留在托盘，再双击 exe 曾启动第二个实例，两份连接和通知同时存在 → 现在靠占用 `127.0.0.1:47878` 保证单实例；升级 exe 前要先从托盘菜单退出旧进程，否则只会唤起旧版本。
 - 测桌面端内存要沿父进程树汇总私有工作集：工作集含共享内存，且设备上还有别的程序的 WebView。
@@ -49,6 +50,7 @@
 - 后台 Bash 可能先 `task_started`（`is_backgrounded: false`）再由 `task_updated` 转后台，以 `background_tasks_changed` 为准；这些事件没有时间戳，开始时间只能由客户端记。
 - 额度和上下文不要调用 `/usage`、`/context`（写进会话记录）→ 用 `rate_limit_event` 和最后一条 `assistant` 的 `usage`。
 - 官方会在窗口中途把额度清零，`resetsAt` 不变 → 合并额度不能按使用率大小判断新旧，要按事件来源（同一会话比 `seq`，不同会话比运行状态和日志更新时间）。
+- `set_model` 会让 CLI 回显一条 `type: user` 的 `<local-command-stdout>Set model to …</local-command-stdout>`（会话记录里带 `/model` 命令名），模型能看到但不会回复 → 显示成提示，不能当用户消息，也不能把状态改成思考中。
 - 进程已回收时往 FIFO 写 `set_model` 会丢 → 前端记下 `pendingModel`，恢复进程时在用户消息之前补发。
 - 标题由 `hubd` 后台跑 `HUBD_TITLE_CMD`（默认 haiku）生成：`hubd` 的 `MemoryMax` 只有 64M，systemd 模式下必须用 `systemd-run --scope` 放进独立 cgroup；超时要结束整个进程组。
 - CLI 常发内容为空的思考块，同一条消息里还可能一空一实 → 空块不显示，不要当成“思考过”。

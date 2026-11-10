@@ -156,6 +156,8 @@ function ItemView({ item, store, session }: { item: Item; store: Store; session:
     }
     case "interrupted":
       return <div className="stopped">已中断</div>;
+    case "notice":
+      return <div className="stopped local-note">{item.text}</div>;
     case "error":
       return <ErrorBox title="这一轮出错了" text={item.text} />;
   }

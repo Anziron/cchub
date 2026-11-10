@@ -124,6 +124,7 @@ async fn serve(app: Arc<App>, socket: WebSocket) {
             ClientMsg::Start { session, .. }
             | ClientMsg::Attach { session, .. }
             | ClientMsg::Input { session, .. }
+            | ClientMsg::Archive { session, .. }
             | ClientMsg::Stop { session } => session.clone(),
         };
         if !valid_id(&session) {
@@ -139,6 +140,8 @@ async fn serve(app: Arc<App>, socket: WebSocket) {
             let prompt = prompt.clone();
             let prepared = blocking(&app, move |app| {
                 app.sessions.prepare(&id)?;
+                // 从 `/resume` 回来或在别处继续：重新启动就不再算关闭。
+                app.sessions.set_archived(&id, false)?;
                 match &title {
                     Some(title) => app.sessions.set_title(&id, title),
                     None => Ok(()),
@@ -282,6 +285,19 @@ async fn handle(
                 let result = app.host.stop(&id, &app.sessions.dir(&id));
                 app.sessions.release(&id);
                 result
+            })
+            .await?;
+        }
+        ClientMsg::Archive { archived, .. } => {
+            blocking(app, move |app| {
+                if archived {
+                    let dir = app.sessions.dir(&id);
+                    if app.host.is_running(&id, &dir) {
+                        app.host.stop(&id, &dir)?;
+                    }
+                    app.sessions.release(&id);
+                }
+                app.sessions.set_archived(&id, archived)
             })
             .await?;
         }
