@@ -381,7 +381,7 @@ kbd { margin-left: 8px; padding: 0 4px; border-radius: 4px; box-shadow: inset 0 
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
-body.blurred .state.wait::after, body.blurred .state.busy::after, body.blurred .pulse { animation-play-state: paused; }
+body.paused .state.wait::after, body.paused .state.busy::after, body.paused .pulse { animation-play-state: paused; }
 @media (max-width: 860px) { .app { grid-template-columns: 1fr; } .main { margin: 0; border-radius: 0; } .side { display: none; } .health { display: none; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 

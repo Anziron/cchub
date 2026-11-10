@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./Icon";
 import { FONTS, SIZES, THEMES, type Appearance } from "./appearance";
 import { backgroundTasks, findModel, hubHost, hubUrl, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
-import { backgroundStatus, isAndroid, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
+import { backgroundStatus, isAndroid, pageVisible, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
 import { formatAgo } from "./sidebar";
 import { describeCwd, type Session, type Store } from "./store";
 
@@ -329,16 +329,16 @@ export function TasksDialog({ store, session }: { store: Store; session: Session
   const running = open?.status === "running";
   const output = store.taskOutput?.path === path ? store.taskOutput : null;
   const pre = useRef<HTMLPreElement>(null);
-  // 打开时刷新：用时每秒，输出在任务运行时每 3 秒。窗口不在前台时不刷新。
+  // 打开时刷新：用时每秒，输出在任务运行时每 3 秒。窗口看不见时不刷新（失去焦点照常刷新）。
   useEffect(() => {
-    const timer = setInterval(() => { if (document.hasFocus()) setTick(Date.now()); }, 1000);
+    const timer = setInterval(() => { if (pageVisible()) setTick(Date.now()); }, 1000);
     return () => clearInterval(timer);
   }, []);
   useEffect(() => {
     if (!path) return;
     store.readTaskOutput(path);
     if (!running) return;
-    const timer = setInterval(() => { if (document.hasFocus()) store.readTaskOutput(path); }, 3000);
+    const timer = setInterval(() => { if (pageVisible()) store.readTaskOutput(path); }, 3000);
     return () => clearInterval(timer);
   }, [store, path, running]);
   useEffect(() => {
