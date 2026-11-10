@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "./Icon";
 import { FONTS, SIZES, THEMES, type Appearance } from "./appearance";
 import { backgroundTasks, effortsFor, findModel, hubHost, hubUrl, isTranscript, parseTranscript, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
@@ -175,9 +175,10 @@ export function WorkspaceDialog({ store }: { store: Store }) {
   );
 }
 
-const DEFAULT_EFFORT = { value: undefined, label: "默认", description: "跟随模型的默认设置" };
-
-/** 模型和推理强度放在同一个菜单里（参考 Codex）：上面选模型，下面一排选强度。 */
+/**
+ * 模型和推理强度（参考 Codex）：主视图是强度滑块，上面显示强度和当前模型，点模型名换成模型列表。
+ * 拖滑块不关菜单；右上角恢复成模型默认强度。
+ */
 export function ModelMenu({ models, model, effort, onChange, onEffort }: {
   models: ModelOption[];
   model?: string;
@@ -186,15 +187,21 @@ export function ModelMenu({ models, model, effort, onChange, onEffort }: {
   onEffort: (effort?: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [picking, setPicking] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const current = findModel(models, model);
+  const modelName = current?.displayName ?? model ?? "默认模型";
   const efforts = effortsFor(current);
-  const effortOptions = [DEFAULT_EFFORT, ...efforts];
-  const effortLabel = efforts.find((e) => e.value === effort)?.label;
+  const index = efforts.findIndex((e) => e.value === effort);
+  const effortLabel = index >= 0 ? efforts[index].label : undefined;
+  // 没设过强度时滑块停在“中”附近，只是示意，标题显示“默认”。
+  const position = index >= 0 ? index : Math.max(0, efforts.findIndex((e) => e.value === "medium"));
+  const close = () => { setOpen(false); setPicking(false); };
+  // 最高档有“升级”的波动动效（CSS），切到别的档位就停。
   useEffect(() => {
     if (!open) return;
     const onDown = (event: MouseEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+      if (!ref.current?.contains(event.target as Node)) close();
     };
     addEventListener("mousedown", onDown);
     return () => removeEventListener("mousedown", onDown);
@@ -206,51 +213,57 @@ export function ModelMenu({ models, model, effort, onChange, onEffort }: {
       onKeyDown={(event) => {
         if (event.key === "Escape" && open) {
           event.stopPropagation();
-          setOpen(false);
+          if (picking) setPicking(false);
+          else close();
         }
       }}
     >
-      <button type="button" className="model" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span>{current?.displayName ?? model ?? "默认模型"}</span>
+      <button type="button" className="model" aria-haspopup="menu" aria-expanded={open} onClick={() => (open ? close() : setOpen(true))}>
+        <span>{modelName}</span>
         {effortLabel ? <em>{effortLabel}</em> : null}
         <Icon name="down" size={12} />
       </button>
-      {open ? (
+      {open && picking ? (
         <div className="menu" role="menu">
-          <h4>模型</h4>
+          <button type="button" className="menu-back" onClick={() => setPicking(false)}><Icon name="back" size={13} />模型</button>
           {models.map((option) => (
             <button
               type="button"
               key={option.value}
               role="menuitemradio"
               aria-checked={option === current}
-              onClick={() => { onChange(option.value); setOpen(false); }}
+              onClick={() => { onChange(option.value); setPicking(false); }}
             >
               <span><b>{option.displayName}</b>{option.description ? <small>{option.description}</small> : null}</span>
               {option === current ? <Icon name="check" size={14} /> : null}
             </button>
           ))}
-          {efforts.length ? (
-            <>
-              <h4>推理强度</h4>
-              {/* 选强度不关菜单，方便连着改模型。 */}
-              <div className="efforts" role="group" aria-label="推理强度">
-                {effortOptions.map((option) => (
-                  <button
-                    type="button"
-                    key={option.label}
-                    role="menuitemradio"
-                    aria-checked={option.value === effort}
-                    title={option.description}
-                    onClick={() => onEffort(option.value)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-              <p className="effort-hint">{effortOptions.find((e) => e.value === effort)?.description ?? DEFAULT_EFFORT.description}</p>
-            </>
+        </div>
+      ) : open ? (
+        <div className="menu effort-card">
+          {effortLabel ? (
+            <button type="button" className="effort-reset" title="恢复默认强度" aria-label="恢复默认强度" onClick={() => onEffort(undefined)}><Icon name="reset" size={14} /></button>
           ) : null}
+          <strong className={effortLabel ? (effort === "max" ? "max" : "") : "unset"}>{efforts.length ? effortLabel ?? "默认" : "不支持调强度"}</strong>
+          <button type="button" className="effort-model" onClick={() => setPicking(true)}>{modelName}<Icon name="chev" size={11} /></button>
+          {efforts.length ? (
+            <div className={`effort-slider${effortLabel ? "" : " unset"}${effort === "max" ? " max" : ""}`} style={{ "--pos": efforts.length > 1 ? position / (efforts.length - 1) : 0 } as CSSProperties}>
+              <div className="effort-dots" aria-hidden>{efforts.map((e) => <i key={e.value} />)}</div>
+              <input
+                type="range"
+                min={0}
+                max={efforts.length - 1}
+                step={1}
+                value={position}
+                aria-label="推理强度"
+                aria-valuetext={effortLabel ?? "默认"}
+                onChange={(event) => onEffort(efforts[Number(event.target.value)].value)}
+                // 点在当前位置上也算选中，没设过强度时第一次点“中”要能生效。
+                onPointerUp={(event) => { if (index < 0) onEffort(efforts[Number(event.currentTarget.value)].value); }}
+              />
+            </div>
+          ) : null}
+          {efforts.length ? <p className="effort-hint">{index >= 0 ? efforts[index].description : "跟随模型的默认设置"}</p> : null}
         </div>
       ) : null}
     </div>

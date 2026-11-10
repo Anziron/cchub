@@ -448,13 +448,37 @@ html, body, #root { height: 100%; }
 .menu span { display: flex; flex-direction: column; min-width: 0; }
 .menu b { font-size: 13px; font-weight: 500; }
 .menu small { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
-.menu h4 { margin: 0; padding: 8px 10px 4px; color: var(--faint); font: 500 11.5px/1.4 var(--sans); }
-.menu h4:not(:first-child) { margin-top: 4px; border-top: 1px solid var(--line); padding-top: 10px; }
-.menu .efforts { display: flex; gap: 2px; margin: 2px 6px 0; padding: 2px; border-radius: 8px; background: var(--hover); }
-.menu .efforts button { flex: 1; justify-content: center; padding: 5px 0; border-radius: 6px; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
-.menu .efforts button:hover { background: none; color: var(--text); }
-.menu .efforts button[aria-checked="true"] { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--line-2); }
-.menu .effort-hint { margin: 6px 10px 6px; color: var(--muted); font-size: 11.5px; }
+.menu-back { justify-content: flex-start !important; gap: 4px !important; color: var(--muted) !important; font-size: 12px; }
+.effort-card { width: 260px; padding: 14px 14px 10px; overflow: visible; text-align: center; }
+.effort-card strong { display: block; color: var(--accent); font-size: 15px; font-weight: 600; line-height: 1.4; }
+.effort-card strong.unset { color: var(--muted); }
+.effort-card .effort-model { display: inline-flex; width: auto; gap: 2px; margin: 2px auto 0; padding: 2px 6px; color: var(--muted); font-size: 12.5px; }
+.effort-card .effort-model:hover { color: var(--text); }
+.effort-card .effort-model svg { color: inherit; }
+.effort-card .effort-reset { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; padding: 0; justify-content: center; color: var(--muted); }
+.effort-card .effort-reset svg { color: inherit; }
+.effort-card .effort-reset:hover { color: var(--text); }
+.effort-slider { --h: 26px; position: relative; height: var(--h); margin-top: 12px; border-radius: 999px; background: var(--hover); box-shadow: inset 0 0 0 1px var(--line); }
+/* 已选部分：从左端到滑块中心。滑块中心在 h/2 到 100%-h/2 之间。 */
+.effort-slider::before { content: ""; position: absolute; inset: 0 auto 0 0; width: calc(var(--h) + (100% - var(--h)) * var(--pos)); border-radius: 999px; background: var(--accent); }
+.effort-slider.unset::before { opacity: .35; }
+.effort-dots { position: absolute; inset: 0 calc(var(--h) / 2); display: flex; align-items: center; justify-content: space-between; pointer-events: none; }
+.effort-dots i { width: 4px; height: 4px; margin: 0 -2px; border-radius: 50%; background: var(--faint); }
+.effort-slider input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; background: none; cursor: pointer; appearance: none; -webkit-appearance: none; }
+.effort-slider input::-webkit-slider-runnable-track { height: var(--h); background: none; }
+.effort-slider input::-webkit-slider-thumb { width: var(--h); height: var(--h); border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .3), 0 0 0 .5px rgba(0, 0, 0, .1); -webkit-appearance: none; appearance: none; }
+.effort-slider input::-moz-range-thumb { width: var(--h); height: var(--h); border: 0; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .3); }
+.effort-slider input:focus-visible { outline: none; }
+.effort-slider input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--accent-soft), 0 1px 3px rgba(0, 0, 0, .3); }
+/* 最高档：已选部分流光，滑块向外扩散波纹，文字呼吸。 */
+.effort-slider.max::before { background: linear-gradient(100deg, var(--accent) 0%, var(--accent) 35%, color-mix(in srgb, var(--accent), #fff 45%) 50%, var(--accent) 65%, var(--accent) 100%) 0 0 / 220% 100%; animation: effort-sheen 1.8s linear infinite; }
+.effort-slider.max::after { content: ""; position: absolute; top: 0; left: calc((100% - var(--h)) * var(--pos)); width: var(--h); height: var(--h); border-radius: 50%; box-shadow: 0 0 0 0 var(--accent); pointer-events: none; animation: effort-ripple 1.6s var(--ease) infinite; }
+.effort-card strong.max { animation: effort-glow 1.6s ease-in-out infinite; }
+@keyframes effort-sheen { from { background-position: 110% 0; } to { background-position: -110% 0; } }
+@keyframes effort-ripple { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); } 100% { box-shadow: 0 0 0 12px transparent; } }
+@keyframes effort-glow { 50% { text-shadow: 0 0 10px color-mix(in srgb, var(--accent) 60%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .effort-slider.max::before, .effort-slider.max::after, .effort-card strong.max { animation: none; } }
+.effort-card .effort-hint { margin: 8px 0 0; color: var(--muted); font-size: 11.5px; }
 .tools .model em { color: var(--faint); font-style: normal; }
 .tools .model em::before { content: "·"; margin-right: 4px; }
 
