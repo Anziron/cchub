@@ -27,15 +27,6 @@ fn main() {
 fn main() -> std::process::ExitCode {
     use std::process::ExitCode;
 
-    let args: Vec<_> = std::env::args_os().collect();
-    if args.len() == 3 && args[1] == "--probe" {
-        return if device::probe_main(std::path::Path::new(&args[2])) {
-            ExitCode::SUCCESS
-        } else {
-            ExitCode::FAILURE
-        };
-    }
-
     let config = match config::Config::from_env() {
         Ok(config) => config,
         Err(error) => {
@@ -96,6 +87,7 @@ async fn run(config: config::Config) -> std::io::Result<()> {
         workspace_cmd: config.workspace_cmd,
         title_cmd: config.title_cmd,
         title_memory_mb,
+        probes: device::Probes::default(),
     });
 
     let retention = config.retention;

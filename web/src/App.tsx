@@ -30,8 +30,28 @@ function StateIcon({ state }: { state: RowState }) {
   return <span className={`state${state ? ` ${state}` : ""}`} aria-hidden="true" />;
 }
 
-/** `ago` 有值时是“最近”列表：标题后带项目名，右侧显示相对时间。 */
-function SessionRow({ store, session, project, ago }: { store: Store; session: Session; project?: string; ago?: string }) {
+/** 只含用时文本的小组件：每秒刷新只重渲染它自己，窗口看不见时不刷新（失去焦点照常刷新）。 */
+function Elapsed({ since }: { since: number }) {
+  const [, setNow] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => { if (pageVisible()) setNow(Date.now()); }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return <>{formatDuration(Date.now() - since)}</>;
+}
+
+/** 相对时间文本（“N 分钟”），自己每 30 秒刷新一次。 */
+function Ago({ time }: { time: number }) {
+  const [, setNow] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => { if (pageVisible()) setNow(Date.now()); }, 30000);
+    return () => clearInterval(timer);
+  }, []);
+  return <>{formatAgo(time, Math.floor(Date.now() / 1000))}</>;
+}
+
+/** `recent` 为真时是“最近”列表：标题后带项目名，右侧显示相对时间。 */
+function SessionRow({ store, session, project, recent }: { store: Store; session: Session; project?: string; recent?: boolean }) {
   const waiting = isWaiting(session.thread);
   const current = store.selected === session.id;
   const status = waiting || !session.running ? "" : sessionStatus(session);
@@ -43,9 +63,9 @@ function SessionRow({ store, session, project, ago }: { store: Store; session: S
         <span className="name">
           <span className="title">{session.title}{project ? <em>{project}</em> : null}</span>
           {waiting ? <small>{askHint(firstAsk(session.thread))}</small> : null}
-          {status ? <small className="status">{status}{started ? ` · ${formatDuration(Date.now() - started)}` : ""}</small> : null}
+          {status ? <small className="status">{status}{started ? <> · <Elapsed since={started} /></> : null}</small> : null}
         </span>
-        {ago ? <span className="ago">{ago}</span> : null}
+        {recent ? <span className="ago"><Ago time={session.updated} /></span> : null}
       </button>
       {session.running ? (
         <button className="row-stop" aria-label={`结束会话 ${session.title}`} title="结束会话（之后发消息可接着聊）" onClick={() => store.askStop(session)}><Icon name="stop" size={12} /></button>
@@ -104,22 +124,10 @@ function Quota({ label, window }: { label: string; window?: QuotaWindow }) {
   );
 }
 
-/** 有会话在跑时每秒刷新用时，窗口看不见时不刷新（失去焦点照常刷新）。 */
-function useTick(active: boolean) {
-  const [, setNow] = useState(0);
-  useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(() => { if (pageVisible()) setNow(Date.now()); }, 1000);
-    return () => clearInterval(timer);
-  }, [active]);
-}
-
 function Sidebar({ store }: { store: Store }) {
   const sessions = [...store.sessions.values()].filter((s) => !s.archived);
-  useTick(sessions.some((s) => s.running));
   const groups = groupProjects(sessions);
   const recent = recentSessions(sessions, RECENT_LIMIT);
-  const now = Math.floor(Date.now() / 1000);
   const [collapsed, setCollapsed] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
@@ -153,7 +161,7 @@ function Sidebar({ store }: { store: Store }) {
                 最近<Icon name="chev" size={10} />
               </button>
             </h2>
-            {collapsed.includes(RECENT_KEY) ? null : recent.map((r) => <SessionRow key={r.session.id} store={store} session={r.session} project={r.project} ago={formatAgo(r.session.updated, now)} />)}
+            {collapsed.includes(RECENT_KEY) ? null : recent.map((r) => <SessionRow key={r.session.id} store={store} session={r.session} project={r.project} recent />)}
           </section>
         ) : null}
       </div>
@@ -170,26 +178,16 @@ function Sidebar({ store }: { store: Store }) {
 }
 
 function useAppearance() {
-  const [look, setLook] = useState<Appearance>(() => loadAppearance(localStorage));
-  const [systemDark, setSystemDark] = useState(() => matchMedia("(prefers-color-scheme: dark)").matches);
-  // 只有选了“跟随系统”才需要监听系统配色
+  const [look, setLook] = useState<Appearance>(() => loadAppearance(localStorage, matchMedia("(prefers-color-scheme: dark)").matches));
   useEffect(() => {
-    if (look.theme !== "system") return;
-    const mq = matchMedia("(prefers-color-scheme: dark)");
-    const onChange = () => setSystemDark(mq.matches);
-    onChange();
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, [look.theme]);
-  useEffect(() => {
-    const { theme, tone } = resolveTheme(look.theme, systemDark);
+    const { theme, tone } = resolveTheme(look.theme);
     const d = document.documentElement.dataset;
     d.theme = theme;
     d.tone = tone;
     d.font = look.font;
     d.size = look.size;
     saveAppearance(localStorage, look);
-  }, [look, systemDark]);
+  }, [look]);
   return [look, (patch: Partial<Appearance>) => {
     const root = document.documentElement;
     root.classList.add("switching");
@@ -292,13 +290,14 @@ function Activity({ store, session }: { store: Store; session: Session }) {
   const ask = firstAsk(thread);
   const busy = !ask && thread.phase !== "idle";
   const background = runningTasks(thread).length;
-  // 只在运行中每秒刷新用时，窗口看不见时不刷新（失去焦点照常刷新）。
+  // 用时由 Elapsed 自己刷新；这里只在中断等待时每秒检查是否超时。
+  const waitingStop = busy && thread.interruptAt != null;
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (!busy) return;
+    if (!waitingStop) return;
     const timer = setInterval(() => pageVisible() && setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [busy]);
+  }, [waitingStop]);
 
   let text = busy || ask ? sessionStatus(session) : "";
   if (!text && background) text = `这一轮已结束，后台还有 ${background} 个任务在运行`;
@@ -317,7 +316,7 @@ function Activity({ store, session }: { store: Store; session: Session }) {
     <div className="activity">
       {ask || live ? <span className="pulse" style={ask ? { animation: "none" } : undefined} /> : null}
       <span className="activity-text">{text}</span>
-      {busy && thread.turnStartedAt ? <time>· {formatDuration(now - thread.turnStartedAt)}</time> : null}
+      {busy && thread.turnStartedAt ? <time>· <Elapsed since={thread.turnStartedAt} /></time> : null}
       <span className="activity-right">
         {hasTasks ? <button onClick={() => store.openTasks()}><Icon name="tasks" size={13} />后台任务{background ? ` ${background}` : ""}</button> : null}
         {unresponsive ? <button onClick={() => store.askStop(session)}>结束会话</button> : null}

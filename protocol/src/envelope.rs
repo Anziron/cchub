@@ -64,6 +64,12 @@ pub fn is_user_message(line: &str) -> bool {
     serde_json::from_str::<Envelope>(line).is_ok_and(|envelope| envelope.kind == Some("user"))
 }
 
+/// 一条助手消息或一轮回复已经完整落盘：此前排队的逐字片段不会再被用到。
+pub fn is_message_end(line: &str) -> bool {
+    serde_json::from_str::<Envelope>(line)
+        .is_ok_and(|envelope| matches!(envelope.kind, Some("assistant" | "result")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,6 +110,15 @@ mod tests {
         assert!(is_user_message(r#"{"type":"user","message":{}}"#));
         assert!(!is_user_message(r#"{"type":"control_response"}"#));
         assert!(!is_user_message("not json"));
+    }
+
+    #[test]
+    fn recognizes_message_ends() {
+        assert!(is_message_end(r#"{"type":"assistant","message":{}}"#));
+        assert!(is_message_end(r#"{"type":"result"}"#));
+        assert!(!is_message_end(r#"{"type":"stream_event"}"#));
+        assert!(!is_message_end(r#"{"type":"user"}"#));
+        assert!(!is_message_end("not json"));
     }
 
     #[test]

@@ -6,17 +6,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 /// 返回 `(是否成功, stdout)`；启动失败或超时返回 `None`，超时的子进程会被结束。
-pub fn run(command: Command, timeout: Duration) -> Option<(bool, Vec<u8>)> {
-    run_then(command, timeout, || {})
-}
-
-/// 同 [`run`]。`on_exit` 在子进程真正退出后调用，可能远晚于超时：
-/// 卡在断开挂载上的进程连 SIGKILL 都要等连接恢复才会退出。
-pub fn run_then(
-    mut command: Command,
-    timeout: Duration,
-    on_exit: impl FnOnce() + Send + 'static,
-) -> Option<(bool, Vec<u8>)> {
+pub fn run(mut command: Command, timeout: Duration) -> Option<(bool, Vec<u8>)> {
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -31,7 +21,6 @@ pub fn run_then(
         let mut output = Vec::new();
         let _ = stdout.read_to_end(&mut output);
         let success = child.wait().is_ok_and(|status| status.success());
-        on_exit();
         let _ = tx.send((success, output));
     });
     match rx.recv_timeout(timeout) {
@@ -56,18 +45,6 @@ mod tests {
         let (success, output) = run(command, Duration::from_secs(5)).unwrap();
         assert!(!success);
         assert_eq!(output, b"hi\n");
-    }
-
-    #[test]
-    fn calls_on_exit_after_child_ends() {
-        let (tx, rx) = mpsc::channel();
-        let mut command = Command::new("sleep");
-        command.arg("60");
-        assert!(run_then(command, Duration::from_millis(50), move || {
-            let _ = tx.send(());
-        })
-        .is_none());
-        rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
 
     #[test]

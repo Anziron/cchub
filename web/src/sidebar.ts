@@ -12,6 +12,8 @@ export interface RowSession {
   id: string;
   cwd?: string;
   updated: number;
+  /** 最后一次用户发言时间；排序用，没有时退回 `updated`。 */
+  active?: number | null;
 }
 
 export interface ProjectGroupData<T extends RowSession> {
@@ -23,7 +25,10 @@ export interface ProjectGroupData<T extends RowSession> {
   sessions: T[];
 }
 
-const byTime = (a: RowSession, b: RowSession) => b.updated - a.updated;
+/** 排序键：只随用户发言变化，模型输出不影响顺序。 */
+export const sortKey = (s: RowSession) => s.active ?? s.updated;
+
+const byTime = (a: RowSession, b: RowSession) => sortKey(b) - sortKey(a);
 
 /** 按完整 cwd 分组；组按组内最新会话倒序，组内按时间倒序。 */
 export function groupProjects<T extends RowSession>(sessions: T[]): ProjectGroupData<T>[] {

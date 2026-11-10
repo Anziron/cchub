@@ -104,6 +104,25 @@ function block(token: Token, key: number): ReactNode {
   }
 }
 
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
-  return <div className="reply">{marked.lexer(text).map(block)}</div>;
+const LIVE_PARSE_MS = 80;
+
+/** 正在输出时限频：值最多每 `ms` 毫秒更新一次；关闭后立即返回最新值。 */
+function useThrottled(value: string, ms: number, enabled: boolean): string {
+  const [shown, setShown] = useState(value);
+  const last = useRef(0);
+  useEffect(() => {
+    if (!enabled) return;
+    const timer = setTimeout(() => {
+      last.current = Date.now();
+      setShown(value);
+    }, Math.max(0, last.current + ms - Date.now()));
+    return () => clearTimeout(timer);
+  }, [value, ms, enabled]);
+  return enabled ? shown : value;
+}
+
+export const Markdown = memo(function Markdown({ text, live = false }: { text: string; live?: boolean }) {
+  // 流式消息每个片段都重新解析整段很费 CPU，限到 80ms 一次；完整文本立即渲染。
+  const shown = useThrottled(text, LIVE_PARSE_MS, live);
+  return <div className="reply">{marked.lexer(shown).map(block)}</div>;
 });

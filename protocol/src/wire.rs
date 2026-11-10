@@ -75,6 +75,10 @@ pub struct SessionInfo {
     /// 已关闭：不显示在侧边栏，可用 `/resume` 找回。
     #[serde(default)]
     pub archived: bool,
+    /// 最后一次用户发言时间，Unix 秒；用于侧边栏排序。
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub active: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

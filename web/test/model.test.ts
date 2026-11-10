@@ -431,3 +431,25 @@ test("切换模型时 CLI 回显的本地命令输出显示成提示，不当成
   apply(other, JSON.stringify({ type: "user", uuid: "x3", message: { role: "user", content: "<local-command-stdout>Done</local-command-stdout>" } }));
   assert.deepEqual(other.items, [{ kind: "notice", id: "x3", text: "Done" }]);
 });
+
+test("子代理的工具结果不改变主线程状态", () => {
+  const ev = (o: object) => JSON.stringify(o);
+  // 主轮已结束，后台子代理继续跑
+  const idle = newThread();
+  apply(idle, ev({ type: "result", subtype: "success", is_error: false }));
+  apply(idle, ev({ type: "assistant", parent_tool_use_id: "X", message: { id: "s1", content: [{ type: "tool_use", id: "sub1", name: "Bash", input: { command: "ls" } }] } }));
+  apply(idle, ev({ type: "user", parent_tool_use_id: "X", message: { content: [{ type: "tool_result", tool_use_id: "sub1", content: "ok" }] } }));
+  assert.equal(idle.phase, "idle");
+  // 主线程正在执行 Agent 工具
+  const running = newThread();
+  apply(running, ev({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "X", name: "Agent", input: { description: "d" } }] } }));
+  assert.equal(running.phase, "tool");
+  const active = running.activeTool;
+  apply(running, ev({ type: "assistant", parent_tool_use_id: "X", message: { id: "s2", content: [{ type: "tool_use", id: "sub2", name: "Bash", input: { command: "ls" } }] } }));
+  apply(running, ev({ type: "user", parent_tool_use_id: "X", message: { content: [{ type: "tool_result", tool_use_id: "sub2", content: "ok" }] } }));
+  assert.equal(running.phase, "tool");
+  assert.deepEqual(running.activeTool, active);
+  // 主线程自己的工具结果仍切到思考中
+  apply(running, ev({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "X", content: "done" }] } }));
+  assert.equal(running.phase, "thinking");
+});

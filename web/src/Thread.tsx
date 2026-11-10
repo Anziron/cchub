@@ -129,7 +129,11 @@ const Tool = memo(function Tool({ tool, cwd }: { tool: ToolItem; cwd?: string })
   );
 });
 
-function ItemView({ item, store, session }: { item: Item; store: Store; session: Session }) {
+/**
+ * 条目按引用比较（model 里是替换而不是原地改）。session 和 store 是原地修改的稳定对象，
+ * 不能直接当依据：审批卡的 `sent` 是原地改的，所以单独作为 prop 传入；cwd 同理。
+ */
+const ItemView = memo(function ItemView({ item, store, session, askSent }: { item: Item; store: Store; session: Session; askSent?: boolean }) {
   switch (item.kind) {
     case "user":
       return (
@@ -145,14 +149,15 @@ function ItemView({ item, store, session }: { item: Item; store: Store; session:
         </>
       );
     case "text":
-      return <Markdown text={item.text} />;
+      return <Markdown text={item.text} live={item.live} />;
     case "thinking":
       return <Step icon="think" label="思考过程"><div className="body">{item.text}</div></Step>;
     case "tool":
       return <Tool tool={item} cwd={session.cwd} />;
     case "ask": {
       const ask = session.thread.asks.get(item.requestId);
-      return ask ? <AskCard ask={ask} session={session} store={store} /> : null;
+      // askSent 只用来让 memo 在 `sent` 变化时重画。
+      return ask ? <AskCard key={String(askSent)} ask={ask} session={session} store={store} /> : null;
     }
     case "interrupted":
       return <div className="stopped">已中断</div>;
@@ -161,7 +166,7 @@ function ItemView({ item, store, session }: { item: Item; store: Store; session:
     case "error":
       return <ErrorBox title="这一轮出错了" text={item.text} />;
   }
-}
+});
 
 export function ThreadView({ store, session }: { store: Store; session: Session }) {
   const ref = useRef<HTMLElement>(null);
@@ -169,10 +174,16 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
   // 每个会话一个实例（App 里按会话 ID 设 key），回到会话时从底部开始。
   const pinned = useRef(true);
   const lastTop = useRef(0);
-  const toBottom = () => {
-    const element = ref.current;
-    if (element && pinned.current) element.scrollTop = element.scrollHeight;
-  };
+  const frame = useRef(0);
+  // 渲染和尺寸变化都只登记一次 rAF，在帧内统一先读后写，避免布局抖动。
+  const toBottom = useRef(() => {
+    if (frame.current) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = 0;
+      const element = ref.current;
+      if (element && pinned.current) element.scrollTop = element.scrollHeight;
+    });
+  }).current;
   // 用户往上翻时不打扰，在底部时跟随新内容。
   useLayoutEffect(toBottom);
   // 长消息用了 content-visibility，渲染后高度才准，高度变了要再贴一次底。
@@ -180,8 +191,12 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
     if (!column.current) return;
     const observer = new ResizeObserver(toBottom);
     observer.observe(column.current);
-    return () => observer.disconnect();
-  }, []);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame.current);
+      frame.current = 0;
+    };
+  }, [toBottom]);
   return (
     <section
       className="stream"
@@ -197,7 +212,13 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
     >
       <div className="column" ref={column}>
         {session.thread.items.map((item) => (
-          <ItemView key={item.id} item={item} store={store} session={session} />
+          <ItemView
+            key={item.id}
+            item={item}
+            store={store}
+            session={session}
+            askSent={item.kind === "ask" ? session.thread.asks.get(item.requestId)?.sent : undefined}
+          />
         ))}
       </div>
     </section>

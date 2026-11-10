@@ -7,14 +7,15 @@ import type { UiEvent } from "./generated/UiEvent";
 export interface Hub {
   connect(url: string): Promise<ConnectionState>;
   send(msg: ClientMsg): Promise<void>;
-  onEvent(handler: (event: UiEvent) => void): Promise<unknown>;
+  /** Rust 侧约每 16ms 合批发一次，处理函数收到一批事件。 */
+  onEvent(handler: (events: UiEvent[]) => void): Promise<unknown>;
 }
 
 // 前端不直接连服务器：连接在 Rust 进程里，窗口关闭后也要维持。
 const tauriHub: Hub = {
   connect: (url) => invoke<ConnectionState>("hub_connect", { url }),
   send: (msg) => invoke<void>("hub_send", { msg }),
-  onEvent: (handler) => listen<UiEvent>("hub", (event) => handler(event.payload)),
+  onEvent: (handler) => listen<UiEvent[]>("hub", (event) => handler(event.payload)),
 };
 
 export async function loadHub(): Promise<Hub | null> {

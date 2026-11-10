@@ -53,3 +53,14 @@ test("相对时间", () => {
   assert.equal(formatAgo(now - 86400 * 3 - 100, now), "3 天");
   assert.equal(formatAgo(now + 50, now), "刚刚");
 });
+
+test("排序按 active，缺失时退回 updated；updated 变化不影响顺序", () => {
+  const a = (id: string, cwd: string, updated: number, active: number | null) => ({ id, title: id, cwd, updated, active });
+  const list = [a("x1", "/mnt/pc/x", 900, 100), a("y1", "/mnt/pc/y", 100, 200), a("x2", "/mnt/pc/x", 50, null)];
+  assert.deepEqual(groupProjects(list).map((g) => g.key), ["/mnt/pc/y", "/mnt/pc/x"]);
+  assert.deepEqual(groupProjects(list)[1]!.sessions.map((x) => x.id), ["x1", "x2"]);
+  assert.deepEqual(recentSessions(list).map((r) => r.session.id), ["y1", "x1", "x2"]);
+  // 模型输出让 x1 的 updated 变大，顺序不变
+  list[0]!.updated = 99999;
+  assert.deepEqual(recentSessions(list).map((r) => r.session.id), ["y1", "x1", "x2"]);
+});

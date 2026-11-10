@@ -8,4 +8,8 @@ updated: number | null,
 /**
  * 已关闭：不显示在侧边栏，可用 `/resume` 找回。
  */
-archived: boolean, };
+archived: boolean, 
+/**
+ * 最后一次用户发言时间，Unix 秒；用于侧边栏排序。
+ */
+active: number | null, };

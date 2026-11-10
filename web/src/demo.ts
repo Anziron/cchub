@@ -69,7 +69,7 @@ let emit: (event: UiEvent) => void = () => {};
 
 export const demoHub: Hub = {
   connect: async () => (scene === "conn" ? "disconnected" : "connected"),
-  onEvent: async (handler) => { emit = handler; },
+  onEvent: async (handler) => { emit = (event) => handler([event]); },
   send: async (msg) => {
     if (msg.type === "browse") {
       if (!msg.device) emit({ type: "browse", device: null, path: null, parent: null, entries: ["laptop", "office-pc"], error: null });
@@ -104,7 +104,7 @@ export const demoHub: Hub = {
       emit({
         type: "sessions",
         mem_available_mb: 412,
-        sessions: SESSIONS.map((s, i) => ({ id: s.id, title: s.title, cwd: "/mnt/laptop/d/demo-api", running: s.running, updated: now - i * 60, archived: false })),
+        sessions: SESSIONS.map((s, i) => ({ id: s.id, title: s.title, cwd: "/mnt/laptop/d/demo-api", running: s.running, updated: now - i * 60, active: now - i * 60, archived: false })),
       });
     } else if (msg.type === "attach") {
       const session = SESSIONS.find((s) => s.id === msg.session);

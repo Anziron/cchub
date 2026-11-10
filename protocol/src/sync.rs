@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use crate::envelope::{classify, EventClass};
+use crate::envelope::{classify, is_message_end, EventClass};
 use crate::wire::ServerMsg;
 
 /// 把文件里读到的字节切成完整的行。最后没有换行的半行留到下次，进程崩溃时不会传出半条事件。
@@ -56,7 +56,7 @@ impl Default for OutboundLimits {
     fn default() -> Self {
         Self {
             max_partial_bytes: 64 * 1024,
-            max_queued_bytes: 2 * 1024 * 1024,
+            max_queued_bytes: 512 * 1024,
         }
     }
 }
@@ -68,6 +68,8 @@ pub struct Outbound {
     queue: VecDeque<ServerMsg>,
     queued_bytes: usize,
     partial_bytes: usize,
+    /// 订阅时日志的长度。偏移在它之前的是历史回放，之后的是实时事件。
+    replay_until: u64,
 }
 
 impl Outbound {
@@ -77,7 +79,15 @@ impl Outbound {
             queue: VecDeque::new(),
             queued_bytes: 0,
             partial_bytes: 0,
+            replay_until: 0,
         }
+    }
+
+    /// 设置回放边界（订阅时日志的长度）。回放时已经写完整的消息不再需要逐字片段，
+    /// 遇到 `assistant` / `result` 就把队列里的片段合并成 `Skipped`；
+    /// 边界之前最后一条还没写完的消息，片段照常发送。
+    pub fn set_replay_until(&mut self, offset: u64) {
+        self.replay_until = offset;
     }
 
     /// 为假时调用方应暂停读文件，等队列发出去一部分。
@@ -87,6 +97,8 @@ impl Outbound {
 
     pub fn push(&mut self, seq: u64, next: u64, line: String) {
         let class = classify(&line);
+        let replayed_message_end =
+            class == EventClass::Durable && seq < self.replay_until && is_message_end(&line);
         self.queued_bytes += line.len();
         if class == EventClass::Partial {
             self.partial_bytes += line.len();
@@ -97,7 +109,7 @@ impl Outbound {
             class,
             payload: line,
         });
-        if self.partial_bytes > self.limits.max_partial_bytes {
+        if replayed_message_end || self.partial_bytes > self.limits.max_partial_bytes {
             self.skip_partials();
         }
     }
@@ -261,6 +273,53 @@ mod tests {
         ));
         assert_eq!(out.pop(), Some(ServerMsg::Skipped { seq: 9, next: 14 }));
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn replay_skips_partials_of_finished_messages_only() {
+        let mut out = Outbound::new(OutboundLimits::default());
+        let partial = r#"{"type":"stream_event"}"#;
+        let assistant = r#"{"type":"assistant"}"#;
+        out.set_replay_until(100);
+        out.push(0, 10, partial.to_string());
+        out.push(10, 20, partial.to_string());
+        out.push(20, 30, assistant.to_string());
+        // 回放边界之前、尚未写完的最后一条消息：片段保留。
+        out.push(30, 40, partial.to_string());
+
+        assert_eq!(out.pop(), Some(ServerMsg::Skipped { seq: 0, next: 20 }));
+        assert!(matches!(
+            out.pop(),
+            Some(ServerMsg::Event {
+                seq: 20,
+                class: EventClass::Durable,
+                ..
+            })
+        ));
+        assert!(matches!(
+            out.pop(),
+            Some(ServerMsg::Event {
+                seq: 30,
+                class: EventClass::Partial,
+                ..
+            })
+        ));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn live_message_end_does_not_skip_partials() {
+        let mut out = Outbound::new(OutboundLimits::default());
+        out.set_replay_until(20);
+        out.push(20, 30, r#"{"type":"stream_event"}"#.to_string());
+        out.push(30, 40, r#"{"type":"assistant"}"#.to_string());
+        assert!(matches!(
+            out.pop(),
+            Some(ServerMsg::Event {
+                class: EventClass::Partial,
+                ..
+            })
+        ));
     }
 
     #[test]

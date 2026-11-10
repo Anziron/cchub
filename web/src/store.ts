@@ -3,6 +3,7 @@ import type { SessionInfo } from "./generated/SessionInfo";
 import type { UiEvent } from "./generated/UiEvent";
 import type { Hub } from "./hub";
 import { isNarrow } from "./platform";
+import { sortKey } from "./sidebar";
 import {
   addSending,
   allowLine,
@@ -37,6 +38,8 @@ export interface Session {
   cwd?: string;
   running: boolean;
   updated: number;
+  /** 最后一次用户发言时间（Unix 秒），侧边栏排序用；服务器没报时为 null，退回 `updated`。 */
+  active: number | null;
   /** 服务器报的日志最后更新时间（Unix 秒），重放时不会变，用来判断额度事件的新旧。 */
   logUpdated: number;
   deviceOnline: boolean;
@@ -132,7 +135,10 @@ export class Store {
   private taskTimes = loadJson<Record<string, number>>(TASK_TIMES_KEY, {});
 
   constructor(private hub: Hub) {
-    void hub.onEvent((event) => this.onEvent(event));
+    void hub.onEvent((events) => {
+      for (const event of events) this.onEvent(event);
+      this.changed();
+    });
     if (this.url) void this.connect(this.url);
   }
 
@@ -193,6 +199,7 @@ export class Store {
         title: info.title ?? "未命名会话",
         running: false,
         updated: 0,
+        active: info.active,
         logUpdated: 0,
         archived: false,
         deviceOnline: true,
@@ -216,6 +223,7 @@ export class Store {
           session.title = info.title ?? session.title;
           session.cwd = info.cwd ?? session.cwd;
           session.updated = info.updated ?? session.updated;
+          session.active = info.active ?? session.active;
           session.logUpdated = info.updated ?? session.logUpdated;
           session.archived = info.archived ?? false;
           session.running = info.running;
@@ -236,6 +244,7 @@ export class Store {
           this.takeLimits(session, event.seq, event.payload);
           apply(session.thread, event.payload);
           this.stampTasks(session, event.payload);
+          // 不改 active：事件到达不能影响侧边栏顺序。
           session.updated = Math.floor(Date.now() / 1000);
         }
         break;
@@ -278,7 +287,6 @@ export class Store {
         }
         break;
     }
-    this.changed();
   }
 
   private takeInit(line: string): void {
@@ -428,7 +436,7 @@ export class Store {
 
   /** 选过的工作区，最近用过的在前。临时目录是测试留下的，不列出来。 */
   recentWorkspaces(): string[] {
-    const sessions = [...this.sessions.values()].sort((a, b) => b.updated - a.updated);
+    const sessions = [...this.sessions.values()].sort((a, b) => sortKey(b) - sortKey(a));
     const cwds = sessions.flatMap((s) => (s.cwd && !s.cwd.startsWith("/tmp/") ? [s.cwd] : []));
     return [...new Set(cwds)];
   }
@@ -436,7 +444,7 @@ export class Store {
   private sendUser(session: Session, text: string): void {
     const id = crypto.randomUUID();
     addSending(session.thread, id, text);
-    session.updated = Math.floor(Date.now() / 1000);
+    session.updated = session.active = Math.floor(Date.now() / 1000);
     void this.hub.send({ type: "input", session: session.id, line: userLine(text, id) }).catch((error) => {
       failSending(session.thread);
       this.error = String(error);
@@ -447,7 +455,7 @@ export class Store {
   newSession(text: string, cwd: string, model: string): void {
     const id = crypto.randomUUID();
     const title = text.split("\n")[0].slice(0, 40);
-    const session = this.session({ id, title, cwd, running: true, updated: null, archived: false });
+    const session = this.session({ id, title, cwd, running: true, updated: null, active: Math.floor(Date.now() / 1000), archived: false });
     session.cwd = cwd;
     session.running = true;
     session.attached = true;
@@ -597,7 +605,7 @@ export class Store {
   }
 
   archivedSessions(): Session[] {
-    return [...this.sessions.values()].filter((s) => s.archived).sort((a, b) => b.updated - a.updated);
+    return [...this.sessions.values()].filter((s) => s.archived).sort((a, b) => sortKey(b) - sortKey(a));
   }
 
   openTasks(): void {

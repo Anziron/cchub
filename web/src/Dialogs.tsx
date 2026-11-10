@@ -408,7 +408,7 @@ export function AppearanceMenu({ look, onChange }: { look: Appearance; onChange:
               <button type="button" key={o.id} role="radio" aria-checked={look.theme === o.id} onClick={() => onChange({ theme: o.id })}>
                 <i
                   className="sw"
-                  style={{ background: o.id === "system" ? `linear-gradient(135deg, ${o.swatch[0]} 50%, ${o.swatch[1]} 50%)` : `linear-gradient(135deg, ${o.swatch[0]} 55%, ${o.swatch[2]} 55%)` }}
+                  style={{ background: `linear-gradient(135deg, ${o.swatch[0]} 55%, ${o.swatch[2]} 55%)` }}
                 />
                 {o.label}
               </button>
