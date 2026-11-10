@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./Icon";
+import { FONTS, SIZES, THEMES, type Appearance } from "./appearance";
 import { backgroundTasks, findModel, hubHost, hubUrl, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
 import { backgroundStatus, isAndroid, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
 import { describeCwd, type Session, type Store } from "./store";
@@ -323,5 +324,67 @@ export function TasksDialog({ store, session }: { store: Store; session: Session
         ))}
       </div>
     </Modal>
+  );
+}
+
+// 外观面板：配色、正文字体、字号，选中立即生效
+export function AppearanceMenu({ look, onChange }: { look: Appearance; onChange: (patch: Partial<Appearance>) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: MouseEvent) => {
+      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+    };
+    addEventListener("mousedown", onDown);
+    return () => removeEventListener("mousedown", onDown);
+  }, [open]);
+  return (
+    <div
+      className="look-wrap"
+      ref={ref}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && open) {
+          event.stopPropagation();
+          setOpen(false);
+        }
+      }}
+    >
+      <button type="button" className="icon" aria-label="外观" title="外观" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Icon name="palette" />
+      </button>
+      {open ? (
+        <div className="look" role="dialog" aria-label="外观">
+          <h4>配色</h4>
+          <div className="opts" role="radiogroup" aria-label="配色">
+            {THEMES.map((o) => (
+              <button type="button" key={o.id} role="radio" aria-checked={look.theme === o.id} onClick={() => onChange({ theme: o.id })}>
+                <i
+                  className="sw"
+                  style={{ background: o.id === "system" ? `linear-gradient(135deg, ${o.swatch[0]} 50%, ${o.swatch[1]} 50%)` : `linear-gradient(135deg, ${o.swatch[0]} 55%, ${o.swatch[2]} 55%)` }}
+                />
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <h4>正文字体</h4>
+          <div className="opts" role="radiogroup" aria-label="正文字体">
+            {FONTS.map((o) => (
+              <button type="button" key={o.id} role="radio" aria-checked={look.font === o.id} onClick={() => onChange({ font: o.id })}>
+                <span className={`aa aa-${o.id}`}>Aa</span>{o.label}
+              </button>
+            ))}
+          </div>
+          <h4>字号</h4>
+          <div className="opts" role="radiogroup" aria-label="字号">
+            {SIZES.map((o) => (
+              <button type="button" key={o.id} role="radio" aria-checked={look.size === o.id} onClick={() => onChange({ size: o.id })}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }

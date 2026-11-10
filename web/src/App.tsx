@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { CommandMenu, ConfirmDialog, ConnectDialog, ModelMenu, TasksDialog, WorkspaceDialog } from "./Dialogs";
+import { AppearanceMenu, CommandMenu, ConfirmDialog, ConnectDialog, ModelMenu, TasksDialog, WorkspaceDialog } from "./Dialogs";
+import { loadAppearance, resolveTheme, saveAppearance, type Appearance } from "./appearance";
 import { Icon } from "./Icon";
 import { isAndroid, isTouch, takeOpenedSession } from "./platform";
 import { firstAsk, isSending, isWaiting, matchCommands, runningTasks, type Ask, type SlashCommand, type Todo } from "./model";
@@ -167,23 +168,36 @@ function Sidebar({ store }: { store: Store }) {
   );
 }
 
-function useTheme() {
-  const [theme, setTheme] = useState(
-    () => localStorage.getItem("cchub.theme") ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"),
-  );
+function useAppearance() {
+  const [look, setLook] = useState<Appearance>(() => loadAppearance(localStorage));
+  const [systemDark, setSystemDark] = useState(() => matchMedia("(prefers-color-scheme: dark)").matches);
+  // 只有选了“跟随系统”才需要监听系统配色
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem("cchub.theme", theme);
-  }, [theme]);
-  return () => {
+    if (look.theme !== "system") return;
+    const mq = matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => setSystemDark(mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [look.theme]);
+  useEffect(() => {
+    const { theme, tone } = resolveTheme(look.theme, systemDark);
+    const d = document.documentElement.dataset;
+    d.theme = theme;
+    d.tone = tone;
+    d.font = look.font;
+    d.size = look.size;
+    saveAppearance(localStorage, look);
+  }, [look, systemDark]);
+  return [look, (patch: Partial<Appearance>) => {
     const root = document.documentElement;
     root.classList.add("switching");
-    setTheme((t) => (t === "dark" ? "light" : "dark"));
+    setLook((a) => ({ ...a, ...patch }));
     setTimeout(() => root.classList.remove("switching"), 280);
-  };
+  }] as const;
 }
 
-function TopBar({ store, session, toggleTheme }: { store: Store; session?: Session; toggleTheme: () => void }) {
+function TopBar({ store, session, look, onLook }: { store: Store; session?: Session; look: Appearance; onLook: (patch: Partial<Appearance>) => void }) {
   const { project, device } = describeCwd(session?.cwd);
   const conn = store.connection;
   const connClass = conn === "connected" ? "" : conn === "disconnected" ? "bad" : "pending";
@@ -202,7 +216,7 @@ function TopBar({ store, session, toggleTheme }: { store: Store; session?: Sessi
           {session ? <span className={offline ? "bad" : ""}><i />{offline ? "设备离线" : "设备在线"}</span> : null}
         </div>
         {session?.running ? <button className="btn quiet end-session" onClick={() => store.askStop(session)}>结束会话</button> : null}
-        <button className="icon" aria-label="切换深浅色" onClick={toggleTheme}><Icon name="moon" /></button>
+        <AppearanceMenu look={look} onChange={onLook} />
         <button className="icon" aria-label="连接服务器" onClick={() => store.toggleSettings()}><Icon name="gear" /></button>
       </div>
     </header>
@@ -461,7 +475,7 @@ function Welcome({ store }: { store: Store }) {
 
 export function App({ store }: { store: Store }) {
   useSyncExternalStore(store.subscribe, store.getVersion);
-  const toggleTheme = useTheme();
+  const [look, setLook] = useAppearance();
   const session = store.selected ? store.sessions.get(store.selected) : undefined;
 
   // 窗口回到前台时刷新一次会话列表和内存，平时不轮询。
@@ -490,7 +504,7 @@ export function App({ store }: { store: Store }) {
     <div className={`app${store.showDrawer ? " drawer" : ""}`}>
       <Sidebar store={store} />
       <main className="main">
-        <TopBar store={store} session={session} toggleTheme={toggleTheme} />
+        <TopBar store={store} session={session} look={look} onLook={setLook} />
         {conn === "disconnected" || (conn === "connecting" && store.url) ? (
           <div className="notice on"><Icon name="alert" /><span>与服务器的连接已断开，任务仍在服务器上运行。正在重连…</span></div>
         ) : null}
