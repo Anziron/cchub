@@ -35,6 +35,7 @@
 - 中断后 `result` 是 `error_during_execution`、`is_error: true`，界面不能显示成任务失败。
 - 录制 `plan` 场景会在 `~/.claude/plans/` 留下方案文件，录完要删。
 - 前端的 `demo.ts` 只在开发时用录制驱动界面：`npm run dev:web` 后打开 `/?s=rich&theme=dark`。经 `pcrun` 启动的开发服务器随 SSH 会话退出，要和截图放在同一条命令里。
+- 弹窗高于容器时会被 `.main` 的 `overflow: hidden` 裁掉标题和关闭按钮，看起来像“弹不出来” → 遮罩用 flex 居中（grid 自动轨道会被内容撑大），弹窗用 `min(固定值, 100%)` 限宽高；改弹窗后用 `/?scene=tasks`（40 个后台任务、长输出）在几种窗口尺寸下检查。
 - 设备没有 Rust，桌面端由 CI 编译，可执行文件在 Actions 的 `cchub-windows` 产物里。
 - 服务器上的 `claude` 受用户配置影响可能不发审批请求，要测审批时加 `--setting-sources project,local`。
 - CLI 会拦截 `sleep 60; ...` 这类命令，实验里要用脚本文件代替。
