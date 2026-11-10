@@ -8,7 +8,7 @@ import { describeCwd, type Session, type Store } from "./store";
 import { TranscriptView } from "./Thread";
 
 /** 弹窗。Esc 只关弹窗，不能冒泡到窗口上变成中断任务。 */
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+function Modal({ title, onClose, children, className }: { title: string; onClose: () => void; children: ReactNode; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!ref.current?.contains(document.activeElement)) ref.current?.focus();
@@ -27,7 +27,7 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
     <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div
         ref={ref}
-        className="modal"
+        className={className ? `modal ${className}` : "modal"}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -350,7 +350,7 @@ export function TasksDialog({ store, session }: { store: Store; session: Session
     if (pre.current) pre.current.scrollTop = pre.current.scrollHeight;
   }, [output?.text]);
   return (
-    <Modal title="后台任务" onClose={() => store.closeTasks()}>
+    <Modal title="后台任务" className="tasks-modal" onClose={() => store.closeTasks()}>
       <div className="tasks">
         {!tasks.length ? <p className="empty">没有后台任务</p> : null}
         {tasks.map((task) => (
