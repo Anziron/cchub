@@ -77,7 +77,10 @@ export const demoHub: Hub = {
       else if (!msg.path) emit({ type: "browse", device: msg.device, path: null, parent: null, entries: ["C:\\", "D:\\"], error: null });
       else emit({ type: "browse", device: msg.device, path: msg.path, parent: msg.path.length > 3 ? "D:\\" : null, entries: ["cchub", "demo-api", "docs-site"].map((name) => `${msg.path!.replace(/\\$/, "")}\\${name}`), error: null });
     } else if (msg.type === "task_output") {
-      emit({ type: "task_output", path: msg.path, text: "tick 1\ntick 2\n构建完成\n", error: null });
+      const text = scene === "tasks"
+        ? Array.from({ length: 400 }, (_, i) => `[${i}] ${"building module ".repeat(1 + (i % 12))}`).join("\n")
+        : "tick 1\ntick 2\n构建完成\n";
+      emit({ type: "task_output", path: msg.path, text, error: null });
     } else if (msg.type === "mount") {
       emit({ type: "mounted", device: msg.device, path: msg.path, cwd: `/mnt/${msg.device}/${msg.path[0].toLowerCase()}/${msg.path.slice(3).replaceAll("\\", "/")}`, error: null });
     } else if (msg.type === "input") {
@@ -117,6 +120,12 @@ export const demoHub: Hub = {
         event({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "b1", task_type: "local_bash", description: "运行完整测试 npm test" }, { task_id: "b2", task_type: "local_bash", description: "构建桌面端" }, { task_id: "b3", task_type: "local_bash", description: "Run read-only codex test task in background" }] });
         event({ type: "system", subtype: "task_notification", task_id: "b3", status: "stopped", output_file: "/tmp/claude-0/x/tasks/b3.output" });
         event({ type: "system", subtype: "task_notification", task_id: "b2", status: "completed", summary: "构建完成", output_file: "/tmp/claude-0/x/tasks/b2.output" });
+      }
+      // `?scene=tasks`：后台任务很多、描述很长、输出几百行，用来检查弹窗不会撑出可见区域。
+      if (msg.session === "rich" && scene === "tasks") {
+        const many = Array.from({ length: 40 }, (_, i) => ({ task_id: `m${i}`, task_type: i % 3 ? "local_bash" : "local_agent", description: `第 ${i} 个任务 ${"运行很长的构建命令 ".repeat(1 + (i % 6))}` }));
+        event({ type: "system", subtype: "background_tasks_changed", tasks: many });
+        many.slice(0, 15).forEach((task) => event({ type: "system", subtype: "task_notification", task_id: task.task_id, status: "completed", summary: "完成", output_file: `/tmp/claude-0/x/tasks/${task.task_id}.output` }));
       }
       if (scene === "offline") emit({ type: "device", session: msg.session, online: false });
     }

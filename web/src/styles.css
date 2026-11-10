@@ -450,7 +450,7 @@ html, body, #root { height: 100%; }
 .menu small { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
 
 /* 弹窗 */
-.overlay { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: rgba(20, 18, 15, .36); animation: fade .16s var(--ease) both; }
+.overlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(20, 18, 15, .36); animation: fade .16s var(--ease) both; }
 .modal { display: flex; flex-direction: column; width: min(480px, 100%); max-height: min(620px, 100%); padding: 16px 20px 18px; border-radius: 16px; outline: 0; background: var(--bg); box-shadow: 0 0 0 1px var(--line-2), var(--shadow); animation: rise .2s var(--ease) both; }
 .modal > header { display: flex; align-items: center; justify-content: space-between; margin: 0 -6px 10px 0; }
 .modal h2 { margin: 0; font: 500 17px/1.4 var(--serif); }
@@ -540,11 +540,12 @@ html, body, #root { height: 100%; }
 .task-body .output { max-height: 240px; padding: 8px 10px; border-radius: 8px; background: var(--code-bg); color: var(--text-2); }
 .task-body .transcript { max-height: 420px; white-space: normal; font: inherit; font-size: 13px; color: var(--text); display: flex; flex-direction: column; gap: 8px; }
 .task-body .transcript .user { margin: 0; }
-/* 后台任务弹窗随窗口缩放：拖大窗口时列表和输出一起变大。 */
+/* 后台任务弹窗：在对话区里居中，宽度和输入框一致；高度固定，展开任务时弹窗不变大不移动，只在列表里滚动。
+   遮罩用 flex 居中，百分比宽高按遮罩实际尺寸算（grid 自动轨道会被展开的内容撑大，弹窗溢出偏位）。 */
 .overlay.local { position: absolute; z-index: 40; }
-.modal.tasks-modal { width: min(960px, 100%); height: min(900px, 100%); max-height: none; }
+.modal.tasks-modal { width: min(720px, 100%); height: min(600px, 100%); max-height: none; }
 .tasks-modal .tasks { flex: 1; max-height: none; }
-.tasks-modal .task-body .output { max-height: max(240px, calc(100vh - 340px)); }
+.tasks-modal .task-body .output { max-height: min(400px, max(160px, calc(100vh - 380px))); }
 
 /* 窄屏：会话列表和对话是两个页面 */
 @media (max-width: 860px) {
