@@ -7,6 +7,8 @@ mod device;
 #[cfg(unix)]
 mod host;
 #[cfg(unix)]
+mod idle;
+#[cfg(unix)]
 mod runner;
 #[cfg(unix)]
 mod session;
@@ -57,6 +59,9 @@ async fn run(config: config::Config) -> std::io::Result<()> {
     use axum::{routing::get, Json, Router};
     use cchub_protocol::{Health, PROTOCOL_VERSION};
 
+    /// 空闲回收的检查间隔。
+    const IDLE_CHECK_EVERY: Duration = Duration::from_secs(60);
+
     async fn health() -> Json<Health> {
         Json(Health {
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -104,6 +109,29 @@ async fn run(config: config::Config) -> std::io::Result<()> {
             .await;
         }
     });
+
+    if !config.idle.is_zero() {
+        let idle = config.idle;
+        let reaper = app.clone();
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(IDLE_CHECK_EVERY);
+            loop {
+                every.tick().await;
+                let app = reaper.clone();
+                let stopped = tokio::task::spawn_blocking(move || {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |time| time.as_secs());
+                    idle::reclaim(&app, idle, now)
+                })
+                .await
+                .unwrap_or_default();
+                for session in stopped {
+                    println!("空闲回收：结束会话 {session} 的进程");
+                }
+            }
+        });
+    }
 
     let router = Router::new()
         .route("/health", get(health))

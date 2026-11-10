@@ -6,7 +6,9 @@ pub mod envelope;
 pub mod sync;
 pub mod wire;
 
-pub use envelope::{classify, is_message_end, is_user_message, EventClass};
+pub use envelope::{
+    classify, is_conversation_line, is_message_end, is_user_message, turn_finished, EventClass,
+};
 pub use sync::{Inbound, InboundAction, LineSplitter, Outbound, OutboundLimits};
 pub use wire::{
     ClientMsg, ConnectionState, Frame, Health, ServerMsg, SessionInfo, UiEvent, PROTOCOL_VERSION,

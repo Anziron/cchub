@@ -5,11 +5,13 @@
 //! - `ls <设备> [路径]`：第 1 行当前路径，第 2 行上一级，之后每行一个子目录的完整路径。
 //! - `mount <设备> <路径>`：输出服务器上的路径。
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path};
 use std::process::Command;
 use std::time::Duration;
+
+use cchub_protocol::is_conversation_line;
 
 use crate::runner;
 
@@ -17,6 +19,10 @@ const BROWSE_TIMEOUT: Duration = Duration::from_secs(15);
 const MOUNT_TIMEOUT: Duration = Duration::from_secs(30);
 /// 查看任务输出只看末尾，日志再大也不占内存。
 const TASK_OUTPUT_TAIL: u64 = 64 * 1024;
+/// 子代理任务的输出文件链接到它的完整记录 `.jsonl`，夹着大量内部记录，单行可达几十 KB：
+/// 读更长的末尾，只留对话行，返回的整行合计不超过这个长度。
+const TRANSCRIPT_TAIL: u64 = 2 * 1024 * 1024;
+const TRANSCRIPT_MAX: usize = 256 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Listing {
@@ -82,16 +88,52 @@ pub fn read_task_output(path: &str) -> Result<String, String> {
     if !is_task_output(path) {
         return Err("不是后台任务的输出文件".to_string());
     }
+    let transcript = fs::canonicalize(path)
+        .is_ok_and(|target| target.extension().is_some_and(|ext| ext == "jsonl"));
+    let tail = if transcript {
+        TRANSCRIPT_TAIL
+    } else {
+        TASK_OUTPUT_TAIL
+    };
     let failed = |_| "输出文件读取失败，可能已被清理".to_string();
     let mut file = File::open(path).map_err(failed)?;
     let length = file.metadata().map_err(failed)?.len();
-    file.seek(SeekFrom::Start(length.saturating_sub(TASK_OUTPUT_TAIL)))
-        .map_err(failed)?;
+    let start = length.saturating_sub(tail);
+    file.seek(SeekFrom::Start(start)).map_err(failed)?;
     let mut bytes = Vec::new();
-    file.take(TASK_OUTPUT_TAIL)
-        .read_to_end(&mut bytes)
-        .map_err(failed)?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    file.take(tail).read_to_end(&mut bytes).map_err(failed)?;
+    let text = String::from_utf8_lossy(&bytes);
+    Ok(if transcript {
+        conversation_tail(&text, start > 0, TRANSCRIPT_MAX)
+    } else {
+        text.into_owned()
+    })
+}
+
+/// 只留对话行，从后往前取整行，合计不超过 `max`（至少留一行）。
+/// 不是从头读时第一行是半行，丢掉；最后一行可能还没写完，解析不了也会被过滤。
+fn conversation_tail(text: &str, partial_first: bool, max: usize) -> String {
+    let skip = usize::from(partial_first);
+    let mut kept = Vec::new();
+    let mut size = 0;
+    for line in text
+        .lines()
+        .skip(skip)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        if !is_conversation_line(line) {
+            continue;
+        }
+        if !kept.is_empty() && size + line.len() + 1 > max {
+            break;
+        }
+        size += line.len() + 1;
+        kept.push(line);
+    }
+    kept.reverse();
+    kept.join("\n")
 }
 
 fn parse_listing(output: &str) -> Listing {
@@ -152,5 +194,31 @@ mod tests {
         assert!(browse("/bin/false", Some("pc"), None).is_err());
         assert!(browse("/nonexistent/cc-workspace", None, None).is_err());
         assert!(mount("/bin/false", "pc", "/x").is_err());
+    }
+
+    #[test]
+    fn transcript_keeps_whole_conversation_lines_within_limit() {
+        let user = r#"{"type":"user","message":{"content":"hi"}}"#;
+        let assistant = r#"{"type":"assistant","message":{"content":[]}}"#;
+        let blob = r#"{"type":"api-request-blob","content":"system prompt"}"#;
+        let text = format!("pe\":1}}\n{user}\n{blob}\n{assistant}\n{{\"type\":\"assis");
+        assert_eq!(
+            conversation_tail(&text, true, 1024),
+            format!("{user}\n{assistant}")
+        );
+        // 第一行完整时不丢。
+        assert_eq!(
+            conversation_tail(&format!("{user}\n{blob}"), false, 1024),
+            user
+        );
+        // 超长时只留最后的整行，但至少一行。
+        assert_eq!(
+            conversation_tail(&format!("{user}\n{assistant}"), false, assistant.len() + 1),
+            assistant
+        );
+        assert_eq!(
+            conversation_tail(&format!("{user}\n{assistant}"), false, 1),
+            assistant
+        );
     }
 }

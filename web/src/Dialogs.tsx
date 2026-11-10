@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./Icon";
 import { FONTS, SIZES, THEMES, type Appearance } from "./appearance";
-import { backgroundTasks, findModel, hubHost, hubUrl, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
+import { backgroundTasks, findModel, hubHost, hubUrl, isTranscript, parseTranscript, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
 import { backgroundStatus, isAndroid, pageVisible, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
 import { formatAgo } from "./sidebar";
 import { describeCwd, type Session, type Store } from "./store";
+import { TranscriptView } from "./Thread";
 
 /** 弹窗。Esc 只关弹窗，不能冒泡到窗口上变成中断任务。 */
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
@@ -328,7 +329,11 @@ export function TasksDialog({ store, session }: { store: Store; session: Session
   const path = open ? taskOutputPath(session.thread, open) : null;
   const running = open?.status === "running";
   const output = store.taskOutput?.path === path ? store.taskOutput : null;
-  const pre = useRef<HTMLPreElement>(null);
+  const pre = useRef<HTMLDivElement & HTMLPreElement>(null);
+  const transcript = useMemo(
+    () => (output?.text && isTranscript(output.text) ? parseTranscript(output.text) : null),
+    [output?.text],
+  );
   // 打开时刷新：用时每秒，输出在任务运行时每 3 秒。窗口看不见时不刷新（失去焦点照常刷新）。
   useEffect(() => {
     const timer = setInterval(() => { if (pageVisible()) setTick(Date.now()); }, 1000);
@@ -362,7 +367,9 @@ export function TasksDialog({ store, session }: { store: Store; session: Session
                 {task.summary ? <p className="help first">{task.summary}</p> : null}
                 {!path ? <p className="empty">这个任务没有可查看的输出文件</p> : null}
                 {output?.error ? <p className="empty bad">{output.error}</p> : null}
-                {path && !output?.error ? (
+                {path && !output?.error && transcript ? (
+                  <div className="output transcript" ref={pre}><TranscriptView items={transcript} cwd={session.cwd} /></div>
+                ) : path && !output?.error ? (
                   <pre className="output" ref={pre}>{output?.text == null ? "正在读取…" : output.text || "还没有输出"}</pre>
                 ) : null}
               </div>

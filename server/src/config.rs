@@ -33,6 +33,8 @@ pub struct Config {
     pub session_memory_max_mb: u64,
     /// 可用内存低于此值时拒绝启动新进程，0 表示不检查。
     pub min_available_mb: u64,
+    /// 会话空闲这么久就结束进程，下次发消息再 `--resume`；0 表示不回收。
+    pub idle: Duration,
     /// 浏览和挂载设备目录的外部命令，协议见 `workspace.rs`。
     pub workspace_cmd: String,
     /// 把新会话第一条消息概括成标题的命令，协议见 `title.rs`；为空时不生成。
@@ -83,7 +85,8 @@ impl Config {
                 .map_err(|_| format!("{name} 必须是数字：{value}"))
         };
         let session_memory_max_mb = megabytes("HUBD_SESSION_MEMORY_MAX_MB", "600")?;
-        let min_available_mb = megabytes("HUBD_MIN_AVAILABLE_MB", "300")?;
+        let min_available_mb = megabytes("HUBD_MIN_AVAILABLE_MB", "100")?;
+        let idle_minutes = megabytes("HUBD_IDLE_MINUTES", "10")?;
         let title_memory_max_mb = megabytes("HUBD_TITLE_MEMORY_MAX_MB", "300")?;
 
         let host = match var("HUBD_HOST", "systemd").as_str() {
@@ -104,6 +107,7 @@ impl Config {
             retention: Duration::from_secs(retention_days * 24 * 60 * 60),
             session_memory_max_mb,
             min_available_mb,
+            idle: Duration::from_secs(idle_minutes * 60),
         })
     }
 }

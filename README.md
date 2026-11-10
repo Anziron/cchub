@@ -87,7 +87,8 @@ CI 会构建 `hubd` 静态二进制和 Windows 桌面端，产物在 Actions 页
 | `HUBD_HOST` | `systemd` | 进程托管方式：`systemd` 或 `direct` |
 | `HUBD_CLAUDE_CMD` | `claude -p …` | 启动命令。要用 API Key 时，在 `hubd` 的环境里设置 `ANTHROPIC_API_KEY`，`-p` 模式下会优先使用它 |
 | `HUBD_SESSION_MEMORY_MAX_MB` | `600` | 每个会话的内存上限，`0` 表示不限 |
-| `HUBD_MIN_AVAILABLE_MB` | `300` | 可用内存低于此值时拒绝启动新会话，`0` 表示不检查 |
+| `HUBD_MIN_AVAILABLE_MB` | `100` | 可用内存低于此值时拒绝启动新会话，`0` 表示不检查 |
+| `HUBD_IDLE_MINUTES` | `10` | 会话空闲（这一轮已结束、没有后台任务）这么久就结束进程，下次发消息自动恢复；`0` 表示不回收 |
 | `HUBD_WORKSPACE_CMD` | `cc-workspace` | 工作区命令，见下 |
 
 ### 工作区命令

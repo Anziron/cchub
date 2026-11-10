@@ -538,6 +538,8 @@ html, body, #root { height: 100%; }
 .task-failed .task-main small { color: var(--del); }
 .task-body { padding: 0 8px 10px; }
 .task-body .output { max-height: 240px; padding: 8px 10px; border-radius: 8px; background: var(--code-bg); color: var(--text-2); }
+.task-body .transcript { max-height: 420px; white-space: normal; font: inherit; font-size: 13px; color: var(--text); display: flex; flex-direction: column; gap: 8px; }
+.task-body .transcript .user { margin: 0; }
 
 /* 窄屏：会话列表和对话是两个页面 */
 @media (max-width: 860px) {

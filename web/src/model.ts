@@ -299,6 +299,16 @@ export function taskOutputPath(thread: Thread, task: Task): string | null {
   return result?.match(/\/tmp\/claude-[^\s"']+\/tasks\/[^\s"']+\.output/)?.[0] ?? null;
 }
 
+/** 子代理任务的输出是 hubd 筛过的对话行（`.jsonl`），普通任务是纯文本。 */
+export const isTranscript = (text: string): boolean => text.startsWith("{");
+
+/** 把子代理的对话行解析成条目，在后台任务面板里按对话显示。 */
+export function parseTranscript(text: string): Item[] {
+  const thread = newThread();
+  for (const line of text.split("\n")) if (line) apply(thread, line);
+  return thread.items;
+}
+
 /** 额度事件来自哪里，用来判断新旧。`rank`：运行中的会话用 `Number.MAX_SAFE_INTEGER`，否则用会话日志的最后更新时间。 */
 export interface LimitSource {
   session: string;

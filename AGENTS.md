@@ -67,3 +67,5 @@
 - `android-smoke.sh` 全绿不等于界面正常，曾经白屏也通过 → 要检查界面内容并看 `android-shots` 截图。`HUBD_CLAUDE_CMD` 里的路径必须是绝对路径，会话在别的目录启动。
 - 手机端 APK 由 CI 编译，产物是 `cchub-android`；`desktop/gen/` 不入库，Android 的清单和原生代码都放在 `desktop/android-bridge/android/`，由 Gradle 合并。
 - `ClientMsg::List` 不等进程启动 → `Start` 之后马上 `List` 可能看到 `running: false`，测试要重试。
+- 子代理任务的 `output_file` 是指向子代理完整记录 `.jsonl` 的符号链接，夹着 `api-request-*`、`attachment` 等内部记录，单行可达几十 KB → `read_task_output` 对 `.jsonl` 只回整行的 `user` / `assistant`，前端用 `parseTranscript` 按对话显示；普通任务仍是纯文本末尾。
+- 空闲回收（`idle.rs`）判定只看 `out` 末尾的信封：`result` 要在最后的 `assistant` / `control_request` 之后，最近的 `background_tasks_changed` 快照要为空；用户输入和 `set_model` 回显是 `user`，不算活动。被回收的会话前端照常走 `--resume` 恢复。
