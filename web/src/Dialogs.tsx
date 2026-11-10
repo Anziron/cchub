@@ -8,7 +8,8 @@ import { describeCwd, type Session, type Store } from "./store";
 import { TranscriptView } from "./Thread";
 
 /** 弹窗。Esc 只关弹窗，不能冒泡到窗口上变成中断任务。 */
-function Modal({ title, onClose, children, className }: { title: string; onClose: () => void; children: ReactNode; className?: string }) {
+/** `local`：只盖住对话区并在其中居中（和输入框对齐），要放在 `.main` 里渲染。 */
+function Modal({ title, onClose, children, className, local }: { title: string; onClose: () => void; children: ReactNode; className?: string; local?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!ref.current?.contains(document.activeElement)) ref.current?.focus();
@@ -24,7 +25,7 @@ function Modal({ title, onClose, children, className }: { title: string; onClose
     return () => removeEventListener("keydown", onKey, true);
   }, [onClose]);
   return (
-    <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className={local ? "overlay local" : "overlay"} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div
         ref={ref}
         className={className ? `modal ${className}` : "modal"}
@@ -350,7 +351,7 @@ export function TasksDialog({ store, session }: { store: Store; session: Session
     if (pre.current) pre.current.scrollTop = pre.current.scrollHeight;
   }, [output?.text]);
   return (
-    <Modal title="后台任务" className="tasks-modal" onClose={() => store.closeTasks()}>
+    <Modal title="后台任务" className="tasks-modal" local onClose={() => store.closeTasks()}>
       <div className="tasks">
         {!tasks.length ? <p className="empty">没有后台任务</p> : null}
         {tasks.map((task) => (

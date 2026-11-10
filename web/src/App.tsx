@@ -537,12 +537,12 @@ export function App({ store }: { store: Store }) {
         ) : (
           <Welcome store={store} />
         )}
+        {store.showTasks && session ? <TasksDialog store={store} session={session} /> : null}
       </main>
       {store.showSettings ? <ConnectDialog store={store} /> : null}
       {store.showWorkspace ? <WorkspaceDialog store={store} /> : null}
       {store.stopping ? <ConfirmDialog store={store} session={store.stopping} /> : null}
       {store.showResume ? <ResumeDialog store={store} /> : null}
-      {store.showTasks && session ? <TasksDialog store={store} session={session} /> : null}
     </div>
   );
 }

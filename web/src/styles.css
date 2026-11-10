@@ -541,6 +541,7 @@ html, body, #root { height: 100%; }
 .task-body .transcript { max-height: 420px; white-space: normal; font: inherit; font-size: 13px; color: var(--text); display: flex; flex-direction: column; gap: 8px; }
 .task-body .transcript .user { margin: 0; }
 /* 后台任务弹窗随窗口缩放：拖大窗口时列表和输出一起变大。 */
+.overlay.local { position: absolute; z-index: 40; }
 .modal.tasks-modal { width: min(960px, 100%); height: min(900px, 100%); max-height: none; }
 .tasks-modal .tasks { flex: 1; max-height: none; }
 .tasks-modal .task-body .output { max-height: max(240px, calc(100vh - 340px)); }
