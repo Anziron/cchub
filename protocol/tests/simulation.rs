@@ -130,3 +130,48 @@ proptest! {
         prop_assert_eq!(got, expected);
     }
 }
+
+/// 回放：已写完整的消息的片段被跳过，边界前未写完的片段保留，不能丢的事件一条不少，
+/// 边界之后的实时事件不受影响。
+#[test]
+fn replay_skips_finished_message_partials_and_keeps_everything_else() {
+    let stream = |index: usize| format!(r#"{{"type":"stream_event","index":{index}}}"#);
+    let assistant = |index: usize| format!(r#"{{"type":"assistant","index":{index}}}"#);
+    let history = vec![
+        stream(0),
+        stream(1),
+        assistant(2),
+        r#"{"type":"brand_new"}"#.to_string(),
+        stream(4),
+        r#"{"type":"result"}"#.to_string(),
+        stream(6),
+        stream(7),
+    ];
+    let live = vec![stream(8), assistant(9), stream(10)];
+    let bytes = |lines: &[String]| -> Vec<u8> {
+        lines
+            .iter()
+            .flat_map(|l| format!("{l}\n").into_bytes())
+            .collect()
+    };
+    let replay_len = bytes(&history).len() as u64;
+    let all: Vec<String> = history.iter().chain(&live).cloned().collect();
+    let log = bytes(&all);
+
+    let mut server = Server::attach(0, OutboundLimits::default());
+    server.queue.set_replay_until(replay_len);
+    server.pump(&log, 37);
+    let mut client = Inbound::new(0);
+    let mut applied = Vec::new();
+    while let Some(msg) = server.queue.pop() {
+        if let Some(InboundAction::Apply { payload, .. }) = client.on_message(msg) {
+            applied.push(payload);
+        }
+    }
+
+    assert_eq!(client.expected(), log.len() as u64);
+    // 回放中被跳过的是 index 0、1、4；6、7 属于未写完的消息，8、10 是实时的。
+    let skipped = [stream(0), stream(1), stream(4)];
+    let expected: Vec<&String> = all.iter().filter(|l| !skipped.contains(l)).collect();
+    assert_eq!(applied.iter().collect::<Vec<_>>(), expected);
+}

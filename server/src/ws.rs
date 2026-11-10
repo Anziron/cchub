@@ -11,7 +11,9 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
 use axum::http::{header::ORIGIN, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use cchub_protocol::{ClientMsg, Frame, LineSplitter, Outbound, OutboundLimits, ServerMsg};
+use cchub_protocol::{
+    is_user_message, ClientMsg, Frame, LineSplitter, Outbound, OutboundLimits, ServerMsg,
+};
 use futures_util::{SinkExt, StreamExt};
 use inotify::{Inotify, WatchMask};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -19,7 +21,7 @@ use tokio::sync::mpsc;
 use tokio::task::{spawn_blocking, JoinHandle};
 
 use crate::auth;
-use crate::device::{self, DeviceMonitor};
+use crate::device::{self, Probes, Subscription};
 use crate::host::ProcessHost;
 use crate::session::{valid_id, Sessions};
 use crate::title;
@@ -27,7 +29,6 @@ use crate::workspace;
 
 const HEARTBEAT: Duration = Duration::from_secs(15);
 const STATUS_EVERY: Duration = Duration::from_secs(5);
-const PROBE_EVERY_STATUS: u32 = 2;
 const READ_CHUNK: usize = 64 * 1024;
 const CHANNEL_FRAMES: usize = 16;
 const TITLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -40,6 +41,8 @@ pub struct App {
     pub workspace_cmd: String,
     pub title_cmd: String,
     pub title_memory_mb: u64,
+    /// 设备探测按项目目录共享，所有连接订阅同一个结果。
+    pub probes: Probes,
 }
 
 pub async fn upgrade(
@@ -278,7 +281,15 @@ async fn handle(
             *reader = Some(tokio::spawn(follow(app.clone(), id, after, tx.clone())));
         }
         ClientMsg::Input { line, .. } => {
-            blocking(app, move |app| app.sessions.write_line(&id, &line)).await?;
+            blocking(app, move |app| {
+                app.sessions.write_line(&id, &line)?;
+                // 用户发言才算活跃，侧边栏据此排序；审批回复等控制消息不算。
+                if is_user_message(&line) {
+                    app.sessions.touch_active(&id)?;
+                }
+                Ok(())
+            })
+            .await?;
         }
         ClientMsg::Stop { .. } => {
             blocking(app, move |app| {
@@ -443,8 +454,8 @@ async fn follow(app: Arc<App>, session: String, after: u64, tx: mpsc::Sender<Fra
     };
     let path = app.sessions.out_path(&session);
     // 先建监听再读，订阅期间写入的内容不会漏。
-    let mut changes = match watch(&path, after).await {
-        Ok(changes) => changes,
+    let (mut changes, replay_until) = match watch(&path, after).await {
+        Ok(watching) => watching,
         Err(message) => {
             let _ = tx.send(frame(ServerMsg::Error { message })).await;
             return;
@@ -453,12 +464,12 @@ async fn follow(app: Arc<App>, session: String, after: u64, tx: mpsc::Sender<Fra
 
     let mut splitter = LineSplitter::new(after);
     let mut queue = Outbound::new(OutboundLimits::default());
+    // 订阅时已有的内容是回放：写完整的消息不再需要它的逐字片段。
+    queue.set_replay_until(replay_until);
     let mut buffer = vec![0; READ_CHUNK];
     let mut status = tokio::time::interval(STATUS_EVERY);
-    let mut ticks: u32 = 0;
     let mut last_running = None;
-    let mut monitor = DeviceMonitor::default();
-    let mut probing: Option<JoinHandle<bool>> = None;
+    let mut device: Option<(PathBuf, Subscription)> = None;
 
     if let Err(message) = fill(&path, &mut splitter, &mut queue, &mut buffer).await {
         let _ = tx.send(frame(ServerMsg::Error { message })).await;
@@ -488,9 +499,8 @@ async fn follow(app: Arc<App>, session: String, after: u64, tx: mpsc::Sender<Fra
                 }
                 fill(&path, &mut splitter, &mut queue, &mut buffer).await
             }
-            result = async { probing.as_mut().expect("条件已保证").await }, if probing.is_some() => {
-                probing = None;
-                if let Some(online) = monitor.observe(result.unwrap_or(false)) {
+            online = async { device.as_mut().expect("条件已保证").1.changed().await }, if device.is_some() => {
+                if let Some(online) = online {
                     if tx.send(frame(ServerMsg::Device { online })).await.is_err() {
                         return;
                     }
@@ -508,12 +518,19 @@ async fn follow(app: Arc<App>, session: String, after: u64, tx: mpsc::Sender<Fra
                         return;
                     }
                 }
-                if ticks.is_multiple_of(PROBE_EVERY_STATUS) && probing.is_none() {
-                    if let Some(cwd) = app.sessions.cwd(&session) {
-                        probing = Some(spawn_blocking(move || device::probe(&cwd)));
+                // 项目目录可能在订阅后才记下或变化：每次检查，变了就换订阅。
+                if let Some(cwd) = app.sessions.cwd(&session) {
+                    if device.as_ref().is_none_or(|(current, _)| *current != cwd) {
+                        let mut subscription = app.probes.subscribe(&cwd);
+                        let known = subscription.current();
+                        device = Some((cwd, subscription));
+                        if let Some(online) = known {
+                            if tx.send(frame(ServerMsg::Device { online })).await.is_err() {
+                                return;
+                            }
+                        }
                     }
                 }
-                ticks = ticks.wrapping_add(1);
                 Ok(())
             }
         };
@@ -524,10 +541,11 @@ async fn follow(app: Arc<App>, session: String, after: u64, tx: mpsc::Sender<Fra
     }
 }
 
+/// 返回日志的变化流和订阅时日志的长度（回放边界）。
 async fn watch(
     path: &std::path::Path,
     after: u64,
-) -> Result<inotify::EventStream<[u8; 1024]>, String> {
+) -> Result<(inotify::EventStream<[u8; 1024]>, u64), String> {
     let length = tokio::fs::metadata(path)
         .await
         .map_err(|error| format!("读取日志失败：{error}"))?
@@ -541,7 +559,8 @@ async fn watch(
         .watches()
         .add(path, WatchMask::MODIFY)
         .map_err(failed)?;
-    inotify.into_event_stream([0; 1024]).map_err(failed)
+    let changes = inotify.into_event_stream([0; 1024]).map_err(failed)?;
+    Ok((changes, length))
 }
 
 async fn fill(

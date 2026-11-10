@@ -416,8 +416,11 @@ function onUser(thread: Thread, event: Json): void {
   for (const part of content as Json[]) {
     if (part.type === "tool_result") {
       onToolResult(thread, part);
-      thread.phase = "thinking";
-      thread.activeTool = undefined;
+      // 子代理的工具结果不代表主线程状态：主轮已结束或在等 Agent 时不能翻成“思考中”。
+      if (!event.parent_tool_use_id) {
+        thread.phase = "thinking";
+        thread.activeTool = undefined;
+      }
     } else if (part.type === "text" && !event.parent_tool_use_id) {
       if (String(part.text).startsWith("[Request interrupted")) {
         thread.items.push({ kind: "interrupted", id: event.uuid ?? `i${thread.items.length}` });

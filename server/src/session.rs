@@ -7,7 +7,7 @@ use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use cchub_protocol::SessionInfo;
 
@@ -58,6 +58,16 @@ impl Sessions {
         }
     }
 
+    /// 用户发了言：更新 `active` 的修改时间。文件不存在就创建。
+    pub fn touch_active(&self, session: &str) -> io::Result<()> {
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(self.dir(session).join("active"))?;
+        file.set_modified(SystemTime::now())
+    }
+
     pub fn set_title(&self, session: &str, title: &str) -> io::Result<()> {
         fs::write(self.dir(session).join("title"), title)
     }
@@ -79,16 +89,16 @@ impl Sessions {
                 if !dir.join("in").exists() {
                     return None;
                 }
-                let updated = fs::metadata(dir.join("out"))
-                    .and_then(|meta| meta.modified())
-                    .ok()
-                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                    .map(|age| age.as_secs());
+                let updated = mtime_secs(&dir.join("out"));
+                // 没发过言（或旧会话）就用会话创建时间，即 `cwd` 文件的修改时间。
+                let active =
+                    mtime_secs(&dir.join("active")).or_else(|| mtime_secs(&dir.join("cwd")));
                 Some(SessionInfo {
                     title: fs::read_to_string(dir.join("title")).ok(),
                     cwd: fs::read_to_string(dir.join("cwd")).ok(),
                     running: is_running(&id, &dir),
                     updated,
+                    active,
                     archived: dir.join("archived").exists(),
                     id,
                 })
@@ -184,6 +194,14 @@ impl Sessions {
     }
 }
 
+fn mtime_secs(path: &Path) -> Option<u64> {
+    fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|age| age.as_secs())
+}
+
 fn mkfifo(path: &Path) -> io::Result<()> {
     let path = CString::new(path.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "路径包含空字符"))?;
@@ -224,6 +242,29 @@ mod tests {
         assert_eq!(list[0].title.as_deref(), Some("修登录"));
         assert_eq!(list[0].cwd.as_deref(), Some("/work"));
         assert!(list[0].running);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn active_follows_user_input_and_falls_back_to_cwd_file() {
+        let root = std::env::temp_dir().join(format!("hubd-active-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let sessions = Sessions::new(root.clone());
+        sessions.prepare("a").unwrap();
+        assert_eq!(sessions.list(|_, _| false)[0].active, None);
+
+        sessions.set_cwd("a", Path::new("/work")).unwrap();
+        let created = mtime_secs(&root.join("a/cwd"));
+        assert!(created.is_some());
+        assert_eq!(sessions.list(|_, _| false)[0].active, created);
+
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        let file = File::create(root.join("a/cwd")).unwrap();
+        file.set_modified(old).unwrap();
+        sessions.touch_active("a").unwrap();
+        sessions.touch_active("a").unwrap();
+        let active = sessions.list(|_, _| false)[0].active.unwrap();
+        assert!(active > old.duration_since(UNIX_EPOCH).unwrap().as_secs() + 3000);
         fs::remove_dir_all(&root).unwrap();
     }
 
