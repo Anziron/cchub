@@ -22,6 +22,7 @@ use crate::auth;
 use crate::device::{self, DeviceMonitor};
 use crate::host::ProcessHost;
 use crate::session::{valid_id, Sessions};
+use crate::title;
 use crate::workspace;
 
 const HEARTBEAT: Duration = Duration::from_secs(15);
@@ -29,6 +30,7 @@ const STATUS_EVERY: Duration = Duration::from_secs(5);
 const PROBE_EVERY_STATUS: u32 = 2;
 const READ_CHUNK: usize = 64 * 1024;
 const CHANNEL_FRAMES: usize = 16;
+const TITLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct App {
     pub sessions: Sessions,
@@ -36,6 +38,8 @@ pub struct App {
     pub allowed_users: Vec<String>,
     pub min_available_mb: u64,
     pub workspace_cmd: String,
+    pub title_cmd: String,
+    pub title_memory_mb: u64,
 }
 
 pub async fn upgrade(
@@ -130,8 +134,9 @@ async fn serve(app: Arc<App>, socket: WebSocket) {
             continue;
         }
         // 建目录和写标题只碰本机磁盘，先做完，紧接着的列表请求才能看到这个会话。
-        if let ClientMsg::Start { title, .. } = &msg {
+        if let ClientMsg::Start { title, prompt, .. } = &msg {
             let (id, title) = (session.clone(), title.clone());
+            let prompt = prompt.clone();
             let prepared = blocking(&app, move |app| {
                 app.sessions.prepare(&id)?;
                 match &title {
@@ -145,6 +150,14 @@ async fn serve(app: Arc<App>, socket: WebSocket) {
                     break;
                 }
                 continue;
+            }
+            if let Some(prompt) = prompt.filter(|prompt| !prompt.trim().is_empty()) {
+                if !app.title_cmd.is_empty() {
+                    spawn_blocking({
+                        let (app, id) = (app.clone(), session.clone());
+                        move || summarize_title(&app, &id, &prompt)
+                    });
+                }
             }
         }
         let worker = workers.entry(session.clone()).or_insert_with(|| {
@@ -362,6 +375,24 @@ async fn list(app: Arc<App>, tx: mpsc::Sender<Frame>) {
         },
     };
     let _ = tx.send(frame).await;
+}
+
+/// 后台生成标题，失败时保留客户端给的截断标题。客户端下次 `List` 时看到新标题。
+fn summarize_title(app: &App, session: &str, prompt: &str) {
+    if !has_room(mem_available_mb(), app.min_available_mb) {
+        return;
+    }
+    let dir = app.sessions.dir(session);
+    let summary = title::generate(
+        &app.title_cmd,
+        &dir,
+        app.title_memory_mb,
+        prompt,
+        TITLE_TIMEOUT,
+    );
+    if let Some(summary) = summary {
+        let _ = app.sessions.set_title(session, &summary);
+    }
 }
 
 fn mem_available_mb() -> Option<u64> {

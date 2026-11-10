@@ -31,6 +31,9 @@ pub enum ClientMsg {
         /// 显示在会话列表里的标题。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        /// 新会话第一条消息的原文。给出时 `hubd` 在后台概括成标题，替换 `title`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt: Option<String>,
     },
     /// 列出服务器上的会话。
     List,

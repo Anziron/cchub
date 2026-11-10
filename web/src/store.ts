@@ -14,7 +14,6 @@ import {
   initializeLine,
   interruptLine,
   markInterrupting,
-  isWaiting,
   newThread,
   onProcessExit,
   parseCommands,
@@ -38,11 +37,15 @@ export interface Session {
   cwd?: string;
   running: boolean;
   updated: number;
+  /** 服务器报的日志最后更新时间（Unix 秒），重放时不会变，用来判断额度事件的新旧。 */
+  logUpdated: number;
   deviceOnline: boolean;
   attached: boolean;
   thread: Thread;
   /** 这个项目的 `/` 命令。不同项目的技能不同。 */
   commands?: SlashCommand[];
+  /** 进程没在运行时选的模型：写进 FIFO 会丢，等下次启动时在用户消息之前补发。 */
+  pendingModel?: string;
 }
 
 const URL_KEY = "cchub.url";
@@ -53,6 +56,8 @@ const LIMITS_KEY = "cchub.limits";
 const DRAFTS_KEY = "cchub.drafts";
 const TASK_TIMES_KEY = "cchub.taskTimes";
 const MAX_TASK_TIMES = 200;
+/** 新会话发出后刷新列表的时间点：haiku 起标题一般 4～6 秒。 */
+const TITLE_REFRESH_MS = [7000, 20000];
 /** 新会话页的草稿。 */
 export const NEW_DRAFT = "";
 
@@ -182,6 +187,7 @@ export class Store {
         title: info.title ?? "未命名会话",
         running: false,
         updated: 0,
+        logUpdated: 0,
         deviceOnline: true,
         attached: false,
         thread: newThread(),
@@ -203,6 +209,7 @@ export class Store {
           session.title = info.title ?? session.title;
           session.cwd = info.cwd ?? session.cwd;
           session.updated = info.updated ?? session.updated;
+          session.logUpdated = info.updated ?? session.logUpdated;
           session.running = info.running;
           // 运行中的都订阅，这样才能知道哪个在等人决定。
           if (info.running || info.id === this.selected) this.attach(session);
@@ -218,7 +225,7 @@ export class Store {
         const session = this.sessions.get(event.session);
         if (session) {
           this.takeInit(event.payload);
-          this.takeLimits(event.payload);
+          this.takeLimits(session, event.seq, event.payload);
           apply(session.thread, event.payload);
           this.stampTasks(session, event.payload);
           session.updated = Math.floor(Date.now() / 1000);
@@ -285,8 +292,9 @@ export class Store {
     }
   }
 
-  private takeLimits(line: string): void {
-    const next = parseRateLimits(line);
+  private takeLimits(session: Session, seq: number, line: string): void {
+    const rank = session.running ? Number.MAX_SAFE_INTEGER : session.logUpdated;
+    const next = parseRateLimits(line, { session: session.id, seq, rank });
     if (!next) return;
     this.limits = mergeRateLimits(this.limits, next);
     localStorage.setItem(LIMITS_KEY, JSON.stringify(this.limits));
@@ -435,10 +443,16 @@ export class Store {
     session.attached = true;
     this.selected = id;
     this.showDrawer = false;
-    void this.send({ type: "start", session: id, cwd, title });
+    // 第一条消息交给 hubd 在后台概括成标题（`/` 命令不概括），几秒后刷新列表拿到。
+    const prompt = text.trimStart().startsWith("/") ? undefined : text;
+    void this.send({ type: "start", session: id, cwd, title, prompt });
+    if (prompt) for (const delay of TITLE_REFRESH_MS) setTimeout(() => this.refresh(), delay);
     void this.send({ type: "attach", session: id, after: 0 });
     this.requestInit(session);
-    if (model) void this.send({ type: "input", session: id, line: setModelLine(model) });
+    if (model) {
+      session.thread.model = model;
+      void this.send({ type: "input", session: id, line: setModelLine(model) });
+    }
     this.sendUser(session, text);
     this.refresh();
     this.changed();
@@ -455,6 +469,10 @@ export class Store {
       session.running = true;
       this.initialized.delete(session.id);
       this.requestInit(session);
+      if (session.pendingModel) {
+        void this.send({ type: "input", session: session.id, line: setModelLine(session.pendingModel) });
+        session.pendingModel = undefined;
+      }
     }
     // `/model` 回复成功但不生效，要走控制消息。其他命令都原样交给 CLI。
     const model = /^\/model\s+(\S+)\s*$/.exec(text)?.[1];
@@ -541,18 +559,12 @@ export class Store {
   }
 
   setModel(session: Session, model: string): void {
-    // `/model` 回复成功但不生效，必须走控制消息。
-    void this.send({ type: "input", session: session.id, line: setModelLine(model) });
+    // `/model` 回复成功但不生效，必须走控制消息；它不进会话记录，模型看不到。
+    // 进程已回收时写进 FIFO 会丢，先记下，下次发消息恢复进程时补发。
+    if (session.running) void this.send({ type: "input", session: session.id, line: setModelLine(model) });
+    else session.pendingModel = model;
     session.thread.model = model;
     this.changed();
-  }
-
-  groups(): { waiting: Session[]; running: Session[]; recent: Session[] } {
-    const all = [...this.sessions.values()].sort((a, b) => b.updated - a.updated);
-    const waiting = all.filter((s) => isWaiting(s.thread));
-    const running = all.filter((s) => !isWaiting(s.thread) && s.running);
-    const recent = all.filter((s) => !isWaiting(s.thread) && !s.running);
-    return { waiting, running, recent };
   }
 }
 
