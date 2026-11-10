@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./Icon";
 import { FONTS, SIZES, THEMES, type Appearance } from "./appearance";
-import { backgroundTasks, findModel, hubHost, hubUrl, isTranscript, parseTranscript, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
+import { backgroundTasks, effortsFor, findModel, hubHost, hubUrl, isTranscript, parseTranscript, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
 import { backgroundStatus, isAndroid, pageVisible, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
 import { formatAgo } from "./sidebar";
 import { describeCwd, type Session, type Store } from "./store";
@@ -175,10 +175,22 @@ export function WorkspaceDialog({ store }: { store: Store }) {
   );
 }
 
-export function ModelMenu({ models, model, onChange }: { models: ModelOption[]; model?: string; onChange: (value: string) => void }) {
+const DEFAULT_EFFORT = { value: undefined, label: "默认", description: "跟随模型的默认设置" };
+
+/** 模型和推理强度放在同一个菜单里（参考 Codex）：上面选模型，下面一排选强度。 */
+export function ModelMenu({ models, model, effort, onChange, onEffort }: {
+  models: ModelOption[];
+  model?: string;
+  effort?: string;
+  onChange: (value: string) => void;
+  onEffort: (effort?: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const current = findModel(models, model);
+  const efforts = effortsFor(current);
+  const effortOptions = [DEFAULT_EFFORT, ...efforts];
+  const effortLabel = efforts.find((e) => e.value === effort)?.label;
   useEffect(() => {
     if (!open) return;
     const onDown = (event: MouseEvent) => {
@@ -199,10 +211,13 @@ export function ModelMenu({ models, model, onChange }: { models: ModelOption[]; 
       }}
     >
       <button type="button" className="model" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span>{current?.displayName ?? model ?? "默认模型"}</span><Icon name="down" size={12} />
+        <span>{current?.displayName ?? model ?? "默认模型"}</span>
+        {effortLabel ? <em>{effortLabel}</em> : null}
+        <Icon name="down" size={12} />
       </button>
       {open ? (
         <div className="menu" role="menu">
+          <h4>模型</h4>
           {models.map((option) => (
             <button
               type="button"
@@ -215,6 +230,27 @@ export function ModelMenu({ models, model, onChange }: { models: ModelOption[]; 
               {option === current ? <Icon name="check" size={14} /> : null}
             </button>
           ))}
+          {efforts.length ? (
+            <>
+              <h4>推理强度</h4>
+              {/* 选强度不关菜单，方便连着改模型。 */}
+              <div className="efforts" role="group" aria-label="推理强度">
+                {effortOptions.map((option) => (
+                  <button
+                    type="button"
+                    key={option.label}
+                    role="menuitemradio"
+                    aria-checked={option.value === effort}
+                    title={option.description}
+                    onClick={() => onEffort(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <p className="effort-hint">{effortOptions.find((e) => e.value === effort)?.description ?? DEFAULT_EFFORT.description}</p>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>

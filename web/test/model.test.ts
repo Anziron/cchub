@@ -7,6 +7,7 @@ import {
   answerLine,
   apply,
   addSending,
+  effortsFor,
   failSending,
   findModel,
   firstAsk,
@@ -25,6 +26,7 @@ import {
   parseRateLimits,
   parseTranscript,
   runningTasks,
+  setEffortLine,
   taskOutputPath,
   type Thread,
 } from "../src/model.ts";
@@ -469,4 +471,23 @@ test("子代理记录按对话解析：提示、文字、工具调用和结果",
   assert.deepEqual(items.map((item) => item.kind), ["user", "text", "tool"]);
   const tool = items[2];
   assert.ok(tool.kind === "tool" && tool.name === "Read" && tool.result === "内容");
+});
+
+test("推理强度：会话记录里的 effort 更新当前强度，子代理的不算", () => {
+  const thread = newThread();
+  const path = new URL("../../testdata/recordings/question/transcript.jsonl", import.meta.url);
+  for (const line of readFileSync(path, "utf8").split("\n").filter(Boolean)) apply(thread, line);
+  assert.equal(thread.effort, "medium");
+  apply(thread, JSON.stringify({ type: "assistant", effort: "max", isSidechain: true, message: { id: "s", content: [] } }));
+  assert.equal(thread.effort, "medium");
+});
+
+test("推理强度：按模型列表过滤，CLI 说不支持时为空", () => {
+  const all = effortsFor(undefined).map((e) => e.value);
+  assert.deepEqual(all, ["low", "medium", "high", "xhigh", "max"]);
+  assert.deepEqual(effortsFor({ value: "x", resolvedModel: "x", displayName: "X", supportedEffortLevels: ["low", "max"] }).map((e) => e.value), ["low", "max"]);
+  assert.deepEqual(effortsFor({ value: "h", resolvedModel: "claude-haiku-4-5", displayName: "H" }), []);
+  assert.equal(effortsFor({ value: "opus", displayName: "Opus" }).length, 5);
+  const line = JSON.parse(setEffortLine(null));
+  assert.deepEqual(line.request, { subtype: "apply_flag_settings", settings: { effortLevel: null } });
 });

@@ -320,7 +320,7 @@ function Activity({ store, session }: { store: Store; session: Session }) {
       <span className="activity-right">
         {hasTasks ? <button onClick={() => store.openTasks()}><Icon name="tasks" size={13} />后台任务{background ? ` ${background}` : ""}</button> : null}
         {unresponsive ? <button onClick={() => store.askStop(session)}>结束会话</button> : null}
-        {busy && interruptAt == null ? <span className="esc" role="button" onClick={() => store.interrupt(session)}>{isTouch ? "中断" : "Esc 中断"}</span> : null}
+        {busy && interruptAt == null && isTouch ? <span className="esc" role="button" onClick={() => store.interrupt(session)}>中断</span> : null}
       </span>
     </div>
   );
@@ -408,7 +408,7 @@ function Composer({ store, session }: { store: Store; session: Session }) {
       />
       <div className="tools">
         <ContextMeter session={session} />
-        <ModelMenu models={store.models} model={thread.model} onChange={(value) => store.setModel(session, value)} />
+        <ModelMenu models={store.models} model={thread.model} effort={thread.effort} onChange={(value) => store.setModel(session, value)} onEffort={(value) => store.setEffort(session, value)} />
         {busy && !text ? (
           <button type="button" className="send stop" aria-label="中断" onClick={() => store.interrupt(session)}><Icon name="stop" /></button>
         ) : (
@@ -422,6 +422,7 @@ function Composer({ store, session }: { store: Store; session: Session }) {
 function Welcome({ store }: { store: Store }) {
   const [text, setTextState] = useState(() => store.draft(NEW_DRAFT));
   const [model, setModel] = useState("");
+  const [effort, setEffort] = useState<string>();
   const setText = (next: string) => {
     setTextState(next);
     store.setDraft(NEW_DRAFT, next);
@@ -440,7 +441,7 @@ function Welcome({ store }: { store: Store }) {
       return;
     }
     setText("");
-    store.newSession(message, store.cwd, model);
+    store.newSession(message, store.cwd, model, effort);
   };
   const send = () => submit(text);
   const commands = useCommandMenu(store.commandsFor(), text, setText, submit);
@@ -470,7 +471,7 @@ function Welcome({ store }: { store: Store }) {
             <span>{project || "选择工作区"}</span>
             {device ? <small>{device}</small> : null}
           </button>
-          <ModelMenu models={store.models} model={model || "default"} onChange={setModel} />
+          <ModelMenu models={store.models} model={model || "default"} effort={effort} onChange={setModel} onEffort={setEffort} />
           <button className="send" aria-label="发送" disabled={!text.trim()}><Icon name="up" /></button>
         </div>
       </form>

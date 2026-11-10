@@ -84,6 +84,8 @@ export interface Thread {
   interruptAt?: number;
   claudeSessionId?: string;
   model?: string;
+  /** 推理强度。实时事件不带，只有 `.jsonl` 的 `assistant` 带；没有时表示跟随模型默认。 */
+  effort?: string;
   cwd?: string;
   /** 所有任务。转入后台的会在一轮结束后继续跑，一轮结束不等于任务完成。 */
   tasks: Map<string, Task>;
@@ -447,6 +449,7 @@ function onAssistant(thread: Thread, event: Json): void {
   const message: Json = event.message ?? {};
   const parent: string | null = event.parent_tool_use_id ?? null;
   if (message.model && !parent) thread.model = message.model;
+  if (typeof event.effort === "string" && !parent && !event.isSidechain) thread.effort = event.effort;
   const usage: Json | undefined = message.usage;
   if (usage && !parent) {
     const used = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
@@ -642,6 +645,23 @@ export interface ModelOption {
   resolvedModel?: string;
   displayName: string;
   description?: string;
+  /** 这个模型支持的推理强度，不支持时没有。 */
+  supportedEffortLevels?: string[];
+}
+
+/** 推理强度的显示名，顺序同 CLI。`max` 不能写进设置文件，但会话里可以用。 */
+export const EFFORTS: { value: string; label: string; description: string }[] = [
+  { value: "low", label: "低", description: "最快，适合简单任务" },
+  { value: "medium", label: "中", description: "速度和深度兼顾" },
+  { value: "high", label: "高", description: "复杂任务想得更深" },
+  { value: "xhigh", label: "超高", description: "难题，耗时和用量更多" },
+  { value: "max", label: "最高", description: "最难的问题，最慢最贵" },
+];
+
+/** 当前模型可选的强度。匹配不到或还是内置的别名列表（没有 `resolvedModel`）时给出全部；CLI 说不支持的给空。 */
+export function effortsFor(option?: ModelOption): typeof EFFORTS {
+  if (option?.supportedEffortLevels) return EFFORTS.filter((e) => option.supportedEffortLevels!.includes(e.value));
+  return option?.resolvedModel ? [] : EFFORTS;
 }
 
 /** 从事件里取模型列表。只认 `requestId` 这一次请求的回复，重放旧日志不能覆盖新列表。 */
@@ -732,3 +752,5 @@ export function initializeLine(requestId: string): string {
 }
 export const stopTaskLine = (taskId: string) => controlRequest({ subtype: "stop_task", task_id: taskId });
 export const setModelLine = (model: string) => controlRequest({ subtype: "set_model", model });
+/** 设推理强度：合并进 CLI 的 flag 设置层，只在当前进程有效，`--resume` 后要重发。`null` 恢复默认。 */
+export const setEffortLine = (effort: string | null) => controlRequest({ subtype: "apply_flag_settings", settings: { effortLevel: effort } });

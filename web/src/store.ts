@@ -22,6 +22,7 @@ import {
   parseRateLimits,
   runningTasks,
   removeItem,
+  setEffortLine,
   setModelLine,
   stopTaskLine,
   userLine,
@@ -452,7 +453,7 @@ export class Store {
     });
   }
 
-  newSession(text: string, cwd: string, model: string): void {
+  newSession(text: string, cwd: string, model: string, effort?: string): void {
     const id = crypto.randomUUID();
     const title = text.split("\n")[0].slice(0, 40);
     const session = this.session({ id, title, cwd, running: true, updated: null, active: Math.floor(Date.now() / 1000), archived: false });
@@ -470,6 +471,10 @@ export class Store {
     if (model) {
       session.thread.model = model;
       void this.send({ type: "input", session: id, line: setModelLine(model) });
+    }
+    if (effort) {
+      session.thread.effort = effort;
+      void this.send({ type: "input", session: id, line: setEffortLine(effort) });
     }
     this.sendUser(session, text);
     this.refresh();
@@ -495,6 +500,8 @@ export class Store {
         void this.send({ type: "input", session: session.id, line: setModelLine(session.pendingModel) });
         session.pendingModel = undefined;
       }
+      // 强度只存在进程的 flag 设置层里，`--resume` 后会回到默认，每次恢复都要重发。
+      if (session.thread.effort) void this.send({ type: "input", session: session.id, line: setEffortLine(session.thread.effort) });
     }
     // `/model` 回复成功但不生效，要走控制消息。其他命令都原样交给 CLI。
     const model = /^\/model\s+(\S+)\s*$/.exec(text)?.[1];
@@ -635,6 +642,13 @@ export class Store {
     if (session.running) void this.send({ type: "input", session: session.id, line: setModelLine(model) });
     else session.pendingModel = model;
     session.thread.model = model;
+    this.changed();
+  }
+
+  /** `undefined` 恢复模型默认。进程没在运行时只记下，恢复时重发。 */
+  setEffort(session: Session, effort?: string): void {
+    if (session.running) void this.send({ type: "input", session: session.id, line: setEffortLine(effort ?? null) });
+    session.thread.effort = effort;
     this.changed();
   }
 }
