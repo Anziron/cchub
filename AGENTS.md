@@ -50,6 +50,7 @@
 - 模型列表来自 `initialize` 控制消息的 `models` → 可重复发送，不调用模型，回复进 `out` 但不进 `.jsonl`；重放 `out` 会读到旧回复，所以只认当次的 `request_id`。
 - 乐观显示靠用户消息的 `uuid` → `--replay-user-messages` 回传时保持同一个 `uuid`，用它确认送达，不要按文字匹配。
 - 工作区浏览和挂载调用外部命令 `cc-workspace`（可用 `HUBD_WORKSPACE_CMD` 替换）→ 部署新 `hubd` 前先 `cc-config apply`；`/mnt/<设备>/` 只有已挂载的项目，不能靠浏览服务器目录找新项目。
+- 老项目新会话进到空目录：sshfs 曾留在调用者的 cgroup（会话的 `cchub-session-*.service` 或 `hubd.service`），空闲回收或重启 `hubd` 时被 systemd 一起杀掉；没挂载的 `/mnt/...` 只是空文件夹，探测查“不存在”会当成在线 → 已修复：`cc-mount` 把 sshfs 放进 `ccmount.slice` 的独立 scope，`hubd` 启动 `/mnt` 下的会话前先 `cc-workspace ensure <目录>` 补挂。
 - `Frame.ts` 内联了一份 `ServerMsg` → 没有 Rust 不能本地生成时，手改 `ServerMsg` 要连它一起改；CI 的 `types` 任务会打印差异。
 - `/` 命令的回传带同一个 `uuid`，但正文变成 `<command-name>` 标记，且排在回复之后 → 显示时要还原。
 - 后台 Bash 可能先 `task_started`（`is_backgrounded: false`）再由 `task_updated` 转后台，以 `background_tasks_changed` 为准；这些事件没有时间戳，开始时间只能由客户端记。

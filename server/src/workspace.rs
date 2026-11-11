@@ -4,6 +4,7 @@
 //! - `devices`：每行一个设备名。
 //! - `ls <设备> [路径]`：第 1 行当前路径，第 2 行上一级，之后每行一个子目录的完整路径。
 //! - `mount <设备> <路径>`：输出服务器上的路径。
+//! - `ensure <服务器上的路径>`：确认 `/mnt/<设备>/...` 已挂载，没有就补挂；成功时退出码为 0。
 
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
@@ -64,6 +65,15 @@ pub fn mount(program: &str, device: &str, path: &str) -> Result<String, String> 
         "" => Err("挂载命令没有返回路径".to_string()),
         cwd => Ok(cwd.to_string()),
     }
+}
+
+/// 启动会话前确认项目目录还挂着，没挂上就补挂。挂载会因服务器重启、sshfs 退出而消失，
+/// 不补的话目录只是个空文件夹，探测也会当成在线，会话就在空目录里启动。
+pub fn ensure(program: &str, path: &Path) -> Result<(), String> {
+    let path = path.to_str().ok_or("项目目录不是 UTF-8")?;
+    run(program, &["ensure", path], MOUNT_TIMEOUT)
+        .map(drop)
+        .map_err(|_| "项目目录没有挂载，补挂失败：设备离线？".to_string())
 }
 
 /// 只放行 CLI 写的后台任务输出，别的路径都不读，这个接口不能变成任意读文件。
@@ -194,6 +204,8 @@ mod tests {
         assert!(browse("/bin/false", Some("pc"), None).is_err());
         assert!(browse("/nonexistent/cc-workspace", None, None).is_err());
         assert!(mount("/bin/false", "pc", "/x").is_err());
+        assert!(ensure("/bin/false", Path::new("/mnt/pc/d/x")).is_err());
+        assert!(ensure("/bin/true", Path::new("/mnt/pc/d/x")).is_ok());
     }
 
     #[test]

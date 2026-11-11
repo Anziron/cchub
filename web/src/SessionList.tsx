@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { AppearanceMenu } from "./Dialogs";
 import type { Appearance } from "./appearance";
-import { askHint, Dropdown, MenuItem, Meter, quotaPercent, resetText, resetWhen, rowState, sessionStatus, SessionMenu, STATE_ORDER, StateIcon } from "./Common";
+import { askHint, Dropdown, MenuItem, Meter, quotaPercent, rowState, sessionStatus, SessionMenu, STATE_ORDER, StateIcon } from "./Common";
 import { Icon } from "./Icon";
 import { firstAsk, isWaiting } from "./model";
 import { deviceStatus, groupByDate, groupProjects, SERVER_GROUP, type DeviceState } from "./sidebar";
@@ -79,11 +79,10 @@ function QuotaLine({ label, window }: { label: string; window: QuotaWindow }) {
   if (!window) return null;
   const value = quotaPercent(window);
   return (
-    <div className="quota-line" title={resetText(window)}>
+    <div className="quota-line">
       <span>{label}</span>
       <Meter value={value} />
       <b>{value != null ? `${Math.round(value * 100)}%` : "—"}</b>
-      <small>{resetWhen(window)}</small>
     </div>
   );
 }
@@ -94,21 +93,25 @@ const DEVICE_TITLE: Record<DeviceState, string> = {
   unknown: "没有运行中的会话，未检测",
 };
 
-/** 侧栏底部：额度（含重置时间）和各设备在线情况。 */
+/** 侧栏底部：额度进度（点开窗格看重置时间）和各设备在线情况，分成两块。 */
 function Status({ store }: { store: Store }) {
   const { fiveHour, sevenDay } = store.limits;
   const devices = deviceStatus([...store.sessions.values()].filter((s) => !s.archived));
-  if (!fiveHour && !sevenDay && !devices.length) return null;
+  const openUsage = () => store.togglePane("usage");
   return (
-    <div className="side-status" role="button" tabIndex={0} title="查看使用情况" onClick={() => store.togglePane("usage")} onKeyDown={(event) => { if (event.key === "Enter") store.togglePane("usage"); }}>
-      <QuotaLine label="5 小时" window={fiveHour} />
-      <QuotaLine label="本周" window={sevenDay} />
+    <>
+      {fiveHour || sevenDay ? (
+        <div className="side-quota" role="button" tabIndex={0} title="查看使用情况和重置时间" onClick={openUsage} onKeyDown={(event) => { if (event.key === "Enter") openUsage(); }}>
+          <QuotaLine label="5 小时" window={fiveHour} />
+          <QuotaLine label="本周" window={sevenDay} />
+        </div>
+      ) : null}
       {devices.length ? (
-        <div className="devices">
+        <div className="side-devices">
           {devices.map((d) => <span key={d.device} className={`dev ${d.state}`} title={`${d.device}：${DEVICE_TITLE[d.state]}`}><i />{d.device}</span>)}
         </div>
       ) : null}
-    </div>
+    </>
   );
 }
 

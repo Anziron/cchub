@@ -271,6 +271,10 @@ async fn handle(
                 }
                 let workdir = match app.sessions.cwd(&id) {
                     Some(workdir) => {
+                        if workdir.starts_with("/mnt") {
+                            workspace::ensure(&app.workspace_cmd, &workdir)
+                                .map_err(std::io::Error::other)?;
+                        }
                         // 在断开的挂载里启动进程不会报错，只会一直没有输出，所以先探测。
                         if !device::probe(&workdir) {
                             return Err(std::io::Error::other("设备离线，无法启动会话"));
