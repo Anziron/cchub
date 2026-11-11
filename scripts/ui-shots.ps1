@@ -1,6 +1,7 @@
 # 在 Windows 设备上用无头 Edge 截 demo 界面，检查布局和弹出菜单。
 # 用法：pcrun "powershell -ExecutionPolicy Bypass -File scripts\ui-shots.ps1"，图片在 .cc\shots\。
 # 每项是 名称、地址、窗口尺寸。demo 参数：?s=会话 ?theme= ?scene=tasks|offline|conn ?pane=窗格（空值关闭）?click=加载后点击的选择器。
+# ?click 触发的内层滚动在截图里看不到；要验证滚动，用 --dump-dom --enable-logging=stderr 看 console 输出。
 # 无头 Edge 窗口最窄约 500px，更窄的截图只会裁切，不能用来判断窄屏布局。
 param([string]$Out = ".cc\shots")
 $ErrorActionPreference = "Continue"
@@ -13,7 +14,8 @@ $shots = @(
   @("approval", "/?s=approval&theme=light&pane=", "1200,800"),
   @("small", "/?s=rich&theme=light&pane=", "900,460"),
   @("menu-pane", "/?s=rich&theme=light&pane=&click=.pane-menu%20.dd-btn", "1200,700"),
-  @("menu-usage", "/?theme=light&pane=&click=.usage%20.dd-btn", "900,460")
+  @("menu-usage", "/?theme=light&pane=&click=.usage%20.dd-btn", "900,460"),
+  @("turns", "/?s=turns&theme=light&pane=", "1200,800")
 )
 $edge = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 if (-not (Test-Path $edge)) { $edge = "C:\Program Files\Microsoft\Edge\Application\msedge.exe" }

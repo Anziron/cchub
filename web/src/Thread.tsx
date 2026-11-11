@@ -4,6 +4,7 @@ import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 import { groupTools, type Item, type RenderBlock, type ToolItem } from "./model";
 import { formatDuration, formatTokens } from "./Common";
+import { isTouch } from "./platform";
 import type { Session, Store } from "./store";
 
 function relative(path: unknown, cwd?: string): string {
@@ -163,7 +164,7 @@ const ItemView = memo(function ItemView({ item, store, session, askSent }: { ite
     case "user":
       return (
         <>
-          <div className="user"><div>{item.text}</div></div>
+          <div className="user" data-turn={item.id}><div>{item.text}</div></div>
           {item.state === "sending" ? <div className="sent">发送中…</div> : null}
           {item.state === "failed" ? (
             <div className="sent failed">
@@ -228,6 +229,37 @@ export function TranscriptView({ items, cwd }: { items: Item[]; cwd?: string }) 
   );
 }
 
+/** 左边缘按轮次导航：每条用户消息一道短横线，当前轮加粗，点击跳过去。 */
+function TurnNav({ turns, current, onJump }: { turns: { id: string; text: string }[]; current: number; onJump: (id: string) => void }) {
+  const ref = useRef<HTMLElement>(null);
+  // 轮次多时导航自己会滚动，让当前轮保持可见。不用 scrollIntoView，它会连带滚动外层容器。
+  useEffect(() => {
+    const nav = ref.current;
+    const el = nav?.children[current] as HTMLElement | undefined;
+    if (!nav || !el) return;
+    if (el.offsetTop < nav.scrollTop) nav.scrollTop = el.offsetTop;
+    else if (el.offsetTop + el.offsetHeight > nav.scrollTop + nav.clientHeight) nav.scrollTop = el.offsetTop + el.offsetHeight - nav.clientHeight;
+  }, [current, turns.length]);
+  if (turns.length < 2 || isTouch) return null;
+  return (
+    <nav className="turn-nav" aria-label="按轮次跳转" ref={ref}>
+      {turns.map((turn, i) => {
+        const first = turn.text.split("\n")[0];
+        return (
+          <button
+            key={turn.id}
+            type="button"
+            className={i === current ? "on" : undefined}
+            title={first.length > 80 ? `${first.slice(0, 80)}…` : first}
+            aria-current={i === current ? "true" : undefined}
+            onClick={() => onJump(turn.id)}
+          />
+        );
+      })}
+    </nav>
+  );
+}
+
 export function ThreadView({ store, session }: { store: Store; session: Session }) {
   const ref = useRef<HTMLElement>(null);
   const column = useRef<HTMLDivElement>(null);
@@ -258,35 +290,65 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
     };
   }, [toBottom]);
   const thread = session.thread;
+  const turns = thread.items.flatMap((item) => (item.kind === "user" ? [{ id: item.id, text: item.text }] : []));
+  const [current, setCurrent] = useState(-1);
+  const navFrame = useRef(0);
+  // 当前轮：顶部 30% 以内最后一条用户消息；贴底时是最后一轮。
+  const syncCurrent = () => {
+    if (navFrame.current) return;
+    navFrame.current = requestAnimationFrame(() => {
+      navFrame.current = 0;
+      const el = ref.current;
+      if (!el || !column.current) return;
+      const marks = column.current.querySelectorAll<HTMLElement>(".user[data-turn]");
+      const line = el.getBoundingClientRect().top + el.clientHeight * 0.3;
+      let index = pinned.current ? marks.length - 1 : 0;
+      if (!pinned.current) marks.forEach((mark, i) => { if (mark.getBoundingClientRect().top <= line) index = i; });
+      setCurrent(index);
+    });
+  };
+  useEffect(syncCurrent, [turns.length]);
+  useEffect(() => () => cancelAnimationFrame(navFrame.current), []);
+  const jump = (id: string) => {
+    const mark = column.current?.querySelector<HTMLElement>(`.user[data-turn="${CSS.escape(id)}"]`);
+    const el = ref.current;
+    if (!mark || !el) return;
+    pinned.current = false;
+    el.scrollTo({ top: el.scrollTop + mark.getBoundingClientRect().top - el.getBoundingClientRect().top - 16, behavior: "smooth" });
+  };
   // 详细档：工具逐条显示，不合并。
   const blocks: RenderBlock[] = store.verbose ? thread.items.map((item) => ({ kind: "item", item })) : groupTools(thread.items);
   const activeIn = (tools: ToolItem[]) => (thread.phase === "tool" && thread.activeTool ? tools.find((t) => t.id === thread.activeTool) : undefined);
   return (
-    <section
-      className="stream"
-      aria-label="消息流"
-      ref={ref}
-      onScroll={(event) => {
-        const el = event.currentTarget;
-        // 只有真的往上滚才算离开底部。内容变高也会让“离底距离”变大，不能据此判断。
-        if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) pinned.current = true;
-        else if (el.scrollTop < lastTop.current - 1) pinned.current = false;
-        lastTop.current = el.scrollTop;
-      }}
-    >
-      <div className="column" ref={column}>
-        {blocks.map((block) => block.kind === "tools" ? (
-          <ToolGroup key={block.id} tools={block.tools} cwd={session.cwd} active={activeIn(block.tools)} />
-        ) : (
-          <ItemView
-            key={block.item.id}
-            item={block.item}
-            store={store}
-            session={session}
-            askSent={block.item.kind === "ask" ? session.thread.asks.get(block.item.requestId)?.sent : undefined}
-          />
-        ))}
-      </div>
-    </section>
+    <div className="stream-wrap">
+      <TurnNav turns={turns} current={current < 0 ? turns.length - 1 : current} onJump={jump} />
+      <section
+        className="stream"
+        aria-label="消息流"
+        ref={ref}
+        onScroll={(event) => {
+          const el = event.currentTarget;
+          // 只有真的往上滚才算离开底部。内容变高也会让“离底距离”变大，不能据此判断。
+          if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) pinned.current = true;
+          else if (el.scrollTop < lastTop.current - 1) pinned.current = false;
+          lastTop.current = el.scrollTop;
+          syncCurrent();
+        }}
+      >
+        <div className="column" ref={column}>
+          {blocks.map((block) => block.kind === "tools" ? (
+            <ToolGroup key={block.id} tools={block.tools} cwd={session.cwd} active={activeIn(block.tools)} />
+          ) : (
+            <ItemView
+              key={block.item.id}
+              item={block.item}
+              store={store}
+              session={session}
+              askSent={block.item.kind === "ask" ? session.thread.asks.get(block.item.requestId)?.sent : undefined}
+            />
+          ))}
+        </div>
+      </section>
+    </div>
   );
 }

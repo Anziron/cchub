@@ -4,6 +4,7 @@ import { Dropdown, Elapsed, formatDuration, formatTokens, Meter, Quota, quotaPer
 import { Icon } from "./Icon";
 import { firstAsk, matchCommands, runningTasks, type SlashCommand } from "./model";
 import { isTouch, pageVisible } from "./platform";
+import { overviewStats } from "./sidebar";
 import { describeCwd, isResumeCommand, NEW_DRAFT, type Session, type Store } from "./store";
 
 const INTERRUPT_TIMEOUT_MS = 5000;
@@ -222,6 +223,31 @@ export function Composer({ store, session }: { store: Store; session: Session })
   );
 }
 
+/** 新会话页的统计卡：只用会话列表和额度事件里已有的数据。 */
+function Overview({ store }: { store: Store }) {
+  if (!store.sessions.size) return null;
+  const stats = overviewStats([...store.sessions.values()], Date.now() / 1000);
+  const week = quotaPercent(store.limits.sevenDay);
+  const five = quotaPercent(store.limits.fiveHour);
+  const tiles: [string, ReactNode, string?][] = [
+    ["近 7 天会话", stats.week, stats.week ? `${stats.projects} 个项目` : undefined],
+    ["正在运行", stats.running],
+    ["常用项目", stats.top?.project ?? "—", stats.top ? `近 30 天 ${stats.top.count} 个会话` : undefined],
+    ["本周额度", week != null ? `${Math.round(week * 100)}%` : "—", five != null ? `5 小时 ${Math.round(five * 100)}%` : undefined],
+  ];
+  return (
+    <div className="overview" aria-label="统计">
+      {tiles.map(([label, value, note]) => (
+        <div className="tile" key={label}>
+          <span>{label}</span>
+          <b title={typeof value === "string" ? value : undefined}>{value}</b>
+          {note ? <small>{note}</small> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function Welcome({ store }: { store: Store }) {
   const [text, setTextState] = useState(() => store.draft(NEW_DRAFT));
   const [model, setModel] = useState("");
@@ -284,6 +310,7 @@ export function Welcome({ store }: { store: Store }) {
           <UsageRing store={store} />
         </div>
       </Box>
+      <Overview store={store} />
     </section>
   );
 }

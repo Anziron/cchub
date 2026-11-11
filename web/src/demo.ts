@@ -66,6 +66,11 @@ const SESSIONS: { id: string; title: string; running: boolean; lines: string[] }
   { id: "question", title: "选择登录入口", running: true, lines: [user("问我选哪个颜色。"), ...until(question, '"can_use_tool"')] },
   { id: "rich", title: "整理认证测试", running: true, lines: rich },
   { id: "interrupt", title: "跑一个长任务", running: false, lines: [user("运行 long.py"), ...interrupt.split("\n").filter(Boolean)] },
+  // 多轮对话：检查左侧的轮次导航。
+  { id: "turns", title: "多轮讨论", running: false, lines: Array.from({ length: 14 }, (_, i) => [
+    user(`第 ${i + 1} 轮：${["看一下这个函数", "再加个测试", "改成异步", "补上错误处理"][i % 4]}`),
+    assistant(`n${i}`, [{ type: "text", text: Array.from({ length: 3 + (i % 3) }, (_, k) => `第 ${i + 1} 轮回复第 ${k + 1} 段。这里是一段足够长的说明文字，用来把消息流撑高，方便检查滚动时当前轮的高亮是否跟着变化。`).join("\n\n") }]),
+  ]).flat() },
   ...["补充单元测试", "smoke test", "smoke test", "smoke test", "smoke test", "smoke test"].map((title, i) => ({ id: `old${i}`, title, running: false, lines: [user(title)] })),
 ];
 

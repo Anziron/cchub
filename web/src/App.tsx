@@ -108,7 +108,7 @@ export function App({ store }: { store: Store }) {
             <div className="chat">
               {store.pane !== "todos" ? <TodoBar todos={session.thread.todos} onOpen={() => store.openPane("todos")} /> : null}
               <ThreadView key={session.id} store={store} session={session} />
-              <Composer key={session.id} store={store} session={session} />
+              <Composer key={`composer:${session.id}`} store={store} session={session} />
             </div>
             <PaneView store={store} session={session} />
           </div>

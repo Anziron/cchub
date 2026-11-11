@@ -79,3 +79,19 @@ test("按日期分组：今天 / 昨天 / 7 天内 / 更早，组内按时间倒
   assert.deepEqual(groups.map((g) => [g.label, g.sessions.map((s) => s.id)]), [["今天", ["f", "a", "b"]], ["昨天", ["c"]], ["7 天内", ["d"]], ["更早", ["e"]]]);
   assert.deepEqual(groupByDate([{ id: "x", updated: noon - 30 * 86400 }], noon).map((g) => g.label), ["更早"]);
 });
+
+test("新会话页统计：近 7 天会话和项目数、运行中、近 30 天最常用项目", async () => {
+  const { overviewStats } = await import("../src/sidebar.ts");
+  const now = 1_800_000_000;
+  const day = 86400;
+  const stats = overviewStats([
+    { id: "a", cwd: "/mnt/pc/a", updated: now - day, running: true },
+    { id: "b", cwd: "/mnt/pc/a", updated: now - 20 * day, running: false },
+    { id: "c", cwd: "/mnt/pc/a", updated: now - 25 * day, running: false },
+    { id: "d", cwd: "/mnt/pc/b", updated: now - 40 * day, active: now - 2 * day, running: true },
+    { id: "e", cwd: undefined, updated: now - 3 * day, running: false },
+    { id: "f", cwd: "/mnt/pc/c", updated: now - 40 * day, running: false },
+  ], now);
+  assert.deepEqual(stats, { week: 3, projects: 3, running: 2, top: { project: "a", count: 3 } });
+  assert.deepEqual(overviewStats([], now), { week: 0, projects: 0, running: 0, top: undefined });
+});
