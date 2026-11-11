@@ -67,6 +67,12 @@ const TITLE_REFRESH_MS = [7000, 20000];
 /** 新会话页的草稿。 */
 export const NEW_DRAFT = "";
 
+export type PaneId = "changes" | "tasks" | "todos" | "plan" | "info";
+const PANES: PaneId[] = ["changes", "tasks", "todos", "plan", "info"];
+const PANE_KEY = "cchub.pane";
+const storedPane = (): PaneId | null => PANES.find((p) => p === localStorage.getItem(PANE_KEY)) ?? null;
+const VERBOSE_KEY = "cchub.verbose";
+
 function loadJson<T>(key: string, fallback: T): T {
   try {
     return (JSON.parse(localStorage.getItem(key) ?? "null") as T) ?? fallback;
@@ -108,7 +114,10 @@ export class Store {
   models = loadModels();
   commands = loadJson<SlashCommand[]>(COMMANDS_KEY, []);
   limits = loadJson<RateLimits>(LIMITS_KEY, {});
-  showTasks = false;
+  /** 右侧窗格：改动、后台任务、待办、方案、会话信息。记在本地，切换会话时保留。 */
+  pane: PaneId | null = isNarrow() ? null : storedPane();
+  /** 详细档：工具调用逐条展开显示，不合并（Ctrl+O 切换）。 */
+  verbose = localStorage.getItem(VERBOSE_KEY) === "1";
   /** 窄屏下会话列表是否展开，手机上打开 App 先看列表。 */
   showDrawer = isNarrow();
   /** 等确认结束的会话。 */
@@ -389,7 +398,7 @@ export class Store {
   back(): boolean {
     if (this.stopping) this.cancelStop();
     else if (this.showResume) this.closeResume();
-    else if (this.showTasks) this.closeTasks();
+    else if (this.pane) this.closePane();
     else if (this.showWorkspace) this.closeWorkspace();
     else if (this.showSettings && this.url) this.toggleSettings();
     else if (!this.showDrawer) this.openDrawer();
@@ -615,14 +624,32 @@ export class Store {
     return [...this.sessions.values()].filter((s) => s.archived).sort((a, b) => sortKey(b) - sortKey(a));
   }
 
-  openTasks(): void {
-    this.showTasks = true;
+  openPane(pane: PaneId): void {
+    this.pane = pane;
+    localStorage.setItem(PANE_KEY, pane);
     this.changed();
   }
 
-  closeTasks(): void {
-    this.showTasks = false;
+  /** 同一个窗格再点一次就关上。 */
+  togglePane(pane: PaneId): void {
+    if (this.pane === pane) this.closePane();
+    else this.openPane(pane);
+  }
+
+  closePane(): void {
+    this.pane = null;
     this.taskOutput = null;
+    localStorage.removeItem(PANE_KEY);
+    this.changed();
+  }
+
+  openTasks(): void {
+    this.openPane("tasks");
+  }
+
+  toggleVerbose(): void {
+    this.verbose = !this.verbose;
+    localStorage.setItem(VERBOSE_KEY, this.verbose ? "1" : "0");
     this.changed();
   }
 

@@ -2,7 +2,8 @@ import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } fr
 import { AskCard } from "./AskCard";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
-import type { Item, ToolItem } from "./model";
+import { groupTools, type Item, type RenderBlock, type ToolItem } from "./model";
+import { formatDuration, formatTokens } from "./Common";
 import type { Session, Store } from "./store";
 
 function relative(path: unknown, cwd?: string): string {
@@ -49,7 +50,7 @@ export function describeTool(tool: Pick<ToolItem, "name" | "input">, cwd?: strin
   }
 }
 
-function Diff({ oldText, newText }: { oldText: string; newText: string }) {
+export function Diff({ oldText, newText }: { oldText: string; newText: string }) {
   const removed = oldText ? oldText.split("\n") : [];
   const added = newText ? newText.split("\n") : [];
   return (
@@ -60,15 +61,15 @@ function Diff({ oldText, newText }: { oldText: string; newText: string }) {
   );
 }
 
-function Step({ icon, label, children }: { icon: string; label: ReactNode; children?: ReactNode }) {
+function Step({ icon, label, children, className }: { icon: string; label: ReactNode; children?: ReactNode; className?: string }) {
   // 展开时才渲染内容，大结果不占 DOM。
   const [open, setOpen] = useState(false);
   return (
-    <details className="step" onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <details className={className ? `step ${className}` : "step"} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary>
-        <Icon name={icon} />
+        <Icon name={icon} size={14} />
         <span className="label">{label}</span>
-        {children ? <Icon name="chev" size={14} className="chev" /> : null}
+        {children ? <Icon name="chev" size={12} className="chev" /> : null}
       </summary>
       {open ? children : null}
     </details>
@@ -93,10 +94,13 @@ function ErrorBox({ title, text }: { title: string; text: string }) {
   );
 }
 
+/** 被拒绝或中断的调用也是 is_error，不能显示成失败。 */
+const notRun = (tool: ToolItem) => /^(The user doesn't want|用户)/.test(tool.result ?? "");
+const failed = (tool: ToolItem) => tool.blocked || (tool.isError && !notRun(tool));
+
 const Tool = memo(function Tool({ tool, cwd }: { tool: ToolItem; cwd?: string }) {
   const { verb, target, icon } = describeTool(tool, cwd);
-  // 被拒绝或中断的调用也是 is_error，不能显示成失败。
-  const notRun = /^(The user doesn't want|用户)/.test(tool.result ?? "");
+  const skipped = notRun(tool);
   const isEdit = tool.name === "Edit" && typeof tool.input.new_string === "string";
   const label = (
     <>
@@ -108,10 +112,12 @@ const Tool = memo(function Tool({ tool, cwd }: { tool: ToolItem; cwd?: string })
         </>
       ) : null}
       {tool.children ? ` · ${tool.children} 次工具调用` : ""}
-      {tool.blocked ? " · 被拦截" : notRun ? " · 未执行" : tool.isError ? " · 失败" : ""}
+      {tool.blocked ? " · 被拦截" : skipped ? " · 未执行" : tool.isError ? " · 失败" : ""}
     </>
   );
-  const body = tool.blocked ? undefined : tool.detail ? (
+  const body = tool.blocked ? (
+    <div className="body"><pre className="output bad">{tool.result}</pre></div>
+  ) : tool.detail ? (
     <div className="body"><Markdown text={tool.detail} /></div>
   ) : isEdit ? (
     <Diff oldText={String(tool.input.old_string ?? "")} newText={String(tool.input.new_string ?? "")} />
@@ -121,13 +127,32 @@ const Tool = memo(function Tool({ tool, cwd }: { tool: ToolItem; cwd?: string })
       {tool.truncated ? <em>内容过长，只显示开头</em> : null}
     </div>
   ) : undefined;
-  return (
+  return <Step icon={icon} label={label} className={failed(tool) ? "failed" : undefined}>{body}</Step>;
+});
+
+/** 连续的工具调用合并成一行“用了 N 个工具”，展开后逐条显示。 */
+const ToolGroup = memo(function ToolGroup({ tools, cwd, active }: { tools: ToolItem[]; cwd?: string; active?: ToolItem }) {
+  const fails = tools.filter(failed).length;
+  const verbs = new Map<string, number>();
+  for (const tool of tools) {
+    const { verb } = describeTool(tool, cwd);
+    const key = verb.replace(/：$/, "");
+    verbs.set(key, (verbs.get(key) ?? 0) + 1);
+  }
+  const now = active ? describeTool(active, cwd) : null;
+  const label = (
     <>
-      <Step icon={icon} label={label}>{body}</Step>
-      {tool.blocked ? <ErrorBox title="工具调用被命令行工具拦下" text={tool.result ?? ""} /> : null}
+      {now ? <>正在{now.verb} {now.target ? <span className="chip">{now.target}</span> : null}</> : `用了 ${tools.length} 个工具`}
+      <span className="verbs">{[...verbs].map(([verb, n]) => (n > 1 ? `${verb} ${n}` : verb)).join(" · ")}</span>
+      {fails ? <span className="fails"> · {fails} 个失败</span> : null}
     </>
   );
-});
+  return (
+    <Step icon={now ? "term" : "tasks"} label={label} className={`group-step${fails ? " failed" : ""}${now ? " running" : ""}`}>
+      <div className="group-body">{tools.map((tool) => <Tool key={tool.id} tool={tool} cwd={cwd} />)}</div>
+    </Step>
+  );
+}, (a, b) => a.cwd === b.cwd && a.active === b.active && a.tools.length === b.tools.length && a.tools.every((t, i) => t === b.tools[i]));
 
 /**
  * 条目按引用比较（model 里是替换而不是原地改）。session 和 store 是原地修改的稳定对象，
@@ -165,8 +190,15 @@ const ItemView = memo(function ItemView({ item, store, session, askSent }: { ite
       return <div className="stopped local-note">{item.text}</div>;
     case "error":
       return <ErrorBox title="这一轮出错了" text={item.text} />;
+    case "turn":
+      return <TurnLine item={item} />;
   }
 });
+
+function TurnLine({ item }: { item: Extract<Item, { kind: "turn" }> }) {
+  const parts = [item.durationMs != null ? formatDuration(item.durationMs) : "", item.outputTokens ? `${formatTokens(item.outputTokens)} tokens` : ""].filter(Boolean);
+  return <div className="turn"><i aria-hidden="true" />{parts.join(" · ")}</div>;
+}
 
 /** 只读的对话（后台子代理的记录）：没有审批、重试这些操作。 */
 export function TranscriptView({ items, cwd }: { items: Item[]; cwd?: string }) {
@@ -225,6 +257,10 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
       frame.current = 0;
     };
   }, [toBottom]);
+  const thread = session.thread;
+  // 详细档：工具逐条显示，不合并。
+  const blocks: RenderBlock[] = store.verbose ? thread.items.map((item) => ({ kind: "item", item })) : groupTools(thread.items);
+  const activeIn = (tools: ToolItem[]) => (thread.phase === "tool" && thread.activeTool ? tools.find((t) => t.id === thread.activeTool) : undefined);
   return (
     <section
       className="stream"
@@ -239,13 +275,15 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
       }}
     >
       <div className="column" ref={column}>
-        {session.thread.items.map((item) => (
+        {blocks.map((block) => block.kind === "tools" ? (
+          <ToolGroup key={block.id} tools={block.tools} cwd={session.cwd} active={activeIn(block.tools)} />
+        ) : (
           <ItemView
-            key={item.id}
-            item={item}
+            key={block.item.id}
+            item={block.item}
             store={store}
             session={session}
-            askSent={item.kind === "ask" ? session.thread.asks.get(item.requestId)?.sent : undefined}
+            askSent={block.item.kind === "ask" ? session.thread.asks.get(block.item.requestId)?.sent : undefined}
           />
         ))}
       </div>

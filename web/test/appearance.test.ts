@@ -20,8 +20,8 @@ test("旧的 light / dark 值继续可用", () => {
 test("非法或缺失的值回落到默认", () => {
   assert.equal(parseTheme("neon"), "light");
   assert.equal(parseTheme(null), "light");
-  assert.equal(parseFont("comic"), "serif");
-  assert.equal(parseFont(null), "serif");
+  assert.equal(parseFont("comic"), "sans");
+  assert.equal(parseFont(null), "sans");
   assert.equal(parseSize("huge"), "md");
   assert.equal(parseSize(null), "md");
 });
@@ -45,13 +45,20 @@ test("旧的 system 值按当时的系统深浅色转成 dark / light", () => {
 });
 
 test("读写本地存储，异常时不抛错", () => {
-  const s = fakeStorage({ "cchub.theme": "navy", "cchub.font": "kai", "cchub.size": "lg" });
+  const s = fakeStorage({ "cchub.theme": "navy", "cchub.font": "kai", "cchub.size": "lg", "cchub.lookVersion": "2" });
   assert.deepEqual(loadAppearance(s), { theme: "navy", font: "kai", size: "lg" });
-  assert.deepEqual(loadAppearance(fakeStorage({ "cchub.theme": "dark" })), { theme: "dark", font: "serif", size: "md" });
+  assert.deepEqual(loadAppearance(fakeStorage({ "cchub.theme": "dark" })), { theme: "dark", font: "sans", size: "md" });
   const w = fakeStorage();
   saveAppearance(w, { theme: "eye", font: "mono", size: "sm" });
-  assert.deepEqual(w.data, { "cchub.theme": "eye", "cchub.font": "mono", "cchub.size": "sm" });
+  assert.deepEqual(w.data, { "cchub.theme": "eye", "cchub.font": "mono", "cchub.size": "sm", "cchub.lookVersion": "2" });
   const broken = { getItem: () => { throw new Error("x"); }, setItem: () => { throw new Error("x"); } };
-  assert.deepEqual(loadAppearance(broken), { theme: "light", font: "serif", size: "md" });
+  assert.deepEqual(loadAppearance(broken), { theme: "light", font: "sans", size: "md" });
   assert.doesNotThrow(() => saveAppearance(broken, { theme: "light", font: "serif", size: "md" }));
+});
+
+test("旧版本的字体设置重置一次成默认（黑体），之后保存的选择照常生效", () => {
+  const old = fakeStorage({ "cchub.font": "serif" });
+  assert.equal(loadAppearance(old).font, "sans");
+  saveAppearance(old, { theme: "light", font: "serif", size: "md" });
+  assert.equal(loadAppearance(old).font, "serif");
 });

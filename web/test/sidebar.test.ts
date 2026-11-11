@@ -64,3 +64,18 @@ test("排序按 active，缺失时退回 updated；updated 变化不影响顺序
   list[0]!.updated = 99999;
   assert.deepEqual(recentSessions(list).map((r) => r.session.id), ["y1", "x1", "x2"]);
 });
+
+test("按日期分组：今天 / 昨天 / 7 天内 / 更早，组内按时间倒序，空组不返回", async () => {
+  const { groupByDate } = await import("../src/sidebar.ts");
+  const noon = new Date(2026, 10, 11, 12, 0, 0).getTime() / 1000;
+  const groups = groupByDate([
+    { id: "a", updated: noon - 60 },
+    { id: "b", updated: noon - 3600 },
+    { id: "c", updated: noon - 86400 },
+    { id: "d", updated: noon - 3 * 86400 },
+    { id: "e", updated: noon - 30 * 86400 },
+    { id: "f", updated: noon - 30 * 86400, active: noon - 10 },
+  ], noon);
+  assert.deepEqual(groups.map((g) => [g.label, g.sessions.map((s) => s.id)]), [["今天", ["f", "a", "b"]], ["昨天", ["c"]], ["7 天内", ["d"]], ["更早", ["e"]]]);
+  assert.deepEqual(groupByDate([{ id: "x", updated: noon - 30 * 86400 }], noon).map((g) => g.label), ["更早"]);
+});

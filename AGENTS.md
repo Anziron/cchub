@@ -34,8 +34,8 @@
 - 侧边栏按 `active`（用户最后发言，hubd 收到 `user` 输入时 touch `<dir>/active`）排序，不能按日志更新时间排，否则几个会话同时输出时会来回跳。
 - 中断后 `result` 是 `error_during_execution`、`is_error: true`，界面不能显示成任务失败。
 - 录制 `plan` 场景会在 `~/.claude/plans/` 留下方案文件，录完要删。
-- 前端的 `demo.ts` 只在开发时用录制驱动界面：`npm run dev:web` 后打开 `/?s=rich&theme=dark`。经 `pcrun` 启动的开发服务器随 SSH 会话退出，要和截图放在同一条命令里。
-- 弹窗高于容器时会被 `.main` 的 `overflow: hidden` 裁掉标题和关闭按钮，看起来像“弹不出来” → 遮罩用 flex 居中（grid 自动轨道会被内容撑大），弹窗用 `min(固定值, 100%)` 限宽高；改弹窗后用 `/?scene=tasks`（40 个后台任务、长输出）在几种窗口尺寸下检查。
+- 前端的 `demo.ts` 只在开发时用录制驱动界面：`npm run dev:web` 后打开 `/?s=rich&theme=dark`，`?pane=changes` 打开窗格，`?click=<选择器>` 加载后点击（检查弹出菜单）。经 `pcrun` 启动的开发服务器随 SSH 会话退出，要和截图放在同一条命令里 → 用 `scripts/ui-shots.ps1`（无头 Edge，图片在 `.cc/shots/`）。
+- 弹窗高于容器时会被 `.main` 的 `overflow: hidden` 裁掉标题和关闭按钮，看起来像“弹不出来” → 遮罩用 flex 居中（grid 自动轨道会被内容撑大），弹窗用 `min(固定值, 100%)` 限宽高；改弹窗或窗格后用 `/?scene=tasks&pane=tasks`（40 个后台任务、长输出）在几种窗口尺寸下检查。
 - 设备没有 Rust，桌面端由 CI 编译，可执行文件在 Actions 的 `cchub-windows` 产物里。
 - 服务器上的 `claude` 受用户配置影响可能不发审批请求，要测审批时加 `--setting-sources project,local`。
 - CLI 会拦截 `sleep 60; ...` 这类命令，实验里要用脚本文件代替。
@@ -72,3 +72,5 @@
 - 空闲回收（`idle.rs`）判定只看 `out` 末尾的信封：`result` 要在最后的 `assistant` / `control_request` 之后，最近的 `background_tasks_changed` 快照要为空；用户输入和 `set_model` 回显是 `user`，不算活动。被回收的会话前端照常走 `--resume` 恢复。
 - 推理强度用 `apply_flag_settings` 的 `{effortLevel}`（`null` 恢复默认，`max` 也可用），不要发 `/effort`；它只在当前进程有效，`--resume` 后要重发；实时事件不带当前强度，只有 `.jsonl` 的 `assistant` 带 `effort`。
 - 新会话页输入框在窗口中间，向上弹的菜单在矮窗口里会被 `.main` 裁掉、滚不到 → 弹出菜单用 `Dialogs.tsx` 的 `useMenuFit` 按上下剩余空间定方向和最大高度；改菜单后用 900×460 窗口检查新会话页。
+- `web/src` 里的文件名不能只差大小写：设备是 Windows，`Sidebar.tsx` 和 `sidebar.ts` 会被当成同一个文件（tsc 报 TS1149）→ 侧栏组件叫 `SessionList.tsx`。
+- 弹出菜单统一用 `Common.tsx` 的 `Dropdown`（外层 `.dd` 是 `position: relative`）→ 要绝对定位的下拉要写 `.dd.xxx`，只写 `.xxx` 会被 `.dd` 覆盖，行高被撑开。

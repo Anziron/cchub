@@ -1,11 +1,10 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { Icon } from "./Icon";
 import { FONTS, SIZES, THEMES, type Appearance } from "./appearance";
-import { backgroundTasks, effortsFor, findModel, hubHost, hubUrl, isTranscript, parseTranscript, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
-import { backgroundStatus, isAndroid, pageVisible, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
+import { effortsFor, findModel, hubHost, hubUrl, runningTasks, type ModelOption, type SlashCommand } from "./model";
+import { backgroundStatus, isAndroid, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
 import { formatAgo } from "./sidebar";
 import { describeCwd, type Session, type Store } from "./store";
-import { TranscriptView } from "./Thread";
 
 /** 弹窗。Esc 只关弹窗，不能冒泡到窗口上变成中断任务。 */
 /** `local`：只盖住对话区并在其中居中（和输入框对齐），要放在 `.main` 里渲染。 */
@@ -179,7 +178,7 @@ export function WorkspaceDialog({ store }: { store: Store }) {
  * 弹出菜单放在按钮上方还是下方，最高多高。新会话页的输入框在窗口中间，
  * 上方空间不够时菜单会被 `.main` 的 `overflow: hidden` 裁掉，滚也滚不到被裁的部分。
  */
-function useMenuFit(anchor: RefObject<HTMLElement | null>, open: boolean, deps: unknown[]): CSSProperties {
+export function useMenuFit(anchor: RefObject<HTMLElement | null>, open: boolean, deps: unknown[]): CSSProperties {
   const [fit, setFit] = useState<CSSProperties>({});
   useLayoutEffect(() => {
     if (!open || !anchor.current) return;
@@ -380,80 +379,6 @@ export function ResumeDialog({ store }: { store: Store }) {
         ))}
       </div>
       <p className="help">关闭超过 7 天没有更新的会话会被自动清理。</p>
-    </Modal>
-  );
-}
-
-const TASK_TYPES: Record<string, string> = { local_bash: "命令", local_agent: "子任务", remote_agent: "远程子任务" };
-const TASK_STATUS: Record<Task["status"], string> = { running: "运行中", completed: "已完成", failed: "失败", stopped: "已停止" };
-
-function taskDuration(task: Task): string {
-  if (!task.startedAt) return "";
-  const ms = (task.endedAt ?? Date.now()) - task.startedAt;
-  if (ms < 0) return "";
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-  return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds / 60) % 60}m`;
-}
-
-/** 后台任务：能看到做什么、跑了多久、状态、输出的最后一段，也能单独停掉。 */
-export function TasksDialog({ store, session }: { store: Store; session: Session }) {
-  const tasks = backgroundTasks(session.thread);
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [, setTick] = useState(0);
-  const open = tasks.find((task) => task.id === openId);
-  const path = open ? taskOutputPath(session.thread, open) : null;
-  const running = open?.status === "running";
-  const output = store.taskOutput?.path === path ? store.taskOutput : null;
-  const pre = useRef<HTMLDivElement & HTMLPreElement>(null);
-  const transcript = useMemo(
-    () => (output?.text && isTranscript(output.text) ? parseTranscript(output.text) : null),
-    [output?.text],
-  );
-  // 打开时刷新：用时每秒，输出在任务运行时每 3 秒。窗口看不见时不刷新（失去焦点照常刷新）。
-  useEffect(() => {
-    const timer = setInterval(() => { if (pageVisible()) setTick(Date.now()); }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-  useEffect(() => {
-    if (!path) return;
-    store.readTaskOutput(path);
-    if (!running) return;
-    const timer = setInterval(() => { if (pageVisible()) store.readTaskOutput(path); }, 3000);
-    return () => clearInterval(timer);
-  }, [store, path, running]);
-  useEffect(() => {
-    if (pre.current) pre.current.scrollTop = pre.current.scrollHeight;
-  }, [output?.text]);
-  return (
-    <Modal title="后台任务" className="tasks-modal" local onClose={() => store.closeTasks()}>
-      <div className="tasks">
-        {!tasks.length ? <p className="empty">没有后台任务</p> : null}
-        {tasks.map((task) => (
-          <div key={task.id} className={`task task-${task.status}`}>
-            <div className="task-head">
-              <button type="button" className="task-main" aria-expanded={task.id === openId} onClick={() => setOpenId(task.id === openId ? null : task.id)}>
-                <span className="task-title" title={task.description}>{task.description ?? task.id}</span>
-                <small>{TASK_TYPES[task.type ?? ""] ?? task.type ?? "任务"} · {TASK_STATUS[task.status]}{taskDuration(task) ? ` · ${taskDuration(task)}` : ""}</small>
-              </button>
-              {task.status === "running" ? <button type="button" className="btn quiet" onClick={() => store.stopTask(session, task.id)}>停止</button> : null}
-            </div>
-            {task.id === openId ? (
-              <div className="task-body">
-                {task.summary ? <p className="help first">{task.summary}</p> : null}
-                {!path ? <p className="empty">这个任务没有可查看的输出文件</p> : null}
-                {output?.error ? <p className="empty bad">{output.error}</p> : null}
-                {path && !output?.error && transcript ? (
-                  <div className="output transcript" ref={pre}><TranscriptView items={transcript} cwd={session.cwd} /></div>
-                ) : path && !output?.error ? (
-                  <pre className="output" ref={pre}>{output?.text == null ? "正在读取…" : output.text || "还没有输出"}</pre>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        ))}
-      </div>
     </Modal>
   );
 }

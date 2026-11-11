@@ -6,7 +6,9 @@ export type Tone = "light" | "dark";
 export type Appearance = { theme: ThemeId; font: FontId; size: SizeId };
 export type KV = { getItem(key: string): string | null; setItem(key: string, value: string): void };
 
-export const DEFAULT_APPEARANCE: Appearance = { theme: "light", font: "serif", size: "md" };
+export const DEFAULT_APPEARANCE: Appearance = { theme: "light", font: "sans", size: "md" };
+/** 外观设置的版本。2：默认正文字体从宋体改成黑体（跟官方一致），旧设置里的字体重置一次。 */
+const LOOK_VERSION = "2";
 
 // swatch：[背景, 文字, 强调色]，只用于面板里的色块预览
 export const THEMES: { id: ThemeId; label: string; swatch: [string, string, string] }[] = [
@@ -52,7 +54,7 @@ const read = (s: KV, key: string) => {
 export function loadAppearance(s: KV, systemDark = false): Appearance {
   return {
     theme: parseTheme(read(s, "cchub.theme"), systemDark),
-    font: parseFont(read(s, "cchub.font")),
+    font: read(s, "cchub.lookVersion") === LOOK_VERSION ? parseFont(read(s, "cchub.font")) : DEFAULT_APPEARANCE.font,
     size: parseSize(read(s, "cchub.size")),
   };
 }
@@ -62,5 +64,6 @@ export function saveAppearance(s: KV, a: Appearance) {
     s.setItem("cchub.theme", a.theme);
     s.setItem("cchub.font", a.font);
     s.setItem("cchub.size", a.size);
+    s.setItem("cchub.lookVersion", LOOK_VERSION);
   } catch { /* 存储不可用时只在本次生效 */ }
 }

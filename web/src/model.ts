@@ -48,7 +48,9 @@ export type Item =
   | { kind: "interrupted"; id: string }
   /** 本地命令的输出（如切换模型），不是用户说的话，也不会让模型开始回复。 */
   | { kind: "notice"; id: string; text: string }
-  | { kind: "error"; id: string; text: string };
+  | { kind: "error"; id: string; text: string }
+  /** 一轮正常结束：用时和输出 token，显示成一行小字。 */
+  | { kind: "turn"; id: string; durationMs?: number; outputTokens?: number };
 
 export interface Todo {
   content: string;
@@ -92,6 +94,10 @@ export interface Thread {
   /** 上下文已用 token 和上限。 */
   context?: { used: number; max?: number };
   lastTurn?: { durationMs?: number; outputTokens?: number };
+  /** `system/init` 带的权限模式（default、acceptEdits、plan、auto、bypassPermissions）。 */
+  permissionMode?: string;
+  /** 这次运行（当前进程的 `out`）累计的轮数、用时和输出 token。 */
+  stats: { turns: number; durationMs: number; outputTokens: number };
 }
 
 const MAX_RESULT = 64 * 1024;
@@ -103,6 +109,7 @@ export function newThread(): Thread {
     todos: [],
     phase: "idle",
     tasks: new Map(),
+    stats: { turns: 0, durationMs: 0, outputTokens: 0 },
   };
 }
 
@@ -537,6 +544,17 @@ function onResult(thread: Thread, event: Json): void {
     event.subtype === "error_during_execution" ||
     event.terminal_reason === "aborted_tools" ||
     thread.items[thread.items.length - 1]?.kind === "interrupted";
+  thread.stats.turns += 1;
+  thread.stats.durationMs += event.duration_ms ?? 0;
+  thread.stats.outputTokens += event.usage?.output_tokens ?? 0;
+  if (!event.is_error && !interrupted && (event.duration_ms != null || event.usage?.output_tokens)) {
+    thread.items.push({
+      kind: "turn",
+      id: event.uuid ?? `r${thread.items.length}`,
+      durationMs: event.duration_ms,
+      outputTokens: event.usage?.output_tokens,
+    });
+  }
   if (event.is_error && !interrupted) {
     const errors = Array.isArray(event.errors) ? event.errors.join("\n") : "";
     thread.items.push({
@@ -561,6 +579,7 @@ export function apply(thread: Thread, line: string): void {
         thread.claudeSessionId = event.session_id;
         thread.model = event.model;
         thread.cwd = event.cwd;
+        if (typeof event.permissionMode === "string") thread.permissionMode = event.permissionMode;
       } else if (["task_started", "task_updated", "task_notification", "background_tasks_changed"].includes(event.subtype)) {
         onTaskEvent(thread, event);
       }
@@ -754,3 +773,87 @@ export const stopTaskLine = (taskId: string) => controlRequest({ subtype: "stop_
 export const setModelLine = (model: string) => controlRequest({ subtype: "set_model", model });
 /** 设推理强度：合并进 CLI 的 flag 设置层，只在当前进程有效，`--resume` 后要重发。`null` 恢复默认。 */
 export const setEffortLine = (effort: string | null) => controlRequest({ subtype: "apply_flag_settings", settings: { effortLevel: effort } });
+
+// 本会话经工具写入的改动，按文件汇总（不含 Bash 等命令产生的改动）。
+
+export interface FileEdit {
+  toolId: string;
+  /** Write 是整个文件，没有旧内容。 */
+  oldText: string;
+  newText: string;
+}
+
+export interface FileChange {
+  path: string;
+  added: number;
+  removed: number;
+  edits: FileEdit[];
+}
+
+const countLines = (text: string) => (text ? text.split("\n").length : 0);
+
+/** 按首次改动的顺序列出文件。只算成功执行的调用（没有结果或出错的不算）。 */
+export function collectChanges(items: Item[]): FileChange[] {
+  const files = new Map<string, FileChange>();
+  for (const item of items) {
+    if (item.kind !== "tool" || item.isError || item.blocked || item.result == null) continue;
+    const input = item.input;
+    const path = typeof input.file_path === "string" ? input.file_path : typeof input.notebook_path === "string" ? input.notebook_path : "";
+    if (!path) continue;
+    const edits: FileEdit[] = [];
+    if (item.name === "Edit" && typeof input.new_string === "string") {
+      edits.push({ toolId: item.id, oldText: String(input.old_string ?? ""), newText: input.new_string });
+    } else if (item.name === "MultiEdit" && Array.isArray(input.edits)) {
+      for (const edit of input.edits as Json[]) edits.push({ toolId: item.id, oldText: String(edit?.old_string ?? ""), newText: String(edit?.new_string ?? "") });
+    } else if (item.name === "Write" && typeof input.content === "string") {
+      edits.push({ toolId: item.id, oldText: "", newText: input.content });
+    } else continue;
+    const file = files.get(path) ?? { path, added: 0, removed: 0, edits: [] };
+    for (const edit of edits) {
+      file.added += countLines(edit.newText);
+      file.removed += countLines(edit.oldText);
+      file.edits.push(edit);
+    }
+    files.set(path, file);
+  }
+  return [...files.values()];
+}
+
+/** 最近一次提交的方案：方案确认请求或 ExitPlanMode 调用里的 `plan`。 */
+export function latestPlan(thread: Thread): string | undefined {
+  for (let i = thread.items.length - 1; i >= 0; i--) {
+    const item = thread.items[i];
+    if (item.kind === "tool" && item.name === "ExitPlanMode" && typeof item.input.plan === "string" && item.input.plan) return item.input.plan;
+    if (item.kind === "ask") {
+      const plan = thread.asks.get(item.requestId)?.plan;
+      if (plan) return plan;
+    }
+  }
+  return undefined;
+}
+
+export type RenderBlock = { kind: "item"; item: Item } | { kind: "tools"; id: string; tools: ToolItem[] };
+
+/**
+ * 连续两个以上的工具调用合并成一块（“用了 N 个工具”）。中间夹着的空思考块不显示，不打断合并；
+ * 审批、提问、方案卡片不是工具条目，永远单独显示。
+ */
+export function groupTools(items: Item[]): RenderBlock[] {
+  const blocks: RenderBlock[] = [];
+  let run: ToolItem[] = [];
+  const flush = () => {
+    if (run.length >= 2) blocks.push({ kind: "tools", id: `g-${run[0].id}`, tools: run });
+    else for (const tool of run) blocks.push({ kind: "item", item: tool });
+    run = [];
+  };
+  for (const item of items) {
+    if (item.kind === "tool") run.push(item);
+    else if (item.kind === "thinking" && !item.text.trim()) continue;
+    else {
+      flush();
+      blocks.push({ kind: "item", item });
+    }
+  }
+  flush();
+  return blocks;
+}

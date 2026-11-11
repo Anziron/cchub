@@ -491,3 +491,77 @@ test("推理强度：按模型列表过滤，CLI 说不支持时为空", () => {
   const line = JSON.parse(setEffortLine(null));
   assert.deepEqual(line.request, { subtype: "apply_flag_settings", settings: { effortLevel: null } });
 });
+
+// ---- 界面改版：每轮统计、权限模式、改动汇总、工具合并 ----
+import { collectChanges, groupTools, latestPlan } from "../src/model.ts";
+
+const toolUse = (id: string, name: string, input: Record<string, unknown>) =>
+  JSON.stringify({ type: "assistant", message: { id: `m-${id}`, content: [{ type: "tool_use", id, name, input }] } });
+const toolResult = (id: string, content: string, isError = false) =>
+  JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content, is_error: isError }] } });
+
+test("正常结束的一轮加一条用时和 token，并累计到 stats；出错和中断不加", () => {
+  const thread = newThread();
+  apply(thread, JSON.stringify({ type: "result", subtype: "success", is_error: false, duration_ms: 134000, usage: { output_tokens: 1700 }, uuid: "r1" }));
+  assert.deepEqual(thread.items, [{ kind: "turn", id: "r1", durationMs: 134000, outputTokens: 1700 }]);
+  apply(thread, JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true, duration_ms: 2000, usage: { output_tokens: 10 } }));
+  apply(thread, JSON.stringify({ type: "result", subtype: "error_max_turns", is_error: true, result: "超过轮数", duration_ms: 1000 }));
+  assert.deepEqual(thread.items.map((i) => i.kind), ["turn", "error"]);
+  assert.deepEqual(thread.stats, { turns: 3, durationMs: 137000, outputTokens: 1710 });
+});
+
+test("init 的权限模式记下来", () => {
+  const thread = newThread();
+  apply(thread, JSON.stringify({ type: "system", subtype: "init", session_id: "s", model: "m", cwd: "/w", permissionMode: "acceptEdits" }));
+  assert.equal(thread.permissionMode, "acceptEdits");
+});
+
+test("改动按文件汇总，只算执行成功的 Edit / MultiEdit / Write", () => {
+  const thread = newThread();
+  for (const line of [
+    toolUse("e1", "Edit", { file_path: "/w/a.py", old_string: "x", new_string: "y\nz" }),
+    toolResult("e1", "ok"),
+    toolUse("w1", "Write", { file_path: "/w/b.md", content: "1\n2\n3" }),
+    toolResult("w1", "ok"),
+    toolUse("m1", "MultiEdit", { file_path: "/w/a.py", edits: [{ old_string: "a\nb", new_string: "c" }] }),
+    toolResult("m1", "ok"),
+    toolUse("e2", "Edit", { file_path: "/w/c.py", old_string: "q", new_string: "r" }),
+    toolResult("e2", "String not found", true),
+    toolUse("r1", "Read", { file_path: "/w/d.py" }),
+    toolResult("r1", "..."),
+  ]) apply(thread, line);
+  const changes = collectChanges(thread.items);
+  assert.deepEqual(changes.map((c) => [c.path, c.added, c.removed, c.edits.length]), [["/w/a.py", 3, 3, 2], ["/w/b.md", 3, 0, 1]]);
+});
+
+test("连续两个以上的工具合并，单个工具和卡片不合并", () => {
+  const thread = newThread();
+  for (const line of [
+    toolUse("t1", "Read", { file_path: "/w/a" }), toolResult("t1", "ok"),
+    toolUse("t2", "Read", { file_path: "/w/b" }), toolResult("t2", "ok"),
+    JSON.stringify({ type: "assistant", message: { id: "m-x", content: [{ type: "text", text: "看完了" }] } }),
+    toolUse("t3", "Bash", { command: "ls" }), toolResult("t3", "ok"),
+  ]) apply(thread, line);
+  const blocks = groupTools(thread.items);
+  assert.deepEqual(blocks.map((b) => (b.kind === "tools" ? `tools:${b.tools.length}` : b.item.kind)), ["tools:2", "text", "tool"]);
+});
+
+test("审批卡片打断工具合并", () => {
+  const approval = readFileSync(new URL("../../testdata/recordings/approval/stream.jsonl", import.meta.url), "utf8");
+  const thread = newThread();
+  for (const line of approval.split("\n").filter(Boolean)) {
+    apply(thread, line);
+    if (line.includes('"can_use_tool"')) break;
+  }
+  const blocks = groupTools(thread.items);
+  assert.ok(blocks.some((b) => b.kind === "item" && b.item.kind === "ask"));
+  assert.ok(!blocks.some((b) => b.kind === "tools" && b.tools.some((t) => t.kind !== "tool")));
+});
+
+test("最近的方案来自方案确认请求", () => {
+  const plan = readFileSync(new URL("../../testdata/recordings/plan/stream.jsonl", import.meta.url), "utf8");
+  const thread = newThread();
+  for (const line of plan.split("\n").filter(Boolean)) apply(thread, line);
+  const text = latestPlan(thread);
+  assert.ok(text === undefined || text.length > 0);
+});

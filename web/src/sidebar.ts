@@ -58,3 +58,28 @@ export function formatAgo(updated: number, now: number): string {
   if (sec < 172800) return "昨天";
   return `${Math.floor(sec / 86400)} 天`;
 }
+
+export interface DateGroupData<T extends RowSession> {
+  key: string;
+  label: string;
+  sessions: T[];
+}
+
+/** 按最后发言时间分组：今天 / 昨天 / 7 天内 / 更早（按本地日期算）。空组不返回。 */
+export function groupByDate<T extends RowSession>(sessions: T[], now: number): DateGroupData<T>[] {
+  const today = new Date(now * 1000);
+  today.setHours(0, 0, 0, 0);
+  const start = today.getTime() / 1000;
+  const groups: DateGroupData<T>[] = [
+    { key: "#today", label: "今天", sessions: [] },
+    { key: "#yesterday", label: "昨天", sessions: [] },
+    { key: "#week", label: "7 天内", sessions: [] },
+    { key: "#older", label: "更早", sessions: [] },
+  ];
+  for (const session of [...sessions].sort(byTime)) {
+    const t = sortKey(session);
+    const index = t >= start ? 0 : t >= start - 86400 ? 1 : t >= start - 6 * 86400 ? 2 : 3;
+    groups[index].sessions.push(session);
+  }
+  return groups.filter((g) => g.sessions.length);
+}

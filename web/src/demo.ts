@@ -11,6 +11,10 @@ const params = new URLSearchParams(location.search);
 const scene = params.get("scene");
 localStorage.setItem("cchub.url", "ws://demo");
 if (params.get("theme")) localStorage.setItem("cchub.theme", params.get("theme")!);
+// `?pane=changes` 等：打开指定窗格，`?pane=` 关闭。
+if (params.has("pane")) localStorage.setItem("cchub.pane", params.get("pane")!);
+// `?click=<选择器>`：加载后点一下，用来截图检查弹出菜单。
+if (params.get("click")) setTimeout(() => document.querySelector<HTMLElement>(params.get("click")!)?.click(), 1200);
 
 function until(recording: string, needle: string): string[] {
   const lines = recording.split("\n").filter(Boolean);
