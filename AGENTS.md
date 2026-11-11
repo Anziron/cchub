@@ -34,7 +34,7 @@
 - 侧边栏按 `active`（用户最后发言，hubd 收到 `user` 输入时 touch `<dir>/active`）排序，不能按日志更新时间排，否则几个会话同时输出时会来回跳。
 - 中断后 `result` 是 `error_during_execution`、`is_error: true`，界面不能显示成任务失败。
 - 录制 `plan` 场景会在 `~/.claude/plans/` 留下方案文件，录完要删。
-- 前端的 `demo.ts` 只在开发时用录制驱动界面：`npm run dev:web` 后打开 `/?s=rich&theme=dark`，`?s=turns` 是多轮对话（看轮次导航），`?scene=queue` 是排队消息和拖入的文件、`?draft=long` 是长输入（`setupDemo` 在输入框挂载前写草稿，挂载后再改赶不上无头截图），`?pane=changes` 打开窗格，`?click=<选择器>` 加载后点击（检查弹出菜单），`?hover=<选择器>` 元素出现后模拟悬停（检查图表浮层），`?range=today|7d|30d|all` 指定使用情况范围（会记住，每张截图都要写明）。经 `pcrun` 启动的开发服务器随 SSH 会话退出，要和截图放在同一条命令里 → 用 `scripts/ui-shots.ps1`（无头 Edge，图片在 `.cc/shots/`）。
+- 前端的 `demo.ts` 只在开发时用录制驱动界面：`npm run dev:web` 后打开 `/?s=rich&theme=dark`，`?s=turns` 是多轮对话（看轮次导航），`?scene=queue` 是排队消息和拖入的文件、`?draft=long` 是长输入（`setupDemo` 在输入框挂载前写草稿，挂载后再改赶不上无头截图），`?pane=changes` 打开窗格，`?click=<选择器>` 加载后点击（检查弹出菜单），`?hover=<选择器>` 元素出现后模拟悬停（检查图表浮层），`?range=today|7d|30d|all` 指定使用情况范围、`?metric=tokens|requests` 指定柱状图内容（都会记住，每张截图都要写明）。经 `pcrun` 启动的开发服务器随 SSH 会话退出，要和截图放在同一条命令里 → 用 `scripts/ui-shots.ps1`（无头 Edge，图片在 `.cc/shots/`）。
 - 弹窗高于容器时会被 `.main` 的 `overflow: hidden` 裁掉标题和关闭按钮，看起来像“弹不出来” → 遮罩用 flex 居中（grid 自动轨道会被内容撑大），弹窗用 `min(固定值, 100%)` 限宽高；改弹窗或窗格后用 `/?scene=tasks&pane=tasks`（40 个后台任务、长输出）在几种窗口尺寸下检查。
 - 设备没有 Rust，桌面端由 CI 编译，可执行文件在 Actions 的 `cchub-windows` 产物里。
 - 服务器上的 `claude` 受用户配置影响可能不发审批请求，要测审批时加 `--setting-sources project,local`。
