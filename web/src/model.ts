@@ -98,6 +98,28 @@ export interface Thread {
   permissionMode?: string;
   /** 这次运行（当前进程的 `out`）累计的轮数、用时和输出 token。 */
   stats: { turns: number; durationMs: number; outputTokens: number };
+  /** 这一轮实时的输出 token，见 [`turnTokens`]。 */
+  turnUsage: TurnUsage;
+}
+
+/**
+ * 主线程：`message_delta` 带这条消息最终的 `output_tokens`，累加到 `done`；还在生成的消息按收到的字符数估算。
+ * 子代理没有流式片段，按 `assistant` 事件里的 `usage` 记，同一条消息出现多次取最大值。
+ */
+export interface TurnUsage {
+  done: number;
+  liveChars: number;
+  agents: Map<string, number>;
+}
+
+const newTurnUsage = (): TurnUsage => ({ done: 0, liveChars: 0, agents: new Map() });
+
+/** 这一轮到目前为止的输出 token（含思考和子代理），生成中的部分按约 4 个字符 1 个 token 估算。 */
+export function turnTokens(thread: Thread): number {
+  const { done, liveChars, agents } = thread.turnUsage;
+  let total = done + Math.round(liveChars / 4);
+  for (const n of agents.values()) total += n;
+  return total;
 }
 
 const MAX_RESULT = 64 * 1024;
@@ -110,6 +132,7 @@ export function newThread(): Thread {
     phase: "idle",
     tasks: new Map(),
     stats: { turns: 0, durationMs: 0, outputTokens: 0 },
+    turnUsage: newTurnUsage(),
   };
 }
 
@@ -312,6 +335,32 @@ export function taskOutputPath(thread: Thread, task: Task): string | null {
 export const isTranscript = (text: string): boolean => text.startsWith("{");
 
 /** 把子代理的对话行解析成条目，在后台任务面板里按对话显示。 */
+export interface SearchLink {
+  title: string;
+  url: string;
+}
+
+/** `WebSearch` 的结果里每次搜索一行 `Links: [{"title","url"}...]`，取出来做成可点的列表，其余文字原样保留。 */
+export function searchLinks(result: string): { links: SearchLink[]; rest: string } | null {
+  const links: SearchLink[] = [];
+  const rest: string[] = [];
+  for (const line of result.split("\n")) {
+    if (line.startsWith("Links: [")) {
+      try {
+        const list: unknown = JSON.parse(line.slice(7));
+        if (Array.isArray(list)) {
+          for (const item of list as Json[]) if (typeof item?.url === "string") links.push({ title: String(item.title ?? item.url), url: item.url });
+          continue;
+        }
+      } catch {
+        // 解析不了就当普通文字。
+      }
+    }
+    rest.push(line);
+  }
+  return links.length ? { links, rest: rest.join("\n").trim() } : null;
+}
+
 export function parseTranscript(text: string): Item[] {
   const thread = newThread();
   for (const line of text.split("\n")) if (line) apply(thread, line);
@@ -429,6 +478,7 @@ function onUser(thread: Thread, event: Json): void {
     thread.activeTool = undefined;
     const at = Date.parse(event.timestamp ?? "");
     thread.turnStartedAt = Number.isNaN(at) ? Date.now() : at;
+    thread.turnUsage = newTurnUsage();
     return;
   }
   if (!Array.isArray(content)) return;
@@ -461,6 +511,10 @@ function onAssistant(thread: Thread, event: Json): void {
   if (usage && !parent) {
     const used = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
     if (used) thread.context = { ...thread.context, used };
+  }
+  if (usage && parent && typeof message.id === "string" && typeof usage.output_tokens === "number") {
+    const agents = thread.turnUsage.agents;
+    agents.set(message.id, Math.max(agents.get(message.id) ?? 0, usage.output_tokens));
   }
   for (const block of (message.content ?? []) as Json[]) {
     if (parent) {
@@ -514,6 +568,17 @@ function onAssistant(thread: Thread, event: Json): void {
 function onStreamEvent(thread: Thread, outer: Json): void {
   if (outer.parent_tool_use_id) return;
   const event: Json = outer.event ?? {};
+  const usage = thread.turnUsage;
+  if (event.type === "message_start") {
+    usage.liveChars = 0;
+  } else if (event.type === "message_delta" && typeof event.usage?.output_tokens === "number") {
+    usage.done += event.usage.output_tokens;
+    usage.liveChars = 0;
+  } else if (event.type === "content_block_delta") {
+    const delta: Json = event.delta ?? {};
+    const piece = delta.text ?? delta.thinking ?? delta.partial_json;
+    if (typeof piece === "string") usage.liveChars += piece.length;
+  }
   if (event.type !== "content_block_delta" || event.delta?.type !== "text_delta") return;
   const id = `${outer.api_message_id}:${event.index}`;
   const index = findLast(thread, (item) => item.kind === "text" && item.id === id);
@@ -632,6 +697,7 @@ export function addSending(thread: Thread, id: string, text: string): void {
     thread.phase = "thinking";
     thread.activeTool = undefined;
     thread.turnStartedAt = Date.now();
+    thread.turnUsage = newTurnUsage();
   }
 }
 

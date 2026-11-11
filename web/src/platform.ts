@@ -1,4 +1,13 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+
+export const isWebUrl = (url: string) => /^https?:\/\//i.test(url.trim());
+
+/** 用系统浏览器打开网页链接。桌面端走 `open_url` 命令；手机端和开发时的浏览器用 `window.open`。 */
+export function openUrl(url: string): void {
+  if (!isWebUrl(url)) return;
+  if (isTauri() && !isAndroid) void invoke("open_url", { url }).catch(() => window.open(url, "_blank", "noopener"));
+  else window.open(url, "_blank", "noopener");
+}
 
 /** 触屏上回车换行、不自动弹键盘。 */
 export const isTouch = matchMedia("(pointer: coarse)").matches;

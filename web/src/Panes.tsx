@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatDuration, formatTokens, Meter } from "./Common";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
@@ -40,7 +40,6 @@ function ChangesPane({ session }: { session: Session }) {
     <>
       <p className="pane-sum">{changes.length} 个文件 <span className="added">+{added}</span> <span className="removed">−{removed}</span></p>
       {changes.map((file) => <ChangeFile key={file.path} file={file} cwd={session.cwd} />)}
-      <p className="help">只统计 Edit、MultiEdit、Write 工具的改动，命令行产生的改动不在这里。</p>
     </>
   );
 }
@@ -48,41 +47,68 @@ function ChangesPane({ session }: { session: Session }) {
 const TASK_TYPES: Record<string, string> = { local_bash: "命令", local_agent: "子任务", remote_agent: "远程子任务" };
 const TASK_STATUS: Record<Task["status"], string> = { running: "运行中", completed: "已完成", failed: "失败", stopped: "已停止" };
 
-function taskDuration(task: Task): string {
-  if (!task.startedAt) return "";
+/** 任务用时。运行中的自己每秒刷新，不带着整个窗格（和里面的长输出）一起重画。 */
+function TaskDuration({ task }: { task: Task }) {
+  const [, setTick] = useState(0);
+  const running = task.status === "running" && !task.endedAt;
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(() => { if (pageVisible()) setTick(Date.now()); }, 1000);
+    return () => clearInterval(timer);
+  }, [running]);
+  if (!task.startedAt) return null;
   const ms = (task.endedAt ?? Date.now()) - task.startedAt;
-  return ms < 0 ? "" : formatDuration(ms);
+  return ms < 0 ? null : <> · {formatDuration(ms)}</>;
 }
+
+/** 子任务记录先只显示最后这么多条，长记录一次全画出来会卡住。 */
+const TRANSCRIPT_VISIBLE = 30;
+/** 子任务记录每次读到的是最后 256KB，任务跑着时刷新慢一点。 */
+const TRANSCRIPT_REFRESH = 5000;
+const OUTPUT_REFRESH = 3000;
+
+/** 输出内容按文本比较，文本没变就不重画；子任务记录只解析一次。 */
+const TaskOutput = memo(function TaskOutput({ text, cwd }: { text: string | null; cwd?: string }) {
+  const box = useRef<HTMLDivElement & HTMLPreElement>(null);
+  // 在底部附近才跟随新输出；往上翻着看时不被拉回底部。
+  const stick = useRef(true);
+  const onScroll = () => {
+    const el = box.current;
+    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+  const [showAll, setShowAll] = useState(false);
+  const transcript = useMemo(() => (text && isTranscript(text) ? parseTranscript(text) : null), [text]);
+  useEffect(() => {
+    if (box.current && stick.current) box.current.scrollTop = box.current.scrollHeight;
+  }, [text]);
+  if (!transcript) return <pre className="output" ref={box} onScroll={onScroll}>{text == null ? "正在读取…" : text || "还没有输出"}</pre>;
+  const hidden = showAll ? 0 : Math.max(0, transcript.length - TRANSCRIPT_VISIBLE);
+  return (
+    <div className="output transcript" ref={box} onScroll={onScroll}>
+      {hidden ? <button type="button" className="row more" onClick={() => setShowAll(true)}>显示更早的 {hidden} 条</button> : null}
+      <TranscriptView items={hidden ? transcript.slice(hidden) : transcript} cwd={cwd} />
+    </div>
+  );
+});
 
 /** 后台任务：能看到做什么、跑了多久、状态、输出的最后一段，也能单独停掉。 */
 function TasksPane({ store, session }: { store: Store; session: Session }) {
   const tasks = backgroundTasks(session.thread);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [, setTick] = useState(0);
   const open = tasks.find((task) => task.id === openId);
   const path = open ? taskOutputPath(session.thread, open) : null;
   const running = open?.status === "running";
   const output = store.taskOutput?.path === path ? store.taskOutput : null;
-  const pre = useRef<HTMLDivElement & HTMLPreElement>(null);
-  const transcript = useMemo(
-    () => (output?.text && isTranscript(output.text) ? parseTranscript(output.text) : null),
-    [output?.text],
-  );
-  // 打开时刷新：用时每秒，输出在任务运行时每 3 秒。窗口看不见时不刷新（失去焦点照常刷新）。
+  const slow = output?.text != null && isTranscript(output.text);
+  // 打开时读一次，任务运行时定时刷新。窗口看不见时不刷新（失去焦点照常刷新）。
   useEffect(() => {
-    const timer = setInterval(() => { if (pageVisible()) setTick(Date.now()); }, 1000);
+    if (path) store.readTaskOutput(path);
+  }, [store, path]);
+  useEffect(() => {
+    if (!path || !running) return;
+    const timer = setInterval(() => { if (pageVisible()) store.readTaskOutput(path); }, slow ? TRANSCRIPT_REFRESH : OUTPUT_REFRESH);
     return () => clearInterval(timer);
-  }, []);
-  useEffect(() => {
-    if (!path) return;
-    store.readTaskOutput(path);
-    if (!running) return;
-    const timer = setInterval(() => { if (pageVisible()) store.readTaskOutput(path); }, 3000);
-    return () => clearInterval(timer);
-  }, [store, path, running]);
-  useEffect(() => {
-    if (pre.current) pre.current.scrollTop = pre.current.scrollHeight;
-  }, [output?.text]);
+  }, [store, path, running, slow]);
   if (!tasks.length) return <p className="empty">没有后台任务。</p>;
   return (
     <div className="tasks">
@@ -91,7 +117,7 @@ function TasksPane({ store, session }: { store: Store; session: Session }) {
           <div className="task-head">
             <button type="button" className="task-main" aria-expanded={task.id === openId} onClick={() => setOpenId(task.id === openId ? null : task.id)}>
               <span className="task-title" title={task.description}>{task.description ?? task.id}</span>
-              <small>{TASK_TYPES[task.type ?? ""] ?? task.type ?? "任务"} · {TASK_STATUS[task.status]}{taskDuration(task) ? ` · ${taskDuration(task)}` : ""}</small>
+              <small>{TASK_TYPES[task.type ?? ""] ?? task.type ?? "任务"} · {TASK_STATUS[task.status]}<TaskDuration task={task} /></small>
             </button>
             {task.status === "running" ? <button type="button" className="btn quiet" onClick={() => store.stopTask(session, task.id)}>停止</button> : null}
           </div>
@@ -100,11 +126,7 @@ function TasksPane({ store, session }: { store: Store; session: Session }) {
               {task.summary ? <p className="help first">{task.summary}</p> : null}
               {!path ? <p className="empty">这个任务没有可查看的输出文件</p> : null}
               {output?.error ? <p className="empty bad">{output.error}</p> : null}
-              {path && !output?.error && transcript ? (
-                <div className="output transcript" ref={pre}><TranscriptView items={transcript} cwd={session.cwd} /></div>
-              ) : path && !output?.error ? (
-                <pre className="output" ref={pre}>{output?.text == null ? "正在读取…" : output.text || "还没有输出"}</pre>
-              ) : null}
+              {path && !output?.error ? <TaskOutput key={path} text={output?.text ?? null} cwd={session.cwd} /> : null}
             </div>
           ) : null}
         </div>

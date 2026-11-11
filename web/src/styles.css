@@ -526,7 +526,12 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 13.5px/1.5 va
 .reply li p { margin: 0; }
 .reply blockquote { margin: 0 0 12px; padding-left: 14px; border-left: 2px solid var(--line-2); color: var(--muted); }
 .reply hr { margin: 18px 0; border: 0; border-top: 1px solid var(--line); }
-.reply .link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+.reply .link, a.link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; cursor: pointer; }
+a.link:hover { text-decoration-thickness: 2px; }
+.search-links { display: flex; flex-direction: column; gap: 6px; margin: 2px 0 8px; padding: 0; list-style: none; font-size: 12.5px; }
+.search-links li { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.search-links a { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.search-links small { flex: none; color: var(--faint); font-size: 11px; }
 .reply table { font-size: 13px; }
 .reply th { padding-top: 6px; padding-bottom: 6px; background: var(--hover); color: var(--muted); }
 .reply th:first-child, .reply td:first-child { padding-left: 10px; }
@@ -569,7 +574,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 13.5px/1.5 va
 .activity.empty { height: 8px; }
 .activity .pulse { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: breathe 2.2s ease-in-out infinite; }
 .activity-text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.activity time { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; }
+.activity time, .activity-tokens { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; }
 .activity-right { display: flex; flex: none; align-items: center; gap: 12px; margin-left: auto; }
 .activity-right button { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11.5px; }
 .activity-right button:hover { color: var(--text); }
@@ -657,6 +662,17 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 13.5px/1.5 va
 .bar .stack { display: flex; flex-direction: column-reverse; gap: 2px; width: 100%; max-width: 16px; margin: 0 auto; overflow: hidden; border-radius: 3px 3px 0 0; }
 .bar .stack i { display: block; flex-basis: 0; min-height: 1px; }
 .bar:hover .stack { opacity: .75; }
+.bar.today .stack { box-shadow: 0 0 0 1px var(--text-2); }
+.bar.future { opacity: .35; }
+/* 悬停浮层：不接收鼠标，位置用 transform 设，不触发图表重排 */
+.chart { position: relative; }
+.chart-tip { position: absolute; top: 0; left: 0; z-index: 5; min-width: 132px; padding: 7px 10px; border-radius: var(--r-md); background: var(--surface); box-shadow: 0 0 0 1px var(--line-2), var(--shadow); color: var(--text-2); font-size: 11.5px; line-height: 1.6; white-space: nowrap; pointer-events: none; }
+.tip-title { margin-bottom: 2px; color: var(--text); font-weight: 500; }
+.tip-row { display: flex; align-items: center; gap: 6px; }
+.tip-row i { width: 7px; height: 7px; flex: none; border-radius: 2px; }
+.tip-row span { flex: 1; color: var(--muted); }
+.tip-row b { margin-left: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.tip-empty { color: var(--faint); }
 .bars-axis { display: flex; justify-content: space-between; margin-top: 4px; color: var(--faint); font-size: 10.5px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; color: var(--muted); font-size: 11.5px; }
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
@@ -671,6 +687,8 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 13.5px/1.5 va
 .heat-grid i.l2 { background: color-mix(in srgb, var(--accent) 55%, var(--bg)); }
 .heat-grid i.l3 { background: color-mix(in srgb, var(--accent) 78%, var(--bg)); }
 .heat-grid i.l4 { background: var(--accent); }
+.heat-grid i.today { box-shadow: 0 0 0 1px var(--text-2); }
+.heat-grid i[data-i]:hover { box-shadow: 0 0 0 1.5px var(--text); }
 .rank { display: flex; flex-direction: column; gap: 7px; }
 .rank-row { display: grid; grid-template-columns: minmax(0, 8em) 1fr auto; align-items: center; gap: 10px; font-size: 12.5px; }
 .rank-name { overflow: hidden; color: var(--text-2); white-space: nowrap; text-overflow: ellipsis; }

@@ -25,9 +25,9 @@ export interface UsageStats {
   days: UsageDay[];
 }
 
-export type UsageRange = "7d" | "30d" | "all";
+export type UsageRange = "today" | "7d" | "30d" | "all";
 
-export const RANGE_DAYS: Record<Exclude<UsageRange, "all">, number> = { "7d": 7, "30d": 30 };
+export const RANGE_DAYS: Record<Exclude<UsageRange, "all">, number> = { today: 1, "7d": 7, "30d": 30 };
 
 export function parseUsage(text: string): UsageStats | null {
   try {
@@ -163,6 +163,12 @@ export function dailySeries(days: UsageDay[], range: UsageRange, today: string):
     }
   }
   return { keys, bars: [...bars.values()] };
+}
+
+/** “今天”的柱状图：每个本地小时的回复数（统计里没有按小时的 token）。 */
+export function hourlySeries(days: UsageDay[], today: string): number[] {
+  const day = days.find((d) => d.date === today);
+  return Array.from({ length: 24 }, (_, h) => day?.hours[h] ?? 0);
 }
 
 export interface HeatCell {

@@ -288,7 +288,10 @@ export class Store {
         else this.mountError = event.error ?? "挂载失败";
         break;
       case "task_output":
-        if (this.taskOutput?.path === event.path) this.taskOutput = { path: event.path, text: event.text, error: event.error };
+        // 内容没变就保留原对象，输出区按引用和文本判断，不用重画。
+        if (this.taskOutput?.path === event.path && (this.taskOutput.text !== event.text || this.taskOutput.error !== event.error)) {
+          this.taskOutput = { path: event.path, text: event.text, error: event.error };
+        }
         break;
       case "usage": {
         const stats = event.stats ? parseUsage(event.stats) : null;

@@ -1,8 +1,8 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AskCard } from "./AskCard";
 import { Icon } from "./Icon";
-import { Markdown } from "./Markdown";
-import { groupTools, type Item, type RenderBlock, type ToolItem } from "./model";
+import { linkify, Markdown, WebLink } from "./Markdown";
+import { groupTools, searchLinks, type Item, type RenderBlock, type ToolItem } from "./model";
 import { formatDuration, formatTokens } from "./Common";
 import { isTouch } from "./platform";
 import type { Session, Store } from "./store";
@@ -95,6 +95,29 @@ function ErrorBox({ title, text }: { title: string; text: string }) {
   );
 }
 
+/** 网页搜索结果：链接列表（标题 + 域名，点了用系统浏览器打开），后面是模型拿到的摘要。 */
+function SearchResult({ result }: { result: string }) {
+  const parsed = searchLinks(result);
+  if (!parsed) return null;
+  const host = (url: string) => {
+    try {
+      return new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+      return url;
+    }
+  };
+  return (
+    <div className="body">
+      <ul className="search-links">
+        {parsed.links.map((link, i) => (
+          <li key={`${i}-${link.url}`}><WebLink url={link.url}>{link.title}</WebLink><small>{host(link.url)}</small></li>
+        ))}
+      </ul>
+      {parsed.rest ? <pre className="output">{linkify(parsed.rest)}</pre> : null}
+    </div>
+  );
+}
+
 /** 被拒绝或中断的调用也是 is_error，不能显示成失败。 */
 const notRun = (tool: ToolItem) => /^(The user doesn't want|用户)/.test(tool.result ?? "");
 const failed = (tool: ToolItem) => tool.blocked || (tool.isError && !notRun(tool));
@@ -122,9 +145,11 @@ const Tool = memo(function Tool({ tool, cwd }: { tool: ToolItem; cwd?: string })
     <div className="body"><Markdown text={tool.detail} /></div>
   ) : isEdit ? (
     <Diff oldText={String(tool.input.old_string ?? "")} newText={String(tool.input.new_string ?? "")} />
+  ) : tool.result && tool.name === "WebSearch" && searchLinks(tool.result) ? (
+    <SearchResult result={tool.result} />
   ) : tool.result ? (
     <div className="body">
-      <pre className="output">{tool.result}</pre>
+      <pre className="output">{linkify(tool.result)}</pre>
       {tool.truncated ? <em>内容过长，只显示开头</em> : null}
     </div>
   ) : undefined;

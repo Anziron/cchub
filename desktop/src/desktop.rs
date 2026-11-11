@@ -45,6 +45,41 @@ fn show_main(app: &AppHandle) {
         .build();
 }
 
+/// 只放行 http(s)，其他协议（file:、自定义协议）可能被拿来启动本机程序。
+fn is_web_url(url: &str) -> bool {
+    let lower = url.trim_start().to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://"))
+        && !url.chars().any(|c| c.is_control())
+}
+
+/// 用系统默认浏览器打开网页链接。不用插件：只需要这一个功能。
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !is_web_url(&url) {
+        return Err("只能打开 http / https 链接".into());
+    }
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        // 不经过 cmd：`start` 会把网址里的 & 当成命令分隔符。
+        let mut command = std::process::Command::new("rundll32");
+        command.args(["url.dll,FileProtocolHandler", &url]);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = std::process::Command::new("open");
+        command.arg(&url);
+        command
+    };
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let mut command = {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(&url);
+        command
+    };
+    command.spawn().map(drop).map_err(|e| e.to_string())
+}
+
 /// 第二个实例会多一条连接和一份通知，所以只唤起已有实例的窗口后退出。
 fn listen_for_reopen(app: &AppHandle, listener: TcpListener) {
     let app = app.clone();
@@ -73,7 +108,8 @@ pub(crate) fn run() {
         .manage(Hub::default())
         .invoke_handler(tauri::generate_handler![
             crate::hub_connect,
-            crate::hub_send
+            crate::hub_send,
+            open_url
         ])
         .setup(move |app| {
             if let Some(listener) = instance {
@@ -118,4 +154,19 @@ pub(crate) fn run() {
                 api.prevent_exit();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_web_url;
+
+    #[test]
+    fn only_http_links_can_be_opened() {
+        assert!(is_web_url("https://example.com/a?b=1&c=2"));
+        assert!(is_web_url("HTTP://example.com"));
+        assert!(!is_web_url("file:///C:/Windows/System32/calc.exe"));
+        assert!(!is_web_url("javascript:alert(1)"));
+        assert!(!is_web_url("ms-settings:"));
+        assert!(!is_web_url("https://example.com/\nx"));
+    }
 }

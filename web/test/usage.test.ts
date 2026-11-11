@@ -1,7 +1,7 @@
 // 使用情况窗格的统计：解析、按范围截取、汇总、连续天数、排行、每日序列、热力图。运行：node --test web/test/
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addDays, dailySeries, heatmap, modelLabel, parseUsage, summarize, type UsageDay } from "../src/usage.ts";
+import { addDays, dailySeries, heatmap, hourlySeries, modelLabel, parseUsage, summarize, type UsageDay } from "../src/usage.ts";
 
 const day = (date: string, messages: number, extra: Partial<UsageDay> = {}): UsageDay => ({
   date,
@@ -95,4 +95,18 @@ test("热力图：按周排成列（周一在上），分 0～4 档，今天以�
   assert.equal(weeks[1][3], null);
   assert.equal(weeks[0][0]?.date, "2026-11-02");
   assert.equal(weeks[0][0]?.level, 0);
+});
+
+test("今天：汇总只算今天，柱状图是今天 24 小时的回复数，今天没数据时全是 0", () => {
+  const days = [day("2026-11-10", 5), day("2026-11-11", 3, { hours: Array.from({ length: 24 }, (_, h) => (h === 14 ? 2 : h === 15 ? 1 : 0)) })];
+  const today = summarize(days, "today", "2026-11-11");
+  assert.equal(today.messages, 3);
+  assert.equal(today.activeDays, 1);
+  assert.equal(today.peakHour, 14);
+  const hours = hourlySeries(days, "2026-11-11");
+  assert.equal(hours.length, 24);
+  assert.equal(hours[14], 2);
+  assert.equal(hours[15], 1);
+  assert.equal(hours.reduce((a, b) => a + b, 0), 3);
+  assert.deepEqual(hourlySeries(days, "2026-11-12"), Array(24).fill(0));
 });

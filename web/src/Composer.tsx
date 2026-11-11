@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, 
 import { CommandMenu, ModelMenu } from "./Dialogs";
 import { Dropdown, Elapsed, formatDuration, formatTokens, Meter, Quota, quotaPercent, sessionStatus } from "./Common";
 import { Icon } from "./Icon";
-import { firstAsk, matchCommands, runningTasks, type SlashCommand } from "./model";
+import { firstAsk, matchCommands, runningTasks, turnTokens, type SlashCommand } from "./model";
 import { isTouch, pageVisible } from "./platform";
 import { describeCwd, isResumeCommand, NEW_DRAFT, type Session, type Store } from "./store";
 
@@ -39,6 +39,7 @@ function Activity({ store, session }: { store: Store; session: Session }) {
       {ask || live ? <span className="pulse" style={ask ? { animation: "none" } : undefined} /> : null}
       <span className="activity-text">{text}</span>
       {busy && thread.turnStartedAt ? <time>· <Elapsed since={thread.turnStartedAt} /></time> : null}
+      {busy && turnTokens(thread) ? <span className="activity-tokens" title="这一轮的输出 token（含思考和子任务），生成中的部分是估算">· ↓ {formatTokens(turnTokens(thread))} tokens</span> : null}
       <span className="activity-right">
         {hasTasks ? <button onClick={() => store.togglePane("tasks")}><Icon name="tasks" size={13} />后台任务{background ? ` ${background}` : ""}</button> : null}
         {unresponsive ? <button onClick={() => store.askStop(session)}>结束会话</button> : null}

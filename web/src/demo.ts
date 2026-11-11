@@ -15,6 +15,20 @@ if (params.get("theme")) localStorage.setItem("cchub.theme", params.get("theme")
 if (params.has("pane")) localStorage.setItem("cchub.pane", params.get("pane")!);
 // `?click=<选择器>`：加载后点一下，用来截图检查弹出菜单。
 if (params.get("click")) setTimeout(() => document.querySelector<HTMLElement>(params.get("click")!)?.click(), 1200);
+// `?range=today|7d|30d|all`：使用情况窗格的范围（会记住，截图时每张都写明）。
+if (params.get("range")) localStorage.setItem("cchub.usageRange", params.get("range")!);
+// `?hover=<选择器>`：元素出现后模拟鼠标移上去，用来截图检查悬停浮层。
+// 统计数据异步到达；无头浏览器的虚拟时钟会跑在网络加载前面，不能按定时等，要看元素出现。
+if (params.get("hover")) {
+  const selector = params.get("hover")!;
+  const observer = new MutationObserver(() => {
+    const el = document.querySelector(selector);
+    if (!el) return;
+    observer.disconnect();
+    el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+}
 
 function until(recording: string, needle: string): string[] {
   const lines = recording.split("\n").filter(Boolean);
@@ -97,8 +111,12 @@ export const demoHub: Hub = {
         const date = new Date(today.getTime() - (119 - i) * 86400000);
         const weekend = date.getDay() === 0 || date.getDay() === 6;
         const seed = (i * 37) % 11;
-        const messages = scene === "usage-empty" || (weekend && seed < 7) || seed === 3 ? 0 : 40 + seed * 30 + (i % 5) * 25;
-        const hours = Array.from({ length: 24 }, (_, h) => (h >= 9 && h <= 22 && messages ? Math.round(messages / 14) : 0));
+        // 今天总有数据，“今天”范围能看到按小时的柱子（到当前小时为止，起伏不同）。
+        const isToday = i === 119;
+        const messages = scene === "usage-empty" ? 0 : isToday ? 96 : (weekend && seed < 7) || seed === 3 ? 0 : 40 + seed * 30 + (i % 5) * 25;
+        const hours = isToday
+          ? Array.from({ length: 24 }, (_, h) => (h <= today.getHours() && h >= 8 ? 2 + ((h * 7) % 9) : 0))
+          : Array.from({ length: 24 }, (_, h) => (h >= 9 && h <= 22 && messages ? Math.round(messages / 14) : 0));
         return {
           date: new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10),
           messages, sessions: messages ? 1 + (seed % 4) : 0,
@@ -145,6 +163,10 @@ export const demoHub: Hub = {
       event({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.34, resetsAt: hours }, seven_day: { utilization: 0.86, resetsAt: hours + 400000 } } } });
       event({ type: "assistant", message: { id: "usage", usage: { input_tokens: 2, cache_read_input_tokens: 240000, cache_creation_input_tokens: 4000 }, content: [] } });
       if (msg.session === "rich") {
+        // 这一轮的实时 token：一条已结束的消息 + 正在生成的片段。
+        event({ type: "stream_event", event: { type: "message_delta", delta: {}, usage: { output_tokens: 1840 } } });
+        event({ type: "stream_event", event: { type: "message_start", message: { id: "live" } } });
+        event({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "x".repeat(1400) } } });
         event({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "b1", task_type: "local_bash", description: "运行完整测试 npm test" }, { task_id: "b2", task_type: "local_bash", description: "构建桌面端" }, { task_id: "b3", task_type: "local_bash", description: "Run read-only codex test task in background" }] });
         event({ type: "system", subtype: "task_notification", task_id: "b3", status: "stopped", output_file: "/tmp/claude-0/x/tasks/b3.output" });
         event({ type: "system", subtype: "task_notification", task_id: "b2", status: "completed", summary: "构建完成", output_file: "/tmp/claude-0/x/tasks/b2.output" });
