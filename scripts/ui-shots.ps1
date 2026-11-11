@@ -32,7 +32,8 @@ for ($i = 0; $i -lt 80; $i++) { try { Invoke-WebRequest -UseBasicParsing http://
 $full = (Resolve-Path $Out).Path
 foreach ($s in $shots) {
   $file = Join-Path $full ($s[0] + ".png")
-  & $edge --headless=new --disable-gpu --hide-scrollbars --virtual-time-budget=4000 "--window-size=$($s[2])" "--screenshot=$file" "http://127.0.0.1:5199$($s[1])" 2>$null | Out-Null
+  # 独立的用户目录：设备上开着 Edge 时，共用目录的无头实例会把请求交给已开的浏览器后直接退出，截不到图。
+  & $edge --headless=new "--user-data-dir=$env:TEMP\cchub-shots-edge" --disable-gpu --hide-scrollbars --virtual-time-budget=4000 "--window-size=$($s[2])" "--screenshot=$file" "http://127.0.0.1:5199$($s[1])" 2>$null | Out-Null
 }
 Get-ChildItem $full -Filter *.png | Select-Object Name, Length
 taskkill /PID $p.Id /T /F 2>$null | Out-Null
