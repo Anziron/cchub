@@ -310,10 +310,26 @@ export function Composer({ store, session }: { store: Store; session: Session })
 
 /** 新会话页的问候语，按当地时间变化。 */
 function greeting(hour: number): string {
-  if (hour >= 5 && hour < 12) return "Good morning";
-  if (hour >= 12 && hour < 18) return "Good afternoon";
-  if (hour >= 18 && hour < 23) return "Good evening";
-  return "Burning the midnight oil?";
+  if (hour >= 5 && hour < 12) return "Good morning!";
+  if (hour >= 12 && hour < 18) return "Good afternoon!";
+  if (hour >= 18 && hour < 23) return "Good evening!";
+  return "Burning the midnight oil!";
+}
+
+const TAGLINES = [
+  "What shall we build today?",
+  "Ready when you are.",
+  "Let's ship something great.",
+  "Pick up where you left off, or start something new.",
+  "Big idea or small fix — let's get to it.",
+  "Describe it, and let it run.",
+  "Your next commit starts here.",
+];
+
+/** 问候语下的一句话，每天换一句（同一天不变，不会每次重画都跳）。 */
+function tagline(now: Date): string {
+  const day = Math.floor((now.getTime() - now.getTimezoneOffset() * 60000) / 86400000);
+  return TAGLINES[day % TAGLINES.length];
 }
 
 export function Welcome({ store }: { store: Store }) {
@@ -339,9 +355,21 @@ export function Welcome({ store }: { store: Store }) {
   const send = () => submit(text);
   const commands = useCommandMenu(store.commandsFor(), text, setText, submit);
   const { project, device } = describeCwd(store.cwd);
+  const live = [...store.sessions.values()].filter((s) => !s.archived);
+  const running = live.filter((s) => s.running && s.thread.phase !== "idle").length;
+  const waiting = live.filter((s) => firstAsk(s.thread)).length;
+  const recent = store.recentWorkspaces().slice(0, 4);
+  const now = new Date();
   return (
     <section className="welcome">
-      <h1 className="greeting">{greeting(new Date().getHours())}</h1>
+      <h1 className="greeting">{greeting(now.getHours())}</h1>
+      <p className="tagline">{tagline(now)}</p>
+      {running || waiting ? (
+        <p className="welcome-status">
+          {waiting ? <span className="wait"><i />{waiting} 个会话等你决定</span> : null}
+          {running ? <span><i />{running} 个会话正在干活</span> : null}
+        </p>
+      ) : null}
       <div className="chips">
         <button type="button" className="chip-btn" title={store.cwd || undefined} onClick={() => store.openWorkspace()}>
           <Icon name="folder" size={13} />
@@ -376,6 +404,19 @@ export function Welcome({ store }: { store: Store }) {
           </div>
         </div>
       </Box>
+      {recent.length ? (
+        <div className="recent">
+          <span className="recent-label">最近的项目</span>
+          {recent.map((cwd) => {
+            const where = describeCwd(cwd);
+            return (
+              <button type="button" key={cwd} className={`recent-chip${cwd === store.cwd ? " on" : ""}`} title={cwd} onClick={() => store.chooseWorkspace(cwd)}>
+                <Icon name="folder" size={12} />{where.project}{where.device ? <small>{where.device}</small> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
     </section>
   );
 }

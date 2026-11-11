@@ -665,7 +665,21 @@ a.link:hover { text-decoration-thickness: 2px; }
 /* 新会话页 */
 .welcome { display: flex; flex: 1; flex-direction: column; justify-content: center; width: min(var(--column), calc(100% - 48px)); margin: 0 auto; padding-bottom: 10vh; }
 /* 问候语：固定的衬线字体和字号，不跟“外观”里的字体、字号走 */
-.welcome h1.greeting { margin: 0 0 26px; font: 400 40px/1.2 "Palatino Linotype", Palatino, "Book Antiqua", "Iowan Old Style", Georgia, "Times New Roman", serif; font-style: italic; letter-spacing: -.005em; text-align: center; }
+.welcome h1.greeting { width: fit-content; margin: 0 auto; padding: 0 .12em .06em; font: italic 600 46px/1.2 Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif; letter-spacing: -.01em; text-align: center; background: linear-gradient(100deg, #c96442 10%, #d9774f 45%, #b8577a 90%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.tagline { margin: 6px 0 0; color: var(--muted); font: italic 16px/1.5 Georgia, "Iowan Old Style", serif; text-align: center; }
+.welcome-status { display: flex; justify-content: center; gap: 16px; margin: 12px 0 0; color: var(--muted); font-size: 12.5px; }
+.welcome-status span { display: inline-flex; align-items: center; gap: 6px; }
+.welcome-status i { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.welcome-status .wait { color: var(--accent); }
+.welcome-status .wait i { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.welcome .chips { margin-top: 26px; }
+.recent { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 14px; }
+.recent-label { margin-right: 2px; color: var(--faint); font-size: 12px; }
+.recent-chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 13px; color: var(--text-2); font-size: 12.5px; box-shadow: inset 0 0 0 1px var(--line-2); transition: background .12s var(--ease); }
+.recent-chip:hover { background: var(--hover); color: var(--text); }
+.recent-chip.on { background: var(--active); color: var(--text); }
+.recent-chip svg { color: var(--muted); }
+.recent-chip small { color: var(--faint); font-size: 11px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .chip-btn { display: flex; align-items: center; gap: 6px; max-width: 100%; height: 28px; padding: 0 10px; border-radius: var(--r-md); background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); color: var(--text-2); font-size: 12.5px; white-space: nowrap; }
 .chip-btn:hover { background: var(--hover); color: var(--text); }
