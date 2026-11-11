@@ -86,3 +86,4 @@
 - 被测模块（`web/test/` 直接用 `node --test` 跑）之间只能有类型导入，导入函数会因缺 `.ts` 扩展名失败 → 小工具函数在模块内重写或放进 `model.ts`。Windows 上 `node --test test/` 不认目录，要写 `test/*.test.ts`。
 - 侧栏会话行的菜单曾往上弹并被列表裁掉：判断上下空间时只按窗口算，而 `.side-scroll` 会裁剪（它的 `-webkit-mask-image` 连 `position: fixed` 的子元素也裁）→ `useMenuFit` 按最近的裁剪祖先算；侧栏行菜单用 `Dropdown` 的 `fixed`，经 portal 放到 `body` 下按窗口定位，所在列表滚动时关闭。
 - 弹出菜单统一用 `Common.tsx` 的 `Dropdown`（外层 `.dd` 是 `position: relative`）→ 要绝对定位的下拉要写 `.dd.xxx`，只写 `.xxx` 会被 `.dd` 覆盖，行高被撑开。
+- 图标的源文件是 `desktop/icons/source.svg`，Android 的前景、背景、单色层是同目录的 `android-*.svg`（`icon-manifest.json` 指定）→ 改完跑 `scripts/make-icons.ps1` 更新入库的桌面端图标；Android 启动图标不入库，CI 在 `android init` 之后生成；状态栏小图标 `ic_cchub_status.xml` 是手写的矢量图，要手动同步。

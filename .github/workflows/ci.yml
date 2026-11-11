@@ -103,6 +103,11 @@ jobs:
       - name: 编译 APK
         run: |
           npm run tauri -- android init --ci
+          # gen/ 不入库，init 出来的是 Tauri 默认图标 → 从 SVG 生成后覆盖；没覆盖上就失败，免得悄悄发出默认图标。
+          res=desktop/gen/android/app/src/main/res
+          npm run tauri -- icon desktop/icons/icon-manifest.json -o "$RUNNER_TEMP/icons"
+          if [ -d "$RUNNER_TEMP/icons/android" ]; then cp -r "$RUNNER_TEMP/icons/android/." "$res/"; fi
+          grep -q ic_launcher_monochrome "$res/mipmap-anydpi-v26/ic_launcher.xml"
           npm run tauri -- android build --apk --ci --target aarch64 --target x86_64
       - name: 签名
         run: |
