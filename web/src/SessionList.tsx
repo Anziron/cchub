@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { AppearanceMenu } from "./Dialogs";
 import { pageVisible } from "./platform";
 import type { Appearance } from "./appearance";
@@ -24,8 +24,21 @@ function useStored<T extends string>(key: string, fallback: T, allowed: readonly
   return [value, (next: T) => { setValue(next); localStorage.setItem(key, next); }];
 }
 
+/**
+ * 这一行显示的全部内容。`Session` 是原地修改的对象，不能按引用比较，
+ * 用它判断要不要重画：任何事件都会让侧栏重渲染，没变的行跳过。
+ */
+function rowDigest(store: Store, session: Session): string {
+  const waiting = isWaiting(session.thread);
+  return [session.title, rowState(session), sessionStatus(session), waiting ? askHint(firstAsk(session.thread)) : "", store.selected === session.id, session.running].join("\n");
+}
+
+function SessionRow(props: { store: Store; session: Session; project?: string }) {
+  return <SessionRowView {...props} digest={rowDigest(props.store, props.session)} />;
+}
+
 /** 会话行只有一行：状态和标题。等你决定的会话多一行提示，这是不能漏看的。 */
-function SessionRow({ store, session, project }: { store: Store; session: Session; project?: string }) {
+const SessionRowView = memo(function SessionRowView({ store, session, project }: { store: Store; session: Session; project?: string; digest: string }) {
   const waiting = isWaiting(session.thread);
   const current = store.selected === session.id;
   const status = sessionStatus(session);
@@ -43,7 +56,7 @@ function SessionRow({ store, session, project }: { store: Store; session: Sessio
       </Dropdown>
     </div>
   );
-}
+}, (a, b) => a.digest === b.digest && a.project === b.project && a.session === b.session && a.store === b.store);
 
 function Group({ store, id, label, sub, sessions, collapsed, toggle, withProject }: {
   store: Store;

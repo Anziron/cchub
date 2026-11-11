@@ -164,11 +164,14 @@ export class Store {
   /** 为拖入的文件挂载目录，等结果的标签；键是 `设备\n目录`。 */
   private fileMounts = new Map<string, { key: string; path: string; name: string }[]>();
   private taskTimes = loadJson<Record<string, number>>(TASK_TIMES_KEY, {});
+  private limitsSave: ReturnType<typeof setTimeout> | 0 = 0;
 
   constructor(private hub: Hub) {
     void hub.onEvent((events) => {
-      for (const event of events) this.onEvent(event);
-      this.changed();
+      // 整批都是不影响界面的事件（如内容没变的任务输出轮询）时不刷新。
+      let dirty = false;
+      for (const event of events) if (this.onEvent(event) !== false) dirty = true;
+      if (dirty) this.changed();
     });
     if (this.url) void this.connect(this.url);
   }
@@ -244,7 +247,8 @@ export class Store {
     return session;
   }
 
-  private onEvent(event: UiEvent): void {
+  /** 返回 `false` 表示这条事件没有改变界面要显示的东西。 */
+  private onEvent(event: UiEvent): boolean | void {
     switch (event.type) {
       case "connection":
         this.setConnection(event.state);
@@ -314,9 +318,8 @@ export class Store {
         break;
       case "task_output":
         // 内容没变就保留原对象，输出区按引用和文本判断，不用重画。
-        if (this.taskOutput?.path === event.path && (this.taskOutput.text !== event.text || this.taskOutput.error !== event.error)) {
-          this.taskOutput = { path: event.path, text: event.text, error: event.error };
-        }
+        if (this.taskOutput?.path !== event.path || (this.taskOutput.text === event.text && this.taskOutput.error === event.error)) return false;
+        this.taskOutput = { path: event.path, text: event.text, error: event.error };
         break;
       case "usage": {
         const stats = event.stats ? parseUsage(event.stats) : null;
@@ -369,7 +372,12 @@ export class Store {
     const next = parseRateLimits(line, { session: session.id, seq, rank });
     if (!next) return;
     this.limits = mergeRateLimits(this.limits, next);
-    localStorage.setItem(LIMITS_KEY, JSON.stringify(this.limits));
+    // 重放时每条额度事件都会进来，localStorage 是同步写盘：合并到 1 秒后写一次。
+    if (this.limitsSave) return;
+    this.limitsSave = setTimeout(() => {
+      this.limitsSave = 0;
+      localStorage.setItem(LIMITS_KEY, JSON.stringify(this.limits));
+    }, 1000);
   }
 
   /** 任务事件没有时间戳，首次看到时记下来，窗口重建后重放还能用。 */
@@ -868,8 +876,10 @@ export class Store {
   }
 
   readTaskOutput(path: string): void {
-    if (this.taskOutput?.path !== path) this.taskOutput = { path, text: null, error: null };
     void this.send({ type: "task_output", path });
+    // 轮询同一个任务时不刷新界面，等结果回来、内容变了再刷新。
+    if (this.taskOutput?.path === path) return;
+    this.taskOutput = { path, text: null, error: null };
     this.changed();
   }
 

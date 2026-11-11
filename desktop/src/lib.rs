@@ -15,6 +15,8 @@ mod mobile;
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 /// 事件合批窗口：窗口内到达的事件一次发给前端，减少 IPC 次数。
 const BATCH_WINDOW: Duration = Duration::from_millis(16);
+/// 一批最多这么多条：重放大会话时不攒出一个巨大的 IPC 消息，界面也能分几帧处理。
+const BATCH_MAX: usize = 512;
 
 /// 启动合批线程：收到第一条后最多再等一个窗口，把期间的事件合成一批发出。
 /// 空闲时线程阻塞在 `recv`，没有开销；发送端全部丢弃（旧连接结束）时线程退出。
@@ -24,14 +26,13 @@ fn spawn_batcher(handle: AppHandle) -> mpsc::Sender<UiEvent> {
         while let Ok(first) = rx.recv() {
             let mut batch = vec![first];
             let deadline = Instant::now() + BATCH_WINDOW;
-            loop {
+            while batch.len() < BATCH_MAX {
                 let left = deadline.saturating_duration_since(Instant::now());
                 match rx.recv_timeout(left) {
                     Ok(event) => batch.push(event),
                     Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
                 }
             }
-            // 窗口关闭后没有接收方，发送没有开销。
             let _ = handle.emit("hub", batch);
         }
     });
@@ -144,6 +145,12 @@ fn hub_connect(app: AppHandle, hub: State<'_, Hub>, url: String) -> ConnectionSt
         }
         #[cfg(mobile)]
         if !mobile::ui_alive() {
+            return;
+        }
+        // 窗口关到托盘后 WebView 已销毁，`emit` 仍会先序列化整批事件。没有界面就不送；
+        // 重新打开窗口时界面会重新订阅、从头重放，不会漏。
+        #[cfg(desktop)]
+        if !desktop::ui_alive(&handle) {
             return;
         }
         let _ = lock(&batcher).send(event);

@@ -337,7 +337,8 @@ function ProjectRanking({ projects, view, setView, colors }: { projects: UsageSu
                   {row.models.map(([model, n]) => <i key={model} style={{ flexGrow: n, background: colors.get(model) ?? "var(--faint)" }} />)}
                 </span>
               ) : (
-                <i style={{ width: `${Math.max(2, (row.share / top) * 100)}%` }} />
+                // 只有回复数时用热力图的强调色（同样是“回复次数”），不和模型颜色混。
+                <i style={{ width: `${Math.max(2, (row.share / top) * 100)}%`, background: "var(--accent)" }} />
               )}
             </span>
             <span className="rank-pct">{row.share > 0 ? percent(row.share) : ""}</span>

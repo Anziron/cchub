@@ -1,5 +1,5 @@
 import { marked, type Token, type Tokens } from "marked";
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { isWebUrl, openUrl } from "./platform";
 
 // 渲染成 React 元素而不是 HTML 字符串，模型输出里的标签只会显示成文字。
@@ -152,8 +152,18 @@ function useThrottled(value: string, ms: number, enabled: boolean): string {
   return enabled ? shown : value;
 }
 
+/** 一个块级元素。原文没变就不重画：流式输出时前面已完成的块不动，只有最后一块在变。 */
+const Block = memo(
+  function Block({ token, index }: { token: Token; index: number }) {
+    return <>{block(token, index)}</>;
+  },
+  (a, b) => a.token.raw === b.token.raw && a.token.type === b.token.type && a.index === b.index,
+);
+
 export const Markdown = memo(function Markdown({ text, live = false }: { text: string; live?: boolean }) {
   // 流式消息每个片段都重新解析整段很费 CPU，限到 80ms 一次；完整文本立即渲染。
+  // 解析结果按文本缓存：父组件因别的原因重渲染时不重新解析。
   const shown = useThrottled(text, LIVE_PARSE_MS, live);
-  return <div className="reply">{marked.lexer(shown).map(block)}</div>;
+  const tokens = useMemo(() => marked.lexer(shown), [shown]);
+  return <div className="reply">{tokens.map((token, i) => <Block key={i} token={token} index={i} />)}</div>;
 });

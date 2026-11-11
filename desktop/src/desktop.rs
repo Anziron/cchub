@@ -30,6 +30,11 @@ pub(crate) fn notify(app: &AppHandle, class: EventClass) {
         .show();
 }
 
+/// 主窗口（连同 WebView）是否还在。关到托盘时窗口被销毁，这时不必再给界面发事件。
+pub(crate) fn ui_alive(app: &AppHandle) -> bool {
+    app.get_webview_window(MAIN).is_some()
+}
+
 /// 窗口关掉时 WebView 已销毁，要重新创建。
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN) {

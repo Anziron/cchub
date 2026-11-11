@@ -24,11 +24,10 @@ function sessionHints(session: Session): Partial<Record<PaneId, string>> {
 
 /** 窗格菜单：每一项右侧给一个摘要，不打开也能看到大概。会话窗格在上，整体的（使用情况）在下。 */
 function PaneMenu({ store, session }: { store: Store; session?: Session }) {
-  const hints = session ? sessionHints(session) : {};
   const running = session ? runningTasks(session.thread).length : 0;
   const all = Object.keys(PANE_TITLES) as PaneId[];
   const own = session ? all.filter((id) => !GLOBAL_PANES.includes(id)) : [];
-  const item = (id: PaneId, close: () => void) => (
+  const item = (id: PaneId, hints: Partial<Record<PaneId, string>>, close: () => void) => (
     <MenuItem key={id} icon={PANE_ICONS[id]} label={PANE_TITLES[id]} hint={hints[id]} checked={store.pane === id ? true : undefined} onClick={() => { close(); store.togglePane(id); }} />
   );
   return (
@@ -37,13 +36,17 @@ function PaneMenu({ store, session }: { store: Store; session?: Session }) {
       label="窗格"
       button={<><Icon name="panel" size={15} />{running ? <span className="badge">{running}</span> : null}<Icon name="down" size={11} /></>}
     >
-      {(close) => (
-        <>
-          {own.map((id) => item(id, close))}
-          {own.length ? <div className="menu-sep" /> : null}
-          {GLOBAL_PANES.map((id) => item(id, close))}
-        </>
-      )}
+      {(close) => {
+        // 摘要要遍历全部条目并拆分 Edit/Write 全文，只在菜单展开时算，不随每个事件重算。
+        const hints = session ? sessionHints(session) : {};
+        return (
+          <>
+            {own.map((id) => item(id, hints, close))}
+            {own.length ? <div className="menu-sep" /> : null}
+            {GLOBAL_PANES.map((id) => item(id, hints, close))}
+          </>
+        );
+      }}
     </Dropdown>
   );
 }
