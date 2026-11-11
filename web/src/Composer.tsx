@@ -304,6 +304,14 @@ export function Composer({ store, session }: { store: Store; session: Session })
   );
 }
 
+/** 新会话页的问候语，按当地时间变化。 */
+function greeting(hour: number): string {
+  if (hour >= 5 && hour < 12) return "Good morning";
+  if (hour >= 12 && hour < 18) return "Good afternoon";
+  if (hour >= 18 && hour < 23) return "Good evening";
+  return "Burning the midnight oil?";
+}
+
 export function Welcome({ store }: { store: Store }) {
   const input = useInput(store, NEW_DRAFT, store.cwd);
   const { text, setText } = input;
@@ -329,7 +337,7 @@ export function Welcome({ store }: { store: Store }) {
   const { project, device } = describeCwd(store.cwd);
   return (
     <section className="welcome">
-      <h1>今天想让它做点什么？</h1>
+      <h1 className="greeting">{greeting(new Date().getHours())}</h1>
       <div className="chips">
         <button type="button" className="chip-btn" title={store.cwd || undefined} onClick={() => store.openWorkspace()}>
           <Icon name="folder" size={13} />

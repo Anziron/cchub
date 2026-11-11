@@ -663,9 +663,9 @@ a.link:hover { text-decoration-thickness: 2px; }
 
 /* 新会话页 */
 .welcome { display: flex; flex: 1; flex-direction: column; justify-content: center; width: min(var(--column), calc(100% - 48px)); margin: 0 auto; padding-bottom: 10vh; }
-.welcome h1 { margin: 0 0 22px; font: 500 26px/1.35 var(--sans); letter-spacing: .01em; text-align: center; }
+/* 问候语：固定的衬线字体和字号，不跟“外观”里的字体、字号走 */
+.welcome h1.greeting { margin: 0 0 26px; font: 400 40px/1.2 "Palatino Linotype", Palatino, "Book Antiqua", "Iowan Old Style", Georgia, "Times New Roman", serif; font-style: italic; letter-spacing: -.005em; text-align: center; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-.welcome .chips { justify-content: center; margin-bottom: 12px; }
 .chip-btn { display: flex; align-items: center; gap: 6px; max-width: 100%; height: 28px; padding: 0 10px; border-radius: var(--r-md); background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); color: var(--text-2); font-size: 12.5px; white-space: nowrap; }
 .chip-btn:hover { background: var(--hover); color: var(--text); }
 .chip-btn span { overflow: hidden; text-overflow: ellipsis; }
@@ -808,7 +808,7 @@ a.link:hover { text-decoration-thickness: 2px; }
   .stream { scrollbar-gutter: auto; }
   .column, .todo, .dock, .notice, .welcome { width: calc(100% - 28px); }
   .dock { padding-bottom: 8px; }
-  .welcome h1 { font-size: 22px; }
+  .welcome h1.greeting { font-size: 30px; }
     .turn-nav { display: none; }
   .overlay { padding: 12px; }
   .modal { max-height: 100%; overflow-y: auto; }
