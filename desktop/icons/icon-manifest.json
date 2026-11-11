@@ -3,6 +3,6 @@
   "bg_color": "#c6613f",
   "android_bg": "android-bg.svg",
   "android_fg": "android-fg.svg",
-  "android_fg_scale": 80,
+  "android_fg_scale": 100,
   "android_monochrome": "android-mono.svg"
 }

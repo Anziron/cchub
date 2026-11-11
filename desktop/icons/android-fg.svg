@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- Android 自适应图标的前景层：只有图形，背景透明。 -->
-  <g transform="translate(-8 0)">
+  <!-- Android 自适应图标的前景层：只有图形，背景透明。缩到 0.78 是为了留在圆形遮罩的安全区（中间 61%）内。 -->
+  <g transform="translate(256 256) scale(0.78) translate(-264 -256)">
     <g fill="none" stroke="#faf9f5" stroke-width="44" stroke-linecap="round">
       <path d="M 370.9 159.6 A 150 150 0 1 0 370.9 352.4"/>
       <path d="M 309.6 211 A 70 70 0 1 0 309.6 301"/>

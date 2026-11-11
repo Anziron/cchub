@@ -739,12 +739,19 @@ a.link:hover { text-decoration-thickness: 2px; }
 .heat-grid i.l4 { background: var(--accent); }
 .heat-grid i.today { box-shadow: 0 0 0 1px var(--text-2); }
 .heat-grid i[data-i]:hover { box-shadow: 0 0 0 1.5px var(--text); }
-.rank { display: flex; flex-direction: column; gap: 7px; }
-.rank-row { display: grid; grid-template-columns: minmax(0, 8em) 1fr auto; align-items: center; gap: 10px; font-size: 12.5px; }
-.rank-name { overflow: hidden; color: var(--text-2); white-space: nowrap; text-overflow: ellipsis; }
-.rank-bar { height: 4px; overflow: hidden; border-radius: 2px; background: var(--hover); }
-.rank-bar i { display: block; height: 100%; border-radius: 2px; background: var(--muted); }
-.rank-row .num { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+/* 常用模型：顶部总占比条 + 每行色点、相对条、占比和数值；颜色与柱状图同系 */
+.share-bar { display: flex; gap: 2px; height: 8px; margin: 2px 0 10px; overflow: hidden; border-radius: 4px; background: var(--hover); }
+.share-bar i { min-width: 3px; height: 100%; }
+.rank { display: flex; flex-direction: column; gap: 2px; }
+.rank-row { display: grid; grid-template-columns: minmax(0, 7.5em) 1fr 3.2em auto; align-items: center; gap: 10px; margin: 0 -6px; padding: 5px 6px; border-radius: var(--r-sm); font-size: 12.5px; transition: background .12s var(--ease); }
+.rank-row:hover { background: var(--hover); }
+.rank-name { display: flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; color: var(--text); white-space: nowrap; text-overflow: ellipsis; }
+.rank-name i { width: 8px; height: 8px; flex: none; border-radius: 2px; }
+.rank-bar { height: 6px; overflow: hidden; border-radius: 3px; background: var(--hover); }
+.rank-row:hover .rank-bar { background: var(--active); }
+.rank-bar i { display: block; height: 100%; border-radius: 3px; background: var(--muted); opacity: .85; }
+.rank-pct { color: var(--faint); font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; }
+.rank-row .num { min-width: 3.5em; color: var(--text-2); font-size: 12px; font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
 .pane-sum { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .change { border-bottom: 1px solid var(--line); }
 .change summary { display: flex; align-items: center; gap: 8px; min-height: 34px; cursor: pointer; list-style: none; font-size: 12.5px; font-variant-numeric: tabular-nums; }

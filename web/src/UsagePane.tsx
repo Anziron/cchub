@@ -182,11 +182,14 @@ function ModelRanking({ models }: { models: UsageSummary["models"] }) {
   };
   if (!models.length) return null;
   const totalCost = models.reduce((sum, m) => sum + (m.cost ?? 0), 0);
+  // 颜色和柱状图一致：按 token 排名，前 3 个用系列色，其余灰色。切到费用时颜色跟着模型走，不跟名次。
+  const color = new Map(models.map((m, i) => [m.key, i < 3 ? `var(--series-${i + 1})` : "var(--faint)"]));
   const rows = view === "tokens"
     ? models.slice(0, 5).map((m) => ({ key: m.key, name: m.name, share: m.share, value: formatTokens(m.tokens) }))
     : [...models].sort((a, b) => (b.cost ?? -1) - (a.cost ?? -1)).slice(0, 5).map((m) => ({
       key: m.key, name: m.name, share: totalCost && m.cost ? m.cost / totalCost : 0, value: m.cost == null ? "—" : dollars(m.cost),
     }));
+  const top = rows[0]?.share || 1;
   return (
     <>
       <h4 className="rank-head">
@@ -198,20 +201,17 @@ function ModelRanking({ models }: { models: UsageSummary["models"] }) {
           ))}
         </span>
       </h4>
-      <Ranking rows={rows} />
-    </>
-  );
-}
-
-function Ranking({ rows }: { rows: { key: string; name: string; share: number; value: string }[] }) {
-  if (!rows.length) return null;
-  return (
-    <>
+      {/* 总占比条：一眼看出谁占大头 */}
+      <div className="share-bar" aria-hidden="true">
+        {rows.map((row) => (row.share > 0 ? <i key={row.key} style={{ flexGrow: row.share, background: color.get(row.key) }} /> : null))}
+      </div>
       <div className="rank">
         {rows.map((row) => (
           <div key={row.key} className="rank-row" title={row.key || undefined}>
-            <span className="rank-name">{row.name}</span>
-            <span className="rank-bar"><i style={{ width: `${Math.max(2, row.share * 100)}%` }} /></span>
+            <span className="rank-name"><i style={{ background: color.get(row.key) }} />{row.name}</span>
+            {/* 条长相对第一名，看得出差距；百分比是占总量的比例 */}
+            <span className="rank-bar"><i style={{ width: `${Math.max(2, (row.share / top) * 100)}%`, background: color.get(row.key) }} /></span>
+            <span className="rank-pct">{row.share > 0 ? `${row.share >= 0.995 ? 100 : (row.share * 100).toFixed(row.share < 0.1 ? 1 : 0)}%` : ""}</span>
             <span className="num">{row.value}</span>
           </div>
         ))}
