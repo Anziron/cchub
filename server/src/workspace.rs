@@ -61,8 +61,8 @@ pub fn browse(program: &str, device: Option<&str>, path: Option<&str>) -> Result
 
 /// `status`：每行 `设备\t系统\tonline|offline`，系统可为空。
 pub fn status(program: &str) -> Result<Vec<DeviceInfo>, String> {
-    let output = run(program, &["status"], BROWSE_TIMEOUT)
-        .map_err(|_| "读取设备状态失败".to_string())?;
+    let output =
+        run(program, &["status"], BROWSE_TIMEOUT).map_err(|_| "读取设备状态失败".to_string())?;
     Ok(parse_status(&output))
 }
 

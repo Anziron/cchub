@@ -12,7 +12,8 @@ use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
 use axum::http::{header::ORIGIN, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use cchub_protocol::{
-    is_user_message, ClientMsg, DeviceInfo, Frame, LineSplitter, Outbound, OutboundLimits, ServerMsg,
+    is_user_message, ClientMsg, DeviceInfo, Frame, LineSplitter, Outbound, OutboundLimits,
+    ServerMsg,
 };
 use futures_util::{SinkExt, StreamExt};
 use inotify::{Inotify, WatchMask};
