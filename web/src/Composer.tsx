@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { CommandMenu, ModelMenu } from "./Dialogs";
-import { Dropdown, Elapsed, formatDuration, formatTokens, Meter, Quota, quotaPercent, sessionStatus } from "./Common";
+import { Dropdown, Elapsed, formatDuration, formatTokens, Meter, Quota, quotaPercent, resetText, resetWhen, sessionStatus } from "./Common";
 import { Icon } from "./Icon";
 import { firstAsk, matchCommands, runningTasks, type SlashCommand } from "./model";
 import { isTouch, pageVisible } from "./platform";
@@ -227,20 +227,26 @@ export function Composer({ store, session }: { store: Store; session: Session })
 function Overview({ store }: { store: Store }) {
   if (!store.sessions.size) return null;
   const stats = overviewStats([...store.sessions.values()], Date.now() / 1000);
-  const week = quotaPercent(store.limits.sevenDay);
-  const five = quotaPercent(store.limits.fiveHour);
-  const tiles: [string, ReactNode, string?][] = [
+  const percent = (window?: { utilization: number; resetsAt: number }) => {
+    const value = quotaPercent(window);
+    return value != null ? `${Math.round(value * 100)}%` : "—";
+  };
+  const { fiveHour, sevenDay } = store.limits;
+  // [标题, 数值, 小字, 悬停提示]
+  const tiles: [string, ReactNode, string?, string?][] = [
     ["近 7 天会话", stats.week, stats.week ? `${stats.projects} 个项目` : undefined],
     ["正在运行", stats.running],
-    ["常用项目", stats.top?.project ?? "—", stats.top ? `近 30 天 ${stats.top.count} 个会话` : undefined],
-    ["本周额度", week != null ? `${Math.round(week * 100)}%` : "—", five != null ? `5 小时 ${Math.round(five * 100)}%` : undefined],
+    ["常用项目", stats.top?.project ?? "—", stats.top ? `近 30 天 ${stats.top.count} 个会话` : undefined, stats.top?.project],
+    ["5 小时额度", percent(fiveHour), resetWhen(fiveHour), resetText(fiveHour)],
+    ["本周额度", percent(sevenDay), resetWhen(sevenDay), resetText(sevenDay)],
+    ["服务器内存", store.memAvailableMb == null ? "—" : `${store.memAvailableMb} MB`, store.memAvailableMb == null ? undefined : "可用"],
   ];
   return (
     <div className="overview" aria-label="统计">
-      {tiles.map(([label, value, note]) => (
-        <div className="tile" key={label}>
+      {tiles.map(([label, value, note, title]) => (
+        <div className="tile" key={label} title={title}>
           <span>{label}</span>
-          <b title={typeof value === "string" ? value : undefined}>{value}</b>
+          <b>{value}</b>
           {note ? <small>{note}</small> : null}
         </div>
       ))}
