@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
-import { formatTokens, Quota, resetWhen } from "./Common";
+import { formatTokens, quotaPercent, resetText, resetWhen } from "./Common";
 import { Icon } from "./Icon";
 import type { Store } from "./store";
 import { addDays, dailySeries, heatmap, hourlySeries, localDate, OTHER, summarize, type Bar, type UsageDay, type UsageMetric, type UsageRange, type UsageSummary } from "./usage";
@@ -31,6 +31,23 @@ function storedRange(): UsageRange {
 function ago(seconds: number): string {
   const minutes = Math.floor((Date.now() / 1000 - seconds) / 60);
   return minutes < 1 ? "刚刚" : minutes < 60 ? `${minutes} 分钟前` : `${Math.floor(minutes / 60)} 小时前`;
+}
+
+/** 额度卡片：大号百分比、按用量变色的进度条、重置时间。用到 80% 以上变成强调色。 */
+function QuotaCard({ label, window }: { label: string; window?: { utilization: number; resetsAt: number } }) {
+  const value = quotaPercent(window);
+  const pct = value == null ? null : Math.round(value * 100);
+  const level = value == null ? "" : value >= 0.8 ? " high" : value >= 0.5 ? " mid" : "";
+  return (
+    <div className={`quota-card${level}`} title={resetText(window)}>
+      <div className="quota-top">
+        <span>{label}</span>
+        <b>{pct == null ? "—" : pct}<small>{pct == null ? "" : "%"}</small></b>
+      </div>
+      <div className="quota-bar"><i style={{ width: `${Math.min(100, pct ?? 0)}%` }} /></div>
+      <div className="quota-reset">{window ? resetWhen(window) : "下一轮回复后更新"}</div>
+    </div>
+  );
 }
 
 interface TipApi {
@@ -105,7 +122,7 @@ function Heatmap({ days, today }: { days: UsageDay[]; today: string }) {
     <div className="chart">
       <div className="heat" role="img" aria-label={`最近 ${HEAT_WEEKS} 周每天的回复数`} {...handlers}>
         <div className="heat-days" aria-hidden="true">{WEEKDAYS.map((d, i) => <span key={i}>{d}</span>)}</div>
-        <div className="heat-grid">
+        <div className="heat-grid" style={{ gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))` }}>
           {cells.map((cell, i) => (cell.future ? <i key={i} className="future" /> : <i key={i} data-i={i} className={`l${cell.level}${cell.date === today ? " today" : ""}`} />))}
         </div>
       </div>
@@ -201,10 +218,6 @@ function ModelRanking({ models }: { models: UsageSummary["models"] }) {
           ))}
         </span>
       </h4>
-      {/* 总占比条：一眼看出谁占大头 */}
-      <div className="share-bar" aria-hidden="true">
-        {rows.map((row) => (row.share > 0 ? <i key={row.key} style={{ flexGrow: row.share, background: color.get(row.key) }} /> : null))}
-      </div>
       <div className="rank">
         {rows.map((row) => (
           <div key={row.key} className="rank-row" title={row.key || undefined}>
@@ -240,10 +253,10 @@ export function UsagePane({ store }: { store: Store }) {
   return (
     <>
       <h4>额度</h4>
-      <Quota label="5 小时" window={fiveHour} />
-      {fiveHour ? <p className="usage-reset">{resetWhen(fiveHour)}</p> : null}
-      <Quota label="本周" window={sevenDay} />
-      {sevenDay ? <p className="usage-reset">{resetWhen(sevenDay)}</p> : null}
+      <div className="quota-cards">
+        <QuotaCard label="5 小时" window={fiveHour} />
+        <QuotaCard label="本周" window={sevenDay} />
+      </div>
 
       <div className="usage-head">
         <div className="seg" role="radiogroup" aria-label="统计范围">
@@ -274,11 +287,7 @@ export function UsagePane({ store }: { store: Store }) {
             </div>
           </div>
           {!summary.messages ? <p className="empty">这段时间没有使用。</p> : <Bars days={stats.days} range={range} today={today} metric={metric} />}
-          <h4 className="heat-head">
-            活跃
-            <span className="tag" title={`${RANGES.find(([r]) => r === range)?.[1]}内有使用的天数`}>活跃 {summary.activeDays} 天</span>
-            <span className="tag" title="到今天（今天还没用就到昨天）为止连续有使用的天数">连续 {summary.streak} 天</span>
-          </h4>
+          <h4>活跃</h4>
           <Heatmap days={stats.days} today={today} />
           <ModelRanking models={summary.models} />
         </>

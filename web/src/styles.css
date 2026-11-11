@@ -684,7 +684,18 @@ a.link:hover { text-decoration-thickness: 2px; }
 /* 使用情况窗格。系列色取自校验过的分类配色（浅色、深色各一套） */
 :root { --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; }
 [data-tone="dark"] { --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; }
-.usage-reset { margin: -4px 0 6px; color: var(--faint); font-size: 11px; text-align: right; }
+/* 使用情况的额度卡片（侧栏仍是简单的进度行） */
+.quota-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.quota-card { padding: 10px 12px 9px; border-radius: var(--r-lg); background: var(--surface); box-shadow: 0 0 0 1px var(--line); }
+.quota-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; }
+.quota-top b { color: var(--text); font: 500 22px/1.1 var(--sans); font-variant-numeric: tabular-nums; }
+.quota-top small { margin-left: 1px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.quota-bar { height: 6px; margin: 8px 0 6px; overflow: hidden; border-radius: 3px; background: var(--hover); }
+.quota-bar i { display: block; height: 100%; border-radius: 3px; background: var(--ok); transition: width .3s var(--ease); }
+.quota-card.mid .quota-bar i { background: var(--warn); }
+.quota-card.high .quota-bar i { background: var(--accent); }
+.quota-card.high .quota-top b { color: var(--accent); }
+.quota-reset { color: var(--faint); font-size: 11px; }
 .usage-head { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 12px; }
 .seg { display: inline-flex; padding: 2px; border-radius: var(--r-md); background: var(--hover); }
 .seg button { height: 24px; padding: 0 12px; border-radius: var(--r-sm); color: var(--muted); font-size: 12px; }
@@ -725,11 +736,13 @@ a.link:hover { text-decoration-thickness: 2px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; color: var(--muted); font-size: 11.5px; }
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
 .legend i { width: 8px; height: 8px; border-radius: 2px; }
+/* 热力图占满窗格宽度：列数固定（周数），格子按宽度等分并保持正方形；星期标签行高跟着格子 */
 .heat { display: flex; gap: 5px; }
-.heat-days, .heat-grid { display: grid; grid-template-rows: repeat(7, 11px); gap: 3px; }
-.heat-days { color: var(--faint); font-size: 9.5px; line-height: 11px; }
-.heat-grid { grid-auto-columns: 11px; grid-auto-flow: column; }
-.heat-grid i { border-radius: 2px; background: var(--hover); }
+.heat-days, .heat-grid { display: grid; grid-template-rows: repeat(7, auto); gap: 3px; }
+.heat-days { grid-template-rows: repeat(7, 1fr); color: var(--faint); font-size: 9.5px; }
+.heat-days span { display: flex; align-items: center; }
+.heat-grid { flex: 1; min-width: 0; grid-auto-flow: column; }
+.heat-grid i { aspect-ratio: 1; border-radius: 2px; background: var(--hover); }
 .heat-grid i.none { background: none; }
 /* 本周还没到的日子：只占位，虚线框 */
 .heat-grid i.future { background: none; box-shadow: inset 0 0 0 1px var(--line); }
@@ -740,8 +753,6 @@ a.link:hover { text-decoration-thickness: 2px; }
 .heat-grid i.today { box-shadow: 0 0 0 1px var(--text-2); }
 .heat-grid i[data-i]:hover { box-shadow: 0 0 0 1.5px var(--text); }
 /* 常用模型：顶部总占比条 + 每行色点、相对条、占比和数值；颜色与柱状图同系 */
-.share-bar { display: flex; gap: 2px; height: 8px; margin: 2px 0 10px; overflow: hidden; border-radius: 4px; background: var(--hover); }
-.share-bar i { min-width: 3px; height: 100%; }
 .rank { display: flex; flex-direction: column; gap: 2px; }
 .rank-row { display: grid; grid-template-columns: minmax(0, 7.5em) 1fr 3.2em auto; align-items: center; gap: 10px; margin: 0 -6px; padding: 5px 6px; border-radius: var(--r-sm); font-size: 12.5px; transition: background .12s var(--ease); }
 .rank-row:hover { background: var(--hover); }
