@@ -20,6 +20,8 @@ if (params.get("click")) setTimeout(() => document.querySelector<HTMLElement>(pa
 if (params.get("range")) localStorage.setItem("cchub.usageRange", params.get("range")!);
 // `?metric=tokens|requests`：使用情况柱状图显示模型 token 还是请求次数（会记住）。
 if (params.get("metric")) localStorage.setItem("cchub.usageMetric", params.get("metric")!);
+// `?models=tokens|cost`：常用模型显示 token 还是费用（会记住）。
+if (params.get("models")) localStorage.setItem("cchub.usageModelView", params.get("models")!);
 // `?hover=<选择器>`：元素出现后模拟鼠标移上去，用来截图检查悬停浮层。
 // 统计数据异步到达；无头浏览器的虚拟时钟会跑在网络加载前面，不能按定时等，要看元素出现。
 if (params.get("hover")) {

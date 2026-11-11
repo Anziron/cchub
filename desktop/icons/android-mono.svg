@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Android 13+ 的单色主题图标：系统只取形状，颜色由主题决定。 -->
+  <g transform="translate(-8 0)">
+    <g fill="none" stroke="#ffffff" stroke-width="44" stroke-linecap="round">
+      <path d="M 370.9 159.6 A 150 150 0 1 0 370.9 352.4"/>
+      <path d="M 309.6 211 A 70 70 0 1 0 309.6 301"/>
+    </g>
+    <circle cx="406" cy="256" r="34" fill="#ffffff"/>
+  </g>
+</svg>

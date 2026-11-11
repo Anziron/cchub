@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { formatTokens, Quota, resetWhen } from "./Common";
 import { Icon } from "./Icon";
 import type { Store } from "./store";
-import { addDays, dailySeries, heatmap, hourlySeries, localDate, OTHER, summarize, type Bar, type UsageDay, type UsageMetric, type UsageRange } from "./usage";
+import { addDays, dailySeries, heatmap, hourlySeries, localDate, OTHER, summarize, type Bar, type UsageDay, type UsageMetric, type UsageRange, type UsageSummary } from "./usage";
 
 const RANGES: [UsageRange, string][] = [["today", "今天"], ["7d", "7 天"], ["30d", "30 天"], ["all", "全部"]];
 const RANGE_KEY = "cchub.usageRange";
@@ -106,7 +106,7 @@ function Heatmap({ days, today }: { days: UsageDay[]; today: string }) {
       <div className="heat" role="img" aria-label={`最近 ${HEAT_WEEKS} 周每天的回复数`} {...handlers}>
         <div className="heat-days" aria-hidden="true">{WEEKDAYS.map((d, i) => <span key={i}>{d}</span>)}</div>
         <div className="heat-grid">
-          {cells.map((cell, i) => (cell ? <i key={i} data-i={i} className={`l${cell.level}${cell.date === today ? " today" : ""}`} /> : <i key={i} className="none" />))}
+          {cells.map((cell, i) => (cell.future ? <i key={i} className="future" /> : <i key={i} data-i={i} className={`l${cell.level}${cell.date === today ? " today" : ""}`} />))}
         </div>
       </div>
       <ChartTip ref={tip} />
@@ -166,11 +166,47 @@ function Bars({ days, range, today, metric }: { days: UsageDay[]; range: UsageRa
   );
 }
 
-function Ranking({ title, rows }: { title: string; rows: { key: string; name: string; share: number; value: string }[] }) {
+const VIEWS: [ModelView, string][] = [["tokens", "token"], ["cost", "费用"]];
+const VIEW_KEY = "cchub.usageModelView";
+type ModelView = "tokens" | "cost";
+
+/** 美元金额：小额多留两位小数。 */
+const dollars = (n: number) => `$${n >= 100 ? n.toFixed(0) : n >= 1 ? n.toFixed(2) : n.toFixed(3)}`;
+
+/** 常用模型：可切换 token 和按 API 标价折算的费用。 */
+function ModelRanking({ models }: { models: UsageSummary["models"] }) {
+  const [view, setViewState] = useState<ModelView>(() => (localStorage.getItem(VIEW_KEY) === "cost" ? "cost" : "tokens"));
+  const setView = (value: ModelView) => {
+    setViewState(value);
+    localStorage.setItem(VIEW_KEY, value);
+  };
+  if (!models.length) return null;
+  const totalCost = models.reduce((sum, m) => sum + (m.cost ?? 0), 0);
+  const rows = view === "tokens"
+    ? models.slice(0, 5).map((m) => ({ key: m.key, name: m.name, share: m.share, value: formatTokens(m.tokens) }))
+    : [...models].sort((a, b) => (b.cost ?? -1) - (a.cost ?? -1)).slice(0, 5).map((m) => ({
+      key: m.key, name: m.name, share: totalCost && m.cost ? m.cost / totalCost : 0, value: m.cost == null ? "—" : dollars(m.cost),
+    }));
+  return (
+    <>
+      <h4 className="rank-head">
+        常用模型
+        {view === "cost" ? <span className="tag" title="按 API 标价折算（缓存写入按 1 小时价），订阅用户实际不按这个付费">合计 {dollars(totalCost)}</span> : null}
+        <span className="seg small">
+          {VIEWS.map(([value, label]) => (
+            <button key={value} type="button" role="radio" aria-checked={view === value} className={view === value ? "on" : undefined} onClick={() => setView(value)}>{label}</button>
+          ))}
+        </span>
+      </h4>
+      <Ranking rows={rows} />
+    </>
+  );
+}
+
+function Ranking({ rows }: { rows: { key: string; name: string; share: number; value: string }[] }) {
   if (!rows.length) return null;
   return (
     <>
-      <h4>{title}</h4>
       <div className="rank">
         {rows.map((row) => (
           <div key={row.key} className="rank-row" title={row.key || undefined}>
@@ -244,7 +280,7 @@ export function UsagePane({ store }: { store: Store }) {
             <span className="tag" title="到今天（今天还没用就到昨天）为止连续有使用的天数">连续 {summary.streak} 天</span>
           </h4>
           <Heatmap days={stats.days} today={today} />
-          <Ranking title="常用模型" rows={summary.models.slice(0, 5).map((m) => ({ key: m.key, name: m.name, share: m.share, value: formatTokens(m.tokens) }))} />
+          <ModelRanking models={summary.models} />
         </>
       )}
     </>

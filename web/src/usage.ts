@@ -83,6 +83,39 @@ function projectLabel(cwd: string): string {
   return cwd.split("/").filter(Boolean).pop() ?? (cwd ? "/" : "未知");
 }
 
+/**
+ * API 标价（美元 / 百万 token）：输入、输出、缓存读取。缓存写入按 1 小时 TTL 算（输入价的 2 倍）：
+ * CLI 的会话记录里缓存写入几乎都是 1 小时的。订阅用户实际不按这个付费，只是折算参考。
+ * 价格来自 2026-11 的官方价目，新模型上线要补。
+ */
+const PRICES: Record<string, [input: number, output: number, cacheRead: number]> = {
+  "claude-fable-5-2": [8, 40, 0.2],
+  "claude-mythos-5-2": [8, 40, 0.2],
+  "claude-fable-5-1": [10, 50, 0.25],
+  "claude-mythos-5-1": [10, 50, 0.25],
+  "claude-fable-5": [10, 50, 1],
+  "claude-opus-5-5": [4, 20, 0.2],
+  "claude-opus-5": [5, 25, 0.5],
+  "claude-opus-4-8": [5, 25, 0.5],
+  "claude-opus-4-7": [5, 25, 0.5],
+  "claude-opus-4-6": [5, 25, 0.5],
+  "claude-opus-4-5": [5, 25, 0.5],
+  "claude-sonnet-5-5": [2, 10, 0.1],
+  "claude-sonnet-5": [2, 10, 0.2],
+  "claude-sonnet-4-6": [3, 15, 0.3],
+  "claude-sonnet-4-5": [3, 15, 0.3],
+  "claude-haiku-5-5": [0.1, 0.5, 0.01],
+  "claude-haiku-4-5": [1, 5, 0.1],
+};
+
+/** 按标价折算的费用（美元）；不认识的模型返回 null。带日期后缀的 ID 去掉日期再查。 */
+export function modelCost(id: string, quad: TokenQuad): number | null {
+  const price = PRICES[id] ?? PRICES[id.replace(/-\d{8}$/, "")];
+  if (!price) return null;
+  const [input, output, cacheRead] = price;
+  return (quad[0] * input + quad[1] * output + quad[2] * input * 2 + quad[3] * cacheRead) / 1_000_000;
+}
+
 /** 四项合计，含缓存读取。 */
 export const dayTokens = (d: UsageDay) => d.input + d.output + d.cacheWrite + d.cacheRead;
 
@@ -129,7 +162,8 @@ export interface UsageSummary {
   streak: number;
   /** 回复最多的本地小时；没有数据时为 null。 */
   peakHour: number | null;
-  models: (Ranked & { tokens: number })[];
+  /** `cost`：按标价折算的美元，不认识的模型为 null。 */
+  models: (Ranked & { tokens: number; cost: number | null })[];
   projects: (Ranked & { messages: number })[];
 }
 
@@ -154,6 +188,15 @@ export function summarize(days: UsageDay[], range: UsageRange, today: string): U
   const list = pick(days, range, today);
   const hours = Array.from({ length: 24 }, (_, h) => list.reduce((sum, d) => sum + (d.hours[h] ?? 0), 0));
   const peak = Math.max(...hours);
+  // 各模型四项分别累加，算费用要用（不同项单价不同）。
+  const quads = new Map<string, TokenQuad>();
+  for (const d of list) {
+    for (const [model, q] of Object.entries(d.models)) {
+      const sum = quads.get(model) ?? [0, 0, 0, 0];
+      for (let i = 0; i < 4; i += 1) sum[i] += q[i];
+      quads.set(model, sum);
+    }
+  }
   const active = new Set(days.filter((d) => d.messages > 0).map((d) => d.date));
   let cursor = active.has(today) ? today : addDays(today, -1);
   let streak = 0;
@@ -169,7 +212,7 @@ export function summarize(days: UsageDay[], range: UsageRange, today: string): U
     activeDays: list.filter((d) => d.messages > 0).length,
     streak,
     peakHour: peak > 0 ? hours.indexOf(peak) : null,
-    models: ranked(sumBy(list, "models")).filter(([, tokens]) => tokens > 0).map(([key, tokens, share]) => ({ key, name: modelLabel(key), tokens, share })),
+    models: ranked(sumBy(list, "models")).filter(([, tokens]) => tokens > 0).map(([key, tokens, share]) => ({ key, name: modelLabel(key), tokens, share, cost: modelCost(key, quads.get(key) ?? [0, 0, 0, 0]) })),
     projects: ranked(sumBy(list, "projects")).map(([key, messages, share]) => ({ key, name: projectLabel(key), messages, share })),
   };
 }
@@ -253,20 +296,23 @@ export interface HeatCell {
   value: number;
   /** 0 表示没有使用，1～4 按当期最大值分档。 */
   level: number;
+  /** 还没到的日子（本周今天以后），只占位。 */
+  future?: boolean;
 }
 
 /** 活跃热力图：最近 `weeks` 周，每列一周（周一在上），值是回复数；今天以后的格子是 null。 */
-export function heatmap(days: UsageDay[], today: string, weeks: number): (HeatCell | null)[][] {
+export function heatmap(days: UsageDay[], today: string, weeks: number): HeatCell[][] {
   const byDate = new Map(days.map((d) => [d.date, d.messages]));
   const start = addDays(weekStart(today), -7 * (weeks - 1));
-  const columns: (HeatCell | null)[][] = [];
+  const columns: HeatCell[][] = [];
   let max = 0;
   for (let w = 0; w < weeks; w += 1) {
-    const column: (HeatCell | null)[] = [];
+    const column: HeatCell[] = [];
     for (let i = 0; i < 7; i += 1) {
       const date = addDays(start, w * 7 + i);
+      // 本周还没到的日子也占一格（空），表格始终完整，每过一天填上一格。
       if (date > today) {
-        column.push(null);
+        column.push({ date, value: 0, level: 0, future: true });
         continue;
       }
       const value = byDate.get(date) ?? 0;

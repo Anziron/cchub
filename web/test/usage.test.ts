@@ -1,7 +1,16 @@
 // 使用情况窗格的统计：解析、按范围截取、汇总、连续天数、排行、每日序列、热力图。运行：node --test web/test/
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addDays, dailySeries, dayTokens, heatmap, hourlySeries, modelLabel, parseUsage, REQUESTS, summarize, type UsageDay } from "../src/usage.ts";
+import { addDays, dailySeries, dayTokens, heatmap, hourlySeries, modelCost, modelLabel, parseUsage, REQUESTS, summarize, type UsageDay } from "../src/usage.ts";
+
+test("费用：按 API 标价估算，缓存写入按 1 小时价（输入的 2 倍）；带日期的 ID 也认；不认识的模型返回 null", () => {
+  const M = 1_000_000;
+  // Opus 5.5：输入 $4、输出 $20、缓存写入 $8、缓存读取 $0.20（每百万）。
+  assert.equal(modelCost("claude-opus-5-5", [M, M, M, M]), 4 + 20 + 8 + 0.2);
+  assert.equal(modelCost("claude-sonnet-5-5", [0, 0, 0, 10 * M]), 1);
+  assert.equal(modelCost("claude-haiku-4-5-20251001", [M, 0, 0, 0]), 1);
+  assert.equal(modelCost("claude-unknown-9", [M, M, M, M]), null);
+});
 
 const day = (date: string, messages: number, extra: Partial<UsageDay> = {}): UsageDay => ({
   date,
@@ -112,7 +121,9 @@ test("热力图：按周排成列（周一在上），分 0～4 档，今天以�
   assert.equal(weeks.length, 2);
   assert.equal(weeks[1][0]?.date, "2026-11-09");
   assert.deepEqual(weeks[1].slice(0, 3).map((c) => c?.level), [1, 2, 4]);
-  assert.equal(weeks[1][3], null);
+  // 本周剩下的日子也占位（标成 future），表格是完整的，过一天补上一格。
+  assert.deepEqual(weeks[1].slice(3).map((c) => [c.future, c.level]), [[true, 0], [true, 0], [true, 0], [true, 0]]);
+  assert.equal(weeks[1][3].date, "2026-11-12");
   assert.equal(weeks[0][0]?.date, "2026-11-02");
   assert.equal(weeks[0][0]?.level, 0);
 });
