@@ -40,7 +40,8 @@
 - 服务器上的 `claude` 受用户配置影响可能不发审批请求，要测审批时加 `--setting-sources project,local`。
 - CLI 会拦截 `sleep 60; ...` 这类命令，实验里要用脚本文件代替。
 - `hubd` 不认任何参数，`hubd --version` 会真的启动并用默认状态目录 → 手动运行时必须设临时 `HUBD_STATE_DIR` 和回环端口。
-- 部署 `hubd` 用 CI 产物 `hubd-linux-musl`，服务器和设备都没有 Rust。
+- 部署 `hubd` 用 CI 产物 `hubd-linux-musl`（服务器的 Rust 在 `~/.cargo/bin`、不在 PATH，可以限内存跑 `cargo test`，但不用来出部署包；设备没有 Rust）。
+- “使用情况”窗格的数据来自 `tools/usage/cchub-usage.py`，服务器上装在 `/usr/local/bin/cchub-usage`（`HUBD_USAGE_CMD` 可替换），缓存在 `~/.cache/cchub-usage/` → 改了脚本要重新 `install -m 755` 过去；输出格式变了要同时改 `web/src/usage.ts` 并升 `version`。CLI 会清理旧会话记录，删掉的文件的统计留在缓存的 `gone` 里，不要清缓存。
 - 列表和状态检查很频繁，不要在热路径上起子进程（每次 `systemctl` 约 6ms CPU，空闲时曾累计每 30 秒 400ms）→ 会话是否运行读 cgroup 的 `cgroup.procs`。
 - 弱网测试不要动服务器真实网卡（代理和会话都走它）→ 用 `ip netns` 建独立命名空间，在其回环上加 `netem`。
 - 桌面端关窗后进程留在托盘，再双击 exe 曾启动第二个实例，两份连接和通知同时存在 → 现在靠占用 `127.0.0.1:47878` 保证单实例；升级 exe 前要先从托盘菜单退出旧进程，否则只会唤起旧版本。
