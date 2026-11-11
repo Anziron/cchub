@@ -90,6 +90,25 @@ export const demoHub: Hub = {
         ? Array.from({ length: 400 }, (_, i) => `[${i}] ${"building module ".repeat(1 + (i % 12))}`).join("\n")
         : "tick 1\ntick 2\n构建完成\n";
       emit({ type: "task_output", path: msg.path, text, error: null });
+    } else if (msg.type === "usage") {
+      // 假统计：最近 120 天，工作日多、周末少，三个模型加一个零星的。
+      const today = new Date();
+      const days = Array.from({ length: 120 }, (_, i) => {
+        const date = new Date(today.getTime() - (119 - i) * 86400000);
+        const weekend = date.getDay() === 0 || date.getDay() === 6;
+        const seed = (i * 37) % 11;
+        const messages = scene === "usage-empty" || (weekend && seed < 7) || seed === 3 ? 0 : 40 + seed * 30 + (i % 5) * 25;
+        const hours = Array.from({ length: 24 }, (_, h) => (h >= 9 && h <= 22 && messages ? Math.round(messages / 14) : 0));
+        return {
+          date: new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10),
+          messages, sessions: messages ? 1 + (seed % 4) : 0,
+          input: messages * 3, output: messages * 900, cacheWrite: messages * 4000, cacheRead: messages * 60000,
+          models: messages ? { "claude-opus-5-5": messages * 3200, "claude-sonnet-5-5": messages * 1200, "claude-haiku-5-5": messages * (seed % 3) * 300, ...(seed > 8 ? { "claude-fable-5-2": messages * 200 } : {}) } : {},
+          projects: messages ? { "/mnt/pc/d/demo-api": Math.round(messages * 0.6), "/mnt/pc/d/cchub": Math.round(messages * 0.3), "/root/notes": Math.round(messages * 0.1) } : {},
+          hours,
+        };
+      }).filter((d) => d.messages);
+      setTimeout(() => emit({ type: "usage", stats: JSON.stringify({ version: 1, generatedAt: Math.floor(Date.now() / 1000) - 120, tzOffset: 480, days }), error: scene === "usage-error" ? "统计命令没有安装，或运行超时" : null }), 300);
     } else if (msg.type === "mount") {
       emit({ type: "mounted", device: msg.device, path: msg.path, cwd: `/mnt/${msg.device}/${msg.path[0].toLowerCase()}/${msg.path.slice(3).replaceAll("\\", "/")}`, error: null });
     } else if (msg.type === "input") {

@@ -113,7 +113,10 @@ export function App({ store }: { store: Store }) {
             <PaneView store={store} session={session} />
           </div>
         ) : (
-          <Welcome store={store} />
+          <div className="body">
+            <div className="chat"><Welcome store={store} /></div>
+            <PaneView store={store} />
+          </div>
         )}
       </main>
       {store.showSettings ? <ConnectDialog store={store} /> : null}

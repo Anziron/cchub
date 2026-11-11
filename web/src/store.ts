@@ -4,6 +4,7 @@ import type { UiEvent } from "./generated/UiEvent";
 import type { Hub } from "./hub";
 import { isNarrow } from "./platform";
 import { sortKey } from "./sidebar";
+import { parseUsage, type UsageStats } from "./usage";
 import {
   addSending,
   allowLine,
@@ -67,8 +68,10 @@ const TITLE_REFRESH_MS = [7000, 20000];
 /** 新会话页的草稿。 */
 export const NEW_DRAFT = "";
 
-export type PaneId = "changes" | "tasks" | "todos" | "plan" | "info";
-const PANES: PaneId[] = ["changes", "tasks", "todos", "plan", "info"];
+export type PaneId = "changes" | "tasks" | "todos" | "plan" | "info" | "usage";
+const PANES: PaneId[] = ["changes", "tasks", "todos", "plan", "info", "usage"];
+/** 不依赖会话的窗格，新会话页也能打开。 */
+export const GLOBAL_PANES: PaneId[] = ["usage"];
 const PANE_KEY = "cchub.pane";
 const storedPane = (): PaneId | null => PANES.find((p) => p === localStorage.getItem(PANE_KEY)) ?? null;
 const VERBOSE_KEY = "cchub.verbose";
@@ -127,6 +130,8 @@ export class Store {
   /** `/resume` 弹窗。 */
   showResume = false;
   taskOutput: { path: string; text: string | null; error: string | null } | null = null;
+  /** 整体用量（使用情况窗格），打开窗格或点刷新时向服务器要一次。 */
+  usage: { stats: UsageStats | null; error: string | null; loading: boolean } = { stats: null, error: null, loading: false };
   /** 新会话要用的工作区，服务器上的路径。 */
   cwd = localStorage.getItem(CWD_KEY) ?? "";
   showWorkspace = false;
@@ -285,6 +290,13 @@ export class Store {
       case "task_output":
         if (this.taskOutput?.path === event.path) this.taskOutput = { path: event.path, text: event.text, error: event.error };
         break;
+      case "usage": {
+        const stats = event.stats ? parseUsage(event.stats) : null;
+        const error = event.error ?? (stats ? null : "统计结果的格式不对，服务器上的统计命令可能和桌面端版本不匹配");
+        // 失败时保留上一次的结果，界面同时提示错误。
+        this.usage = { stats: stats ?? this.usage.stats, error, loading: false };
+        break;
+      }
       case "error":
         this.error = event.message;
         if (event.session) {
@@ -655,6 +667,17 @@ export class Store {
 
   stopTask(session: Session, taskId: string): void {
     void this.send({ type: "input", session: session.id, line: stopTaskLine(taskId) });
+  }
+
+  requestUsage(): void {
+    if (this.usage.loading) return;
+    this.usage = { ...this.usage, loading: true, error: null };
+    // 按客户端时区切日期：东八区传 480。
+    void this.hub.send({ type: "usage", tz_offset: -new Date().getTimezoneOffset() }).catch((error) => {
+      this.usage = { ...this.usage, loading: false, error: String(error) };
+      this.changed();
+    });
+    this.changed();
   }
 
   readTaskOutput(path: string): void {

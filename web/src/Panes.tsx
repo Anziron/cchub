@@ -4,9 +4,10 @@ import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 import { backgroundTasks, collectChanges, findModel, isTranscript, latestPlan, parseTranscript, taskOutputPath, type FileChange, type Task } from "./model";
 import { pageVisible } from "./platform";
-import { describeCwd, type Session, type Store } from "./store";
+import { describeCwd, GLOBAL_PANES, type Session, type Store } from "./store";
 import { Diff, TranscriptView } from "./Thread";
 import { PANE_TITLES } from "./TopBar";
+import { UsagePane } from "./UsagePane";
 
 function splitPath(path: string, cwd?: string): { dir: string; name: string } {
   const rel = cwd && path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path;
@@ -172,9 +173,10 @@ function InfoPane({ store, session }: { store: Store; session: Session }) {
   );
 }
 
-export function PaneView({ store, session }: { store: Store; session: Session }) {
+export function PaneView({ store, session }: { store: Store; session?: Session }) {
   const pane = store.pane;
-  if (!pane) return null;
+  // 新会话页只显示不依赖会话的窗格。
+  if (!pane || (!session && !GLOBAL_PANES.includes(pane))) return null;
   return (
     <aside className="pane" aria-label={PANE_TITLES[pane]}>
       <header>
@@ -182,11 +184,12 @@ export function PaneView({ store, session }: { store: Store; session: Session })
         <button type="button" className="icon" aria-label="关闭窗格" title="关闭窗格" onClick={() => store.closePane()}><Icon name="close" size={14} /></button>
       </header>
       <div className={`pane-body pane-${pane}`}>
-        {pane === "changes" ? <ChangesPane session={session} /> : null}
-        {pane === "tasks" ? <TasksPane store={store} session={session} /> : null}
-        {pane === "todos" ? <TodosPane session={session} /> : null}
-        {pane === "plan" ? <PlanPane session={session} /> : null}
-        {pane === "info" ? <InfoPane store={store} session={session} /> : null}
+        {session && pane === "changes" ? <ChangesPane session={session} /> : null}
+        {session && pane === "tasks" ? <TasksPane store={store} session={session} /> : null}
+        {session && pane === "todos" ? <TodosPane session={session} /> : null}
+        {session && pane === "plan" ? <PlanPane session={session} /> : null}
+        {session && pane === "info" ? <InfoPane store={store} session={session} /> : null}
+        {pane === "usage" ? <UsagePane store={store} /> : null}
       </div>
     </aside>
   );

@@ -15,6 +15,8 @@ mod session;
 #[cfg(unix)]
 mod title;
 #[cfg(unix)]
+mod usage;
+#[cfg(unix)]
 mod workspace;
 #[cfg(unix)]
 mod ws;
@@ -92,6 +94,8 @@ async fn run(config: config::Config) -> std::io::Result<()> {
         workspace_cmd: config.workspace_cmd,
         title_cmd: config.title_cmd,
         title_memory_mb,
+        usage_cmd: config.usage_cmd,
+        usage_lock: Default::default(),
         probes: device::Probes::default(),
     });
 

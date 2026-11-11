@@ -207,6 +207,7 @@ impl Inbound {
             | ServerMsg::Browse { .. }
             | ServerMsg::Mounted { .. }
             | ServerMsg::TaskOutput { .. }
+            | ServerMsg::Usage { .. }
             | ServerMsg::Error { .. } => None,
         }
     }

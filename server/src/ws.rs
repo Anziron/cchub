@@ -25,6 +25,7 @@ use crate::device::{self, Probes, Subscription};
 use crate::host::ProcessHost;
 use crate::session::{valid_id, Sessions};
 use crate::title;
+use crate::usage;
 use crate::workspace;
 
 const HEARTBEAT: Duration = Duration::from_secs(15);
@@ -40,7 +41,11 @@ pub struct App {
     pub min_available_mb: u64,
     pub workspace_cmd: String,
     pub title_cmd: String,
+    /// 标题和用量统计命令所在 scope 的 `MemoryMax`；0 表示不放进独立 scope。
     pub title_memory_mb: u64,
+    /// 用量统计命令，协议见 `usage.rs`；为空时关闭。
+    pub usage_cmd: String,
+    pub usage_lock: tokio::sync::Mutex<()>,
     /// 设备探测按项目目录共享，所有连接订阅同一个结果。
     pub probes: Probes,
 }
@@ -122,6 +127,10 @@ async fn serve(app: Arc<App>, socket: WebSocket) {
             }
             ClientMsg::TaskOutput { path } => {
                 tokio::spawn(task_output(path.clone(), tx.clone()));
+                continue;
+            }
+            ClientMsg::Usage { tz_offset } => {
+                tokio::spawn(usage_stats(app.clone(), *tz_offset, tx.clone()));
                 continue;
             }
             ClientMsg::Start { session, .. }
@@ -315,7 +324,8 @@ async fn handle(
         ClientMsg::List
         | ClientMsg::Browse { .. }
         | ClientMsg::Mount { .. }
-        | ClientMsg::TaskOutput { .. } => {}
+        | ClientMsg::TaskOutput { .. }
+        | ClientMsg::Usage { .. } => {}
     }
     Ok(())
 }
@@ -384,6 +394,22 @@ async fn task_output(path: String, tx: mpsc::Sender<Frame>) {
         Err(error) => (None, Some(error)),
     };
     let msg = ServerMsg::TaskOutput { path, text, error };
+    let _ = tx.send(Frame { session: None, msg }).await;
+}
+
+async fn usage_stats(app: Arc<App>, tz_offset: i32, tx: mpsc::Sender<Frame>) {
+    // 同一时间只跑一个统计：命令自己也加了文件锁，排队的请求等前一个写好缓存后会很快。
+    let _running = app.usage_lock.lock().await;
+    let from = app.clone();
+    let result =
+        spawn_blocking(move || usage::stats(&from.usage_cmd, tz_offset, from.title_memory_mb))
+            .await
+            .unwrap_or_else(|error| Err(error.to_string()));
+    let (stats, error) = match result {
+        Ok(stats) => (Some(stats), None),
+        Err(error) => (None, Some(error)),
+    };
+    let msg = ServerMsg::Usage { stats, error };
     let _ = tx.send(Frame { session: None, msg }).await;
 }
 

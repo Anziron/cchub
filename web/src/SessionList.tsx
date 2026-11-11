@@ -100,7 +100,7 @@ function Status({ store }: { store: Store }) {
   const devices = deviceStatus([...store.sessions.values()].filter((s) => !s.archived));
   if (!fiveHour && !sevenDay && !devices.length) return null;
   return (
-    <div className="side-status">
+    <div className="side-status" role="button" tabIndex={0} title="查看使用情况" onClick={() => store.togglePane("usage")} onKeyDown={(event) => { if (event.key === "Enter") store.togglePane("usage"); }}>
       <QuotaLine label="5 小时" window={fiveHour} />
       <QuotaLine label="本周" window={sevenDay} />
       {devices.length ? (
