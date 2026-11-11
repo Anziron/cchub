@@ -233,6 +233,8 @@ def build_output(cache, tz):
                     "date": date, "messages": 0, "sessions": 0,
                     "input": 0, "output": 0, "cacheWrite": 0, "cacheRead": 0,
                     "models": {}, "projects": {}, "hours": [0] * 24,
+                    # 各模型每个本地小时的 token（四项之和），“今天”的柱状图用。
+                    "hourTokens": {},
                 }
             n = b["n"]
             d["messages"] += n[M]
@@ -244,6 +246,7 @@ def build_output(cache, tz):
                 m = d["models"].setdefault(k, [0, 0, 0, 0])
                 for x in range(4):
                     m[x] += v[x]
+                d["hourTokens"].setdefault(k, [0] * 24)[lt.hour] += v[0] + v[1] + v[2] + v[3]
             for k, v in b["projects"].items():
                 d["projects"][k] = d["projects"].get(k, 0) + v
             d["hours"][lt.hour] += n[M]

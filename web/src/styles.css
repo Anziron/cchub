@@ -696,8 +696,12 @@ a.link:hover { text-decoration-thickness: 2px; }
 .usage-sum div { display: flex; flex-direction: column; min-width: 0; }
 .usage-sum b { overflow: hidden; color: var(--text); font: 500 17px/1.3 var(--sans); font-variant-numeric: tabular-nums; white-space: nowrap; text-overflow: ellipsis; }
 .usage-sum span { color: var(--muted); font-size: 11.5px; }
-.usage-sum.parts { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 6px; margin-top: 10px; }
-.usage-sum.parts b { font-size: 14px; }
+.usage-sum.parts { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 6px; margin-top: 2px; }
+.usage-sum.parts b { font-size: 16px; }
+.chart-head { display: flex; justify-content: flex-end; margin: 16px 0 4px; }
+.seg.small button { height: 20px; padding: 0 8px; font-size: 11.5px; }
+.heat-head { display: flex; align-items: center; gap: 6px; }
+.heat-head .tag { padding: 1px 6px; border-radius: 4px; background: var(--hover); color: var(--muted); font-size: 11px; font-weight: 400; letter-spacing: 0; }
 .bars { position: relative; display: flex; align-items: flex-end; gap: 2px; height: 96px; padding-top: 16px; border-bottom: 1px solid var(--line); }
 .bars-max { position: absolute; top: 0; left: 0; color: var(--faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
 .bar { display: flex; flex: 1; align-items: flex-end; min-width: 0; height: 100%; }

@@ -19,6 +19,8 @@ if (params.has("pane")) localStorage.setItem("cchub.pane", params.get("pane")!);
 if (params.get("click")) setTimeout(() => document.querySelector<HTMLElement>(params.get("click")!)?.click(), 1200);
 // `?range=today|7d|30d|all`：使用情况窗格的范围（会记住，截图时每张都写明）。
 if (params.get("range")) localStorage.setItem("cchub.usageRange", params.get("range")!);
+// `?metric=tokens|requests`：使用情况柱状图显示模型 token 还是请求次数（会记住）。
+if (params.get("metric")) localStorage.setItem("cchub.usageMetric", params.get("metric")!);
 // `?hover=<选择器>`：元素出现后模拟鼠标移上去，用来截图检查悬停浮层。
 // 统计数据异步到达；无头浏览器的虚拟时钟会跑在网络加载前面，不能按定时等，要看元素出现。
 if (params.get("hover")) {
@@ -165,6 +167,11 @@ export const demoHub: Hub = {
           models: messages ? demoModels(messages, { "claude-opus-5-5": 3200, "claude-sonnet-5-5": 1200, "claude-haiku-5-5": (seed % 3) * 300, ...(seed > 8 ? { "claude-fable-5-2": 200 } : {}) }) : {},
           projects: messages ? { "/mnt/pc/d/demo-api": Math.round(messages * 0.6), "/mnt/pc/d/cchub": Math.round(messages * 0.3), "/root/notes": Math.round(messages * 0.1) } : {},
           hours,
+          hourTokens: isToday ? {
+            "claude-opus-5-5": hours.map((n) => n * 52000),
+            "claude-sonnet-5-5": hours.map((n, h) => (h % 3 ? n * 18000 : 0)),
+            "claude-haiku-5-5": hours.map((n, h) => (h % 4 === 1 ? n * 6000 : 0)),
+          } : undefined,
         };
       }).filter((d) => d.messages);
       setTimeout(() => emit({ type: "usage", stats: JSON.stringify({ version: 2, generatedAt: Math.floor(Date.now() / 1000) - 120, tzOffset: 480, days }), error: scene === "usage-error" ? "统计命令没有安装，或运行超时" : null }), 300);

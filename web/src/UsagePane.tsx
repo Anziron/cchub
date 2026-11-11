@@ -3,10 +3,12 @@ import { flushSync } from "react-dom";
 import { formatTokens, Quota, resetWhen } from "./Common";
 import { Icon } from "./Icon";
 import type { Store } from "./store";
-import { addDays, dailySeries, dayTokens, heatmap, hourlySeries, localDate, OTHER, summarize, type TokenParts, type UsageDay, type UsageRange } from "./usage";
+import { addDays, dailySeries, heatmap, hourlySeries, localDate, OTHER, summarize, type Bar, type UsageDay, type UsageMetric, type UsageRange } from "./usage";
 
 const RANGES: [UsageRange, string][] = [["today", "今天"], ["7d", "7 天"], ["30d", "30 天"], ["all", "全部"]];
 const RANGE_KEY = "cchub.usageRange";
+const METRICS: [UsageMetric, string][] = [["tokens", "模型 token"], ["requests", "请求次数"]];
+const METRIC_KEY = "cchub.usageMetric";
 const HEAT_WEEKS = 18;
 const WEEKDAYS = ["一", "", "三", "", "五", "", "日"];
 const WEEKDAY_NAMES = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
@@ -86,37 +88,16 @@ function TipRow({ color, label, value }: { color?: string; label: string; value:
   return <div className="tip-row">{color ? <i style={{ background: color }} /> : null}<span>{label}</span><b>{value}</b></div>;
 }
 
-/** 四项明细，浮层里用。 */
-function PartRows({ parts }: { parts: TokenParts }) {
-  return (
-    <>
-      <TipRow label="输入" value={formatTokens(parts.input)} />
-      <TipRow label="输出" value={formatTokens(parts.output)} />
-      <TipRow label="缓存写入" value={formatTokens(parts.cacheWrite)} />
-      <TipRow label="缓存读取" value={formatTokens(parts.cacheRead)} />
-    </>
-  );
-}
-
 function Heatmap({ days, today }: { days: UsageDay[]; today: string }) {
   const weeks = heatmap(days, today, HEAT_WEEKS);
   const cells = weeks.flat();
-  const byDate = new Map(days.map((d) => [d.date, d]));
   const { tip, handlers } = useTip((i) => {
     const cell = cells[i];
     if (!cell) return null;
-    const day = byDate.get(cell.date);
     return (
       <>
         <div className="tip-title">{dayTitle(cell.date, today)}</div>
-        {cell.value ? (
-          <>
-            <TipRow label="回复" value={`${cell.value} 条`} />
-            {day ? <TipRow label="会话" value={`${day.sessions} 个`} /> : null}
-            {day ? <TipRow label="token" value={formatTokens(dayTokens(day))} /> : null}
-            {day ? <PartRows parts={day} /> : null}
-          </>
-        ) : <div className="tip-empty">没有使用</div>}
+        {cell.value ? <TipRow label="请求" value={`${cell.value} 次`} /> : <div className="tip-empty">没有使用</div>}
       </>
     );
   });
@@ -133,63 +114,53 @@ function Heatmap({ days, today }: { days: UsageDay[]; today: string }) {
   );
 }
 
-function Bars({ days, range, today }: { days: UsageDay[]; range: UsageRange; today: string }) {
-  const { keys, bars } = dailySeries(days, range, today);
-  const max = Math.max(1, ...bars.map((b) => b.total));
+/**
+ * 用量柱状图。“今天”按小时，7 天、30 天按天，“全部”按周；
+ * token 按模型堆叠，请求是回复次数。
+ */
+function Bars({ days, range, today, metric }: { days: UsageDay[]; range: UsageRange; today: string; metric: UsageMetric }) {
+  const hourly = range === "today";
   const weekly = range === "all";
+  const { keys, bars } = hourly ? hourlySeries(days, today, metric) : dailySeries(days, range, today, metric);
+  const max = Math.max(1, ...bars.map((b) => b.total));
+  const now = new Date().getHours();
+  const value = (n: number) => (metric === "requests" ? `${n} 次` : formatTokens(n));
+  const color = (key: string, k: number) => (metric === "requests" ? "var(--series-1)" : seriesColor(key, k));
   const { tip, handlers } = useTip((i) => {
     const bar = bars[i];
+    const title = hourly ? `今天 ${i}:00–${i + 1}:00` : weekly ? `${shortDate(bar.label)} 起的一周` : dayTitle(bar.label, today);
     return (
       <>
-        <div className="tip-title">{weekly ? `${shortDate(bar.label)} 起的一周` : dayTitle(bar.label, today)}</div>
-        <TipRow label="合计" value={`${formatTokens(bar.total)} token`} />
-        <PartRows parts={bar.parts} />
-        {keys.map((key, k) => (bar.values[key] ? <TipRow key={key} color={seriesColor(key, k)} label={key} value={formatTokens(bar.values[key])} /> : null))}
+        <div className="tip-title">{title}</div>
+        {metric === "requests" ? (
+          <TipRow label="请求" value={value(bar.total)} />
+        ) : (
+          <>
+            <TipRow label="合计" value={`${formatTokens(bar.total)} token`} />
+            {keys.map((key, k) => (bar.values[key] ? <TipRow key={key} color={color(key, k)} label={key} value={formatTokens(bar.values[key])} /> : null))}
+          </>
+        )}
       </>
     );
   });
-  if (!keys.length) return null;
+  if (!keys.length) return <p className="empty">这段时间没有使用。</p>;
+  const current = (bar: Bar, i: number) => (hourly ? i === now : bar.label === today);
   return (
     <div className="chart">
-      <div className="bars" role="img" aria-label={weekly ? "每周 token 用量，按模型堆叠" : "每天 token 用量，按模型堆叠"} {...handlers}>
-        <span className="bars-max">{formatTokens(max)}</span>
+      <div className="bars" role="img" aria-label={metric === "requests" ? "请求次数" : "token 用量，按模型堆叠"} {...handlers}>
+        <span className="bars-max">{value(max)}</span>
         {bars.map((bar, i) => (
-          <div key={bar.label} className={`bar${bar.label === today ? " today" : ""}`} data-i={i}>
+          <div key={bar.label} className={`bar${current(bar, i) ? " today" : ""}${hourly && i > now ? " future" : ""}`} data-i={i}>
             <div className="stack" style={{ height: `${(bar.total / max) * 100}%` }}>
-              {keys.map((key, k) => (bar.values[key] ? <i key={key} style={{ flexGrow: bar.values[key], background: seriesColor(key, k) }} /> : null))}
+              {keys.map((key, k) => (bar.values[key] ? <i key={key} style={{ flexGrow: bar.values[key], background: color(key, k) }} /> : null))}
             </div>
           </div>
         ))}
       </div>
-      <div className="bars-axis"><span>{shortDate(bars[0].label)}</span><span>{weekly ? "按周" : "今天"}</span></div>
-      <div className="legend">{keys.map((key, i) => <span key={key}><i style={{ background: seriesColor(key, i) }} />{key}</span>)}</div>
-      <ChartTip ref={tip} />
-    </div>
-  );
-}
-
-/** “今天”：每小时的回复数。 */
-function HourBars({ days, today }: { days: UsageDay[]; today: string }) {
-  const hours = hourlySeries(days, today);
-  const max = Math.max(1, ...hours);
-  const now = new Date().getHours();
-  const { tip, handlers } = useTip((h) => (
-    <>
-      <div className="tip-title">今天 {h}:00–{h + 1}:00</div>
-      <TipRow label="回复" value={`${hours[h]} 条`} />
-    </>
-  ));
-  return (
-    <div className="chart">
-      <div className="bars" role="img" aria-label="今天每小时的回复数" {...handlers}>
-        <span className="bars-max">{max} 条</span>
-        {hours.map((value, h) => (
-          <div key={h} className={`bar${h === now ? " today" : ""}${h > now ? " future" : ""}`} data-i={h}>
-            <div className="stack" style={{ height: `${(value / max) * 100}%` }}>{value ? <i style={{ flexGrow: 1, background: "var(--series-1)" }} /> : null}</div>
-          </div>
-        ))}
-      </div>
-      <div className="bars-axis"><span>0 点</span><span>12 点</span><span>23 点</span></div>
+      {hourly
+        ? <div className="bars-axis"><span>0 点</span><span>12 点</span><span>23 点</span></div>
+        : <div className="bars-axis"><span>{shortDate(bars[0].label)}</span><span>{weekly ? "按周" : "今天"}</span></div>}
+      {metric === "tokens" ? <div className="legend">{keys.map((key, i) => <span key={key}><i style={{ background: seriesColor(key, i) }} />{key}</span>)}</div> : null}
       <ChartTip ref={tip} />
     </div>
   );
@@ -220,6 +191,11 @@ export function UsagePane({ store }: { store: Store }) {
     setRangeState(value);
     localStorage.setItem(RANGE_KEY, value);
   };
+  const [metric, setMetricState] = useState<UsageMetric>(() => (localStorage.getItem(METRIC_KEY) === "requests" ? "requests" : "tokens"));
+  const setMetric = (value: UsageMetric) => {
+    setMetricState(value);
+    localStorage.setItem(METRIC_KEY, value);
+  };
   useEffect(() => store.requestUsage(), [store]);
   const { stats, error, loading } = store.usage;
   const { fiveHour, sevenDay } = store.limits;
@@ -248,26 +224,27 @@ export function UsagePane({ store }: { store: Store }) {
         <p className="empty">{loading ? "正在统计服务器上的会话记录，第一次要几秒…" : error ? "" : "还没有数据"}</p>
       ) : (
         <>
-          <div className="usage-sum">
-            <div><b>{summary.sessions}</b><span>会话</span></div>
-            <div><b>{summary.messages}</b><span>回复</span></div>
-            <div title="输入 + 输出 + 缓存写入 + 缓存读取"><b>{formatTokens(summary.tokens)}</b><span>token</span></div>
-            <div><b>{summary.activeDays}</b><span>活跃天数</span></div>
-            <div><b>{summary.streak}</b><span>连续天数</span></div>
-            <div><b>{summary.peakHour == null ? "—" : `${summary.peakHour}–${summary.peakHour + 1}`}</b><span>高峰时段（点）</span></div>
-          </div>
           <div className="usage-sum parts">
             <div><b>{formatTokens(summary.parts.input)}</b><span>输入</span></div>
             <div><b>{formatTokens(summary.parts.output)}</b><span>输出</span></div>
             <div><b>{formatTokens(summary.parts.cacheWrite)}</b><span>缓存写入</span></div>
             <div><b>{formatTokens(summary.parts.cacheRead)}</b><span>缓存读取</span></div>
           </div>
-          <h4>{range === "today" ? "今天每小时" : range === "all" ? "每周用量" : "每日用量"}</h4>
-          {!summary.messages ? <p className="empty">这段时间没有使用。</p> : range === "today" ? <HourBars days={stats.days} today={today} /> : <Bars days={stats.days} range={range} today={today} />}
-          <h4>活跃</h4>
+          <div className="chart-head">
+            <div className="seg small" role="radiogroup" aria-label="柱状图显示">
+              {METRICS.map(([value, label]) => (
+                <button key={value} type="button" role="radio" aria-checked={metric === value} className={metric === value ? "on" : undefined} onClick={() => setMetric(value)}>{label}</button>
+              ))}
+            </div>
+          </div>
+          {!summary.messages ? <p className="empty">这段时间没有使用。</p> : <Bars days={stats.days} range={range} today={today} metric={metric} />}
+          <h4 className="heat-head">
+            活跃
+            <span className="tag" title={`${RANGES.find(([r]) => r === range)?.[1]}内有使用的天数`}>活跃 {summary.activeDays} 天</span>
+            <span className="tag" title="到今天（今天还没用就到昨天）为止连续有使用的天数">连续 {summary.streak} 天</span>
+          </h4>
           <Heatmap days={stats.days} today={today} />
           <Ranking title="常用模型" rows={summary.models.slice(0, 5).map((m) => ({ key: m.key, name: m.name, share: m.share, value: formatTokens(m.tokens) }))} />
-          <Ranking title="常用项目" rows={summary.projects.slice(0, 5).map((p) => ({ key: p.key, name: p.name, share: p.share, value: `${p.messages}` }))} />
         </>
       )}
     </>

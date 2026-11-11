@@ -26,7 +26,13 @@ export interface UsageDay {
   projects: Record<string, number>;
   /** 每个本地小时的回复数，长度 24。 */
   hours: number[];
+  /** 各模型每个本地小时的 token（四项之和），长度 24；旧版统计命令没有。 */
+  hourTokens?: Record<string, number[]>;
 }
+
+/** 柱状图显示什么：按模型堆叠的 token，或请求（回复）次数。 */
+export type UsageMetric = "tokens" | "requests";
+export const REQUESTS = "请求";
 
 export interface UsageStats {
   version: number;
@@ -163,7 +169,7 @@ export function summarize(days: UsageDay[], range: UsageRange, today: string): U
     activeDays: list.filter((d) => d.messages > 0).length,
     streak,
     peakHour: peak > 0 ? hours.indexOf(peak) : null,
-    models: ranked(sumBy(list, "models")).map(([key, tokens, share]) => ({ key, name: modelLabel(key), tokens, share })),
+    models: ranked(sumBy(list, "models")).filter(([, tokens]) => tokens > 0).map(([key, tokens, share]) => ({ key, name: modelLabel(key), tokens, share })),
     projects: ranked(sumBy(list, "projects")).map(([key, messages, share]) => ({ key, name: projectLabel(key), messages, share })),
   };
 }
@@ -180,12 +186,20 @@ export interface Bar {
   values: Record<string, number>;
 }
 
-/** 每日用量柱状图：7 天、30 天按天补齐；“全部”按周合并。按模型堆叠，前 3 个以外并入“其他”。 */
-export function dailySeries(days: UsageDay[], range: UsageRange, today: string): { keys: string[]; bars: Bar[] } {
+/** 按模型堆叠时的图例：用量前 3 的模型，其余并入“其他”。 */
+function topModels(list: UsageDay[]): { top: string[]; keys: string[] } {
+  const all = new Map([...sumBy(list, "models")].filter(([, n]) => n > 0));
+  const top = ranked(all).slice(0, TOP_MODELS).map(([key]) => key);
+  return { top, keys: [...top.map(modelLabel), ...(all.size > top.length ? [OTHER] : [])] };
+}
+
+/**
+ * 每日用量柱状图：7 天、30 天按天补齐；“全部”按周合并。
+ * token 按模型堆叠（前 3 个以外并入“其他”）；请求是每天的回复数。
+ */
+export function dailySeries(days: UsageDay[], range: UsageRange, today: string, metric: UsageMetric = "tokens"): { keys: string[]; bars: Bar[] } {
   const list = pick(days, range, today);
-  const top = ranked(sumBy(list, "models")).slice(0, TOP_MODELS).map(([key]) => key);
-  const rest = sumBy(list, "models").size > top.length;
-  const keys = [...top.map(modelLabel), ...(rest ? [OTHER] : [])];
+  const { top, keys } = metric === "requests" ? { top: [], keys: [REQUESTS] } : topModels(list);
   const bucket = range === "all" ? weekStart : (date: string) => date;
   const step = range === "all" ? 7 : 1;
   const first = range === "all" ? (list[0] ? weekStart(list[0].date) : weekStart(today)) : addDays(today, 1 - RANGE_DAYS[range]);
@@ -197,6 +211,11 @@ export function dailySeries(days: UsageDay[], range: UsageRange, today: string):
     const bar = bars.get(bucket(d.date));
     if (!bar) continue;
     addParts(bar.parts, d);
+    if (metric === "requests") {
+      bar.values[REQUESTS] += d.messages;
+      bar.total += d.messages;
+      continue;
+    }
     for (const [model, quad] of Object.entries(d.models)) {
       const tokens = quadTotal(quad);
       const key = top.includes(model) ? modelLabel(model) : OTHER;
@@ -207,10 +226,26 @@ export function dailySeries(days: UsageDay[], range: UsageRange, today: string):
   return { keys, bars: [...bars.values()] };
 }
 
-/** “今天”的柱状图：每个本地小时的回复数（统计里没有按小时的 token）。 */
-export function hourlySeries(days: UsageDay[], today: string): number[] {
+/** “今天”的柱状图：24 个本地小时，`label` 是小时数。token 按模型堆叠（来自 `hourTokens`），请求是回复数。 */
+export function hourlySeries(days: UsageDay[], today: string, metric: UsageMetric): { keys: string[]; bars: Bar[] } {
   const day = days.find((d) => d.date === today);
-  return Array.from({ length: 24 }, (_, h) => day?.hours[h] ?? 0);
+  const { top, keys } = metric === "requests" ? { top: [], keys: [REQUESTS] } : topModels(day ? [day] : []);
+  const bars = Array.from({ length: 24 }, (_, h): Bar => {
+    const bar: Bar = { label: String(h), total: 0, parts: emptyParts(), values: Object.fromEntries(keys.map((k) => [k, 0])) };
+    if (metric === "requests") {
+      bar.values[REQUESTS] = bar.total = day?.hours[h] ?? 0;
+      return bar;
+    }
+    for (const [model, hours] of Object.entries(day?.hourTokens ?? {})) {
+      const tokens = hours[h] ?? 0;
+      if (!tokens) continue;
+      const key = top.includes(model) ? modelLabel(model) : OTHER;
+      bar.values[key] = (bar.values[key] ?? 0) + tokens;
+      bar.total += tokens;
+    }
+    return bar;
+  });
+  return { keys, bars };
 }
 
 export interface HeatCell {
