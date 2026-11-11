@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { formatTokens, quotaPercent, resetText, resetWhen } from "./Common";
 import { Icon } from "./Icon";
 import type { Store } from "./store";
-import { addDays, dailySeries, heatmap, hourlySeries, localDate, OTHER, summarize, type Bar, type UsageDay, type UsageMetric, type UsageRange, type UsageSummary } from "./usage";
+import { addDays, dailySeries, heatmap, hourlySeries, localDate, OTHER, previousParts, quotaPace, summarize, type Bar, type TokenParts, type UsageDay, type UsageMetric, type UsageRange, type UsageSummary } from "./usage";
 
 const RANGES: [UsageRange, string][] = [["today", "今天"], ["7d", "7 天"], ["30d", "30 天"], ["all", "全部"]];
 const RANGE_KEY = "cchub.usageRange";
@@ -16,7 +16,8 @@ const HEAT_CELL = 11;
 const HEAT_GAP = 3;
 const HEAT_LABEL = 17;
 const WEEKDAYS = ["一", "", "三", "", "五", "", "日"];
-const WEEKDAY_NAMES = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+const PARTS: [keyof TokenParts, string][] = [["input", "输入"], ["output", "输出"], ["cacheWrite", "缓存写入"], ["cacheRead", "缓存读取"]];
+const WEEKDAY_NAMES =["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
 const shortDate = (date: string) => `${+date.slice(5, 7)}/${+date.slice(8, 10)}`;
 const seriesColor = (key: string, i: number) => (key === OTHER ? "var(--faint)" : `var(--series-${i + 1})`);
@@ -39,18 +40,44 @@ function ago(seconds: number): string {
 }
 
 /** 额度卡片里的一行：名称、重置时间、百分比，下面是按用量变色的进度条。用到 80% 以上变成强调色。 */
-function QuotaRow({ label, window }: { label: string; window?: { utilization: number; resetsAt: number } }) {
+function QuotaRow({ label, window, length }: { label: string; window?: { utilization: number; resetsAt: number }; length: number }) {
   const value = quotaPercent(window);
   const pct = value == null ? null : Math.round(value * 100);
   const level = value == null ? "" : value >= 0.8 ? " high" : value >= 0.5 ? " mid" : "";
+  const now = Date.now() / 1000;
+  const pace = window && value != null ? quotaPace(window, length, now) : null;
+  const warn = pace?.runsOut == null ? "" : pace.runsOut <= now ? "已用完" : `照这个速度约${runsOutText(pace.runsOut, now)}用完`;
   return (
-    <div className={`quota-row${level}`} title={resetText(window)}>
+    <div className={`quota-row${level}`} title={`${resetText(window)}${pace ? "\n竖线：按时间算现在应该用到的位置" : ""}`}>
       <span className="quota-label">{label}</span>
-      <span className="quota-bar"><i style={{ width: `${Math.min(100, pct ?? 0)}%` }} /></span>
+      <span className="quota-bar">
+        <i style={{ width: `${Math.min(100, pct ?? 0)}%` }} />
+        {pace ? <s style={{ left: `${pace.elapsed * 100}%` }} /> : null}
+      </span>
       <b>{pct == null ? "—" : `${pct}%`}</b>
-      <span className="quota-reset">{window ? resetWhen(window) : "下一轮回复后更新"}</span>
+      <span className="quota-reset">
+        {window ? resetWhen(window) : "下一轮回复后更新"}
+        {warn ? <em> · {warn}</em> : null}
+      </span>
     </div>
   );
+}
+
+/** 用完的时刻：今天 `15:40`，明天 `明天 9 点`，更远 `周四 14 点`。 */
+function runsOutText(at: number, now: number): string {
+  const date = new Date(at * 1000);
+  const days = Math.round((new Date(date).setHours(0, 0, 0, 0) - new Date(now * 1000).setHours(0, 0, 0, 0)) / 86400000);
+  if (days <= 0) return ` ${date.getHours()}:${String(date.getMinutes()).padStart(2, "0")} `;
+  return `${days === 1 ? "明天" : WEEKDAY_NAMES[date.getDay()]} ${date.getHours()} 点`;
+}
+
+/** 和上期比的涨跌：`+23%`、`−5%`，变化不到 1% 是“持平”。不用箭头：小字号下 `↑` 像数字 1。 */
+function Delta({ now, before, title }: { now: number; before?: number; title: string }) {
+  if (!before) return null;
+  const change = (now - before) / before;
+  const size = Math.round(Math.abs(change) * 100);
+  const text = size < 1 ? "持平" : `${change > 0 ? "+" : "−"}${size}%`;
+  return <em className="delta" title={title}>{text}</em>;
 }
 
 /** 0.934 → `93%`，小于 10% 留一位小数。 */
@@ -286,12 +313,14 @@ export function UsagePane({ store }: { store: Store }) {
   const { stats, error, loading } = store.usage;
   const { fiveHour, sevenDay } = store.limits;
   const today = localDate(new Date());
-  const summary = stats ? summarize(stats.days, range, today) : null;  return (
+  const summary = stats ? summarize(stats.days, range, today) : null;
+  const previous = stats ? previousParts(stats.days, range, today) : null;
+  const previousLabel = `前 ${range === "7d" ? 7 : 30} 天`;  return (
     <>
       <h4>额度</h4>
       <div className="quota-card">
-        <QuotaRow label="5 小时" window={fiveHour} />
-        <QuotaRow label="本周" window={sevenDay} />
+        <QuotaRow label="5 小时" window={fiveHour} length={5 * 3600} />
+        <QuotaRow label="本周" window={sevenDay} length={7 * 86400} />
       </div>
 
       <div className="usage-head">
@@ -310,10 +339,12 @@ export function UsagePane({ store }: { store: Store }) {
       ) : (
         <>
           <div className="usage-sum parts">
-            <div><b>{formatTokens(summary.parts.input)}</b><span>输入</span></div>
-            <div><b>{formatTokens(summary.parts.output)}</b><span>输出</span></div>
-            <div><b>{formatTokens(summary.parts.cacheWrite)}</b><span>缓存写入</span></div>
-            <div><b>{formatTokens(summary.parts.cacheRead)}</b><span>缓存读取</span></div>
+            {PARTS.map(([key, label]) => (
+              <div key={key}>
+                <b>{formatTokens(summary.parts[key])}<Delta now={summary.parts[key]} before={previous?.[key]} title={`比${previousLabel}（${formatTokens(previous?.[key] ?? 0)}）`} /></b>
+                <span>{label}</span>
+              </div>
+            ))}
           </div>
           <div className="chart-head">
             <div className="seg small" role="radiogroup" aria-label="柱状图显示">

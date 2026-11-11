@@ -137,6 +137,33 @@ export function tokenParts(days: UsageDay[]): TokenParts {
   return parts;
 }
 
+/**
+ * 上期四项：7 天、30 天取紧挨着的前一段同样长的日子，用来显示涨跌。
+ * “今天”不比（今天还没过完，和整天的昨天比没意义），“全部”没有上期；上期没有数据也返回 null。
+ */
+export function previousParts(days: UsageDay[], range: UsageRange, today: string): TokenParts | null {
+  if (range === "today" || range === "all") return null;
+  const n = RANGE_DAYS[range];
+  const to = addDays(today, -n);
+  const from = addDays(to, 1 - n);
+  const list = days.filter((d) => d.date >= from && d.date <= to && dayTokens(d) > 0);
+  return list.length ? tokenParts(list) : null;
+}
+
+/**
+ * 额度节奏。`elapsed`：窗口时间过去的比例（0～1）；`runsOut`：照窗口开始以来的平均速度，
+ * 会在重置前用完时的时刻（秒），用不完为 null。窗口刚开始（时间过去不到 5%）不预测；窗口已过期返回 null。
+ */
+export function quotaPace(window: { utilization: number; resetsAt: number }, length: number, now: number): { elapsed: number; runsOut: number | null } | null {
+  if (window.resetsAt <= now) return null;
+  const start = window.resetsAt - length;
+  const elapsed = Math.min(1, Math.max(0, (now - start) / length));
+  if (window.utilization >= 1) return { elapsed, runsOut: now };
+  if (window.utilization <= 0 || elapsed < 0.05) return { elapsed, runsOut: null };
+  const runsOut = start + (now - start) / window.utilization;
+  return { elapsed, runsOut: runsOut < window.resetsAt ? runsOut : null };
+}
+
 function pick(days: UsageDay[], range: UsageRange, today: string): UsageDay[] {
   if (range === "all") return days;
   const from = addDays(today, 1 - RANGE_DAYS[range]);

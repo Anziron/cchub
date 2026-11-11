@@ -705,7 +705,10 @@ a.link:hover { text-decoration-thickness: 2px; }
 .quota-row + .quota-row { border-top: 1px solid var(--line); }
 .quota-label { color: var(--text-2); }
 .quota-row b { color: var(--text); font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
-.quota-bar { height: 6px; overflow: hidden; border-radius: 3px; background: var(--hover); }
+.quota-bar { position: relative; height: 6px; border-radius: 3px; background: var(--hover); }
+/* 节奏线：按时间算现在应该用到的位置，比进度条上下各高出 3px */
+.quota-bar s { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text-2); }
+.quota-reset em { color: var(--accent); font-style: normal; }
 .quota-bar i { display: block; height: 100%; border-radius: 3px; background: var(--ok); transition: width .3s var(--ease); }
 .quota-row.mid .quota-bar i { background: var(--warn); }
 .quota-row.high .quota-bar i { background: var(--accent); }
@@ -724,6 +727,8 @@ a.link:hover { text-decoration-thickness: 2px; }
 .usage-sum span { color: var(--muted); font-size: 11.5px; }
 .usage-sum.parts { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 6px; margin-top: 2px; }
 .usage-sum.parts b { font-size: 16px; }
+/* 和上期比的涨跌：中性灰，不用红绿（用得多不一定是坏事） */
+.usage-sum .delta { margin-left: 4px; color: var(--faint); font-size: 10.5px; font-weight: 400; font-style: normal; font-variant-numeric: tabular-nums; }
 .chart-head { display: flex; justify-content: flex-end; margin: 16px 0 4px; }
 .seg.small button { height: 20px; padding: 0 8px; font-size: 11.5px; }
 .rank-head { display: flex; align-items: center; gap: 6px; }
