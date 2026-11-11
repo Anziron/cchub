@@ -5,6 +5,9 @@ import type { Hub } from "./hub";
 import { isNarrow } from "./platform";
 import { sortKey } from "./sidebar";
 import { parseUsage, type UsageStats } from "./usage";
+import { afterTurn, confirmInserted, joinQueued, type Queued } from "./queue";
+import type { DropRef } from "./paths";
+import type { DeviceInfo } from "./generated/DeviceInfo";
 import {
   addSending,
   allowLine,
@@ -53,6 +56,8 @@ export interface Session {
   pendingModel?: string;
   /** 已关闭：不在侧边栏显示，用 `/resume` 找回。 */
   archived: boolean;
+  /** 一轮进行中发的消息，见 `queue.ts`。 */
+  queue: Queued[];
 }
 
 const URL_KEY = "cchub.url";
@@ -138,6 +143,14 @@ export class Store {
   browse: BrowseState = { device: null, path: null, parent: null, entries: [], error: null, loading: false };
   mounting = false;
   mountError: string | null = null;
+  /** 登记的设备和在线状态（hubd 查 Tailscale），没拿到时为 null。 */
+  devices: DeviceInfo[] | null = null;
+  devicesError: string | null = null;
+  devicesLoading = false;
+  /** 打开设备弹窗的设备名。 */
+  deviceDialog: string | null = null;
+  /** 草稿被界面以外的逻辑改写（排队消息放回输入框）时加一，输入框据此重读。 */
+  draftRev = 0;
   version = 0;
 
   private listeners = new Set<() => void>();
@@ -147,6 +160,7 @@ export class Store {
   private initRequests = new Map<string, Session>();
   private initialized = new Set<string>();
   private drafts = loadJson<Record<string, string>>(DRAFTS_KEY, {});
+  private attached: Record<string, DropRef[]> = {};
   private taskTimes = loadJson<Record<string, number>>(TASK_TIMES_KEY, {});
 
   constructor(private hub: Hub) {
@@ -192,6 +206,7 @@ export class Store {
     if (state === "connected") {
       this.showSettings = false;
       this.refresh();
+      this.requestDevices();
     }
   }
 
@@ -220,6 +235,7 @@ export class Store {
         deviceOnline: true,
         attached: false,
         thread: newThread(),
+        queue: [],
       };
       this.sessions.set(info.id, session);
     }
@@ -257,10 +273,12 @@ export class Store {
         if (session) {
           this.takeInit(event.payload);
           this.takeLimits(session, event.seq, event.payload);
+          const interrupting = session.thread.interruptAt != null;
           apply(session.thread, event.payload);
           this.stampTasks(session, event.payload);
           // 不改 active：事件到达不能影响侧边栏顺序。
           session.updated = Math.floor(Date.now() / 1000);
+          if (session.queue.length) this.settleQueue(session, interrupting);
         }
         break;
       }
@@ -268,7 +286,10 @@ export class Store {
         const session = this.sessions.get(event.session);
         if (session) {
           session.running = event.running;
-          if (!event.running) onProcessExit(session.thread);
+          if (!event.running) {
+            onProcessExit(session.thread);
+            this.restoreQueue(session);
+          }
         }
         break;
       }
@@ -300,6 +321,12 @@ export class Store {
         this.usage = { stats: stats ?? this.usage.stats, error, loading: false };
         break;
       }
+      case "devices":
+        this.devicesLoading = false;
+        this.devicesError = event.error;
+        // 失败时保留上一次的列表。
+        if (!event.error) this.devices = event.devices;
+        break;
       case "error":
         this.error = event.message;
         if (event.session) {
@@ -374,6 +401,31 @@ export class Store {
     return this.drafts[key] ?? "";
   }
 
+  /** 拖进输入框、还没发出的文件引用，按草稿分开；只在内存里。 */
+  files(key: string): DropRef[] {
+    return this.attached[key] ?? [];
+  }
+
+  addFiles(key: string, refs: DropRef[]): void {
+    const have = this.files(key);
+    const fresh = refs.filter((ref) => !have.some((h) => h.path === ref.path));
+    if (!fresh.length) return;
+    this.attached[key] = [...have, ...fresh];
+    this.changed();
+  }
+
+  removeFile(key: string, path: string): void {
+    this.attached[key] = this.files(key).filter((ref) => ref.path !== path);
+    this.changed();
+  }
+
+  /** 发送时取走文件引用。 */
+  takeFiles(key: string): DropRef[] {
+    const refs = this.files(key);
+    delete this.attached[key];
+    return refs;
+  }
+
   /** 草稿存在本地：切换会话和关窗（WebView 会销毁）都不能丢。 */
   setDraft(key: string, text: string): void {
     if (text) this.drafts[key] = text;
@@ -413,6 +465,7 @@ export class Store {
   back(): boolean {
     if (this.stopping) this.cancelStop();
     else if (this.showResume) this.closeResume();
+    else if (this.deviceDialog) this.closeDevice();
     else if (this.pane) this.closePane();
     else if (this.showWorkspace) this.closeWorkspace();
     else if (this.showSettings && this.url) this.toggleSettings();
@@ -424,6 +477,39 @@ export class Store {
   dismissError(): void {
     this.error = null;
     this.changed();
+  }
+
+  /** 问 hubd 登记了哪些设备、是否在线。hubd 缓存 15 秒，侧栏每分钟问一次。 */
+  requestDevices(): void {
+    if (this.connection !== "connected") return;
+    this.devicesLoading = true;
+    void this.send({ type: "devices" });
+    this.changed();
+  }
+
+  openDevice(name: string): void {
+    this.deviceDialog = name;
+    this.requestDevices();
+  }
+
+  closeDevice(): void {
+    this.deviceDialog = null;
+    this.changed();
+  }
+
+  /** 在设备上浏览目录选工作区：打开工作区弹窗并直接进入这台设备。 */
+  browseDevice(name: string): void {
+    this.deviceDialog = null;
+    this.showWorkspace = true;
+    this.mountError = null;
+    this.browseTo(name, null);
+  }
+
+  /** 在某个项目里开新会话：切到新会话页并选好工作区。 */
+  newSessionIn(cwd: string): void {
+    this.deviceDialog = null;
+    this.chooseWorkspace(cwd);
+    this.select(null);
   }
 
   openWorkspace(): void {
@@ -537,6 +623,59 @@ export class Store {
     this.changed();
   }
 
+  /**
+   * 一轮进行中再发消息。插入：马上写给 CLI，它在下一个工具结果之后插进这一轮，回传同一 uuid 后移出队列。
+   * 等结束：留在本地，这一轮正常结束后合成一条发出。`/` 命令只能等结束。
+   */
+  enqueue(session: Session, text: string, mode: Queued["mode"]): void {
+    const id = crypto.randomUUID();
+    if (mode === "insert" && !text.trimStart().startsWith("/")) {
+      session.queue = [...session.queue, { id, text, mode }];
+      session.updated = session.active = Math.floor(Date.now() / 1000);
+      void this.hub.send({ type: "input", session: session.id, line: userLine(text, id) }).catch((error) => {
+        // 没写进去：转成等结束，留着让用户改或删。
+        session.queue = session.queue.map((q) => (q.id === id ? { ...q, mode: "wait" } : q));
+        this.error = String(error);
+        this.changed();
+      });
+    } else {
+      session.queue = [...session.queue, { id, text, mode: "wait" }];
+    }
+    this.changed();
+  }
+
+  /** 从队列里取回一条等结束的消息（编辑时放回输入框）。 */
+  unqueue(session: Session, id: string): string {
+    const item = session.queue.find((q) => q.id === id && q.mode === "wait");
+    if (!item) return "";
+    session.queue = session.queue.filter((q) => q !== item);
+    this.changed();
+    return item.text;
+  }
+
+  private settleQueue(session: Session, interrupted: boolean): void {
+    session.queue = confirmInserted(session.queue, session.thread);
+    const action = afterTurn(session.queue, session.thread, interrupted);
+    if (action === "flush") {
+      const text = joinQueued(session.queue);
+      session.queue = [];
+      if (text) this.sendText(session, text);
+    } else if (action === "restore") {
+      this.restoreQueue(session);
+    }
+  }
+
+  /** 被中断或进程结束：没发出的消息放回输入框，不自作主张发出去。没回传的插入消息也一起放回。 */
+  private restoreQueue(session: Session): void {
+    if (!session.queue.length) return;
+    const text = joinQueued(session.queue);
+    session.queue = [];
+    const draft = this.draft(session.id);
+    this.setDraft(session.id, draft.trim() ? `${draft.trimEnd()}\n\n${text}` : text);
+    this.draftRev++;
+    this.changed();
+  }
+
   retry(session: Session, id: string, text: string): void {
     removeItem(session.thread, id);
     this.sendText(session, text);
@@ -586,6 +725,7 @@ export class Store {
     onProcessExit(session.thread);
     // 进程没回传的消息不算送达，留下重试入口。
     failSending(session.thread);
+    this.restoreQueue(session);
     this.initialized.delete(session.id);
     // 不刷新列表：`stop` 可能还没执行完，会把会话又标回运行中。状态由 hubd 推送。
     this.changed();

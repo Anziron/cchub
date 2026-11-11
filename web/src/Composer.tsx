@@ -3,7 +3,8 @@ import { CommandMenu, ModelMenu } from "./Dialogs";
 import { Dropdown, Elapsed, formatDuration, formatTokens, Meter, Quota, quotaPercent, sessionStatus } from "./Common";
 import { Icon } from "./Icon";
 import { firstAsk, matchCommands, runningTasks, turnTokens, type SlashCommand } from "./model";
-import { isTouch, pageVisible } from "./platform";
+import { dropRef, mentionText, type DropRef } from "./paths";
+import { isTouch, onFileDrop, pageVisible } from "./platform";
 import { describeCwd, isResumeCommand, NEW_DRAFT, type Session, type Store } from "./store";
 
 const INTERRUPT_TIMEOUT_MS = 5000;
@@ -151,33 +152,106 @@ function Box({ children, menu, onSubmit }: { children: ReactNode; menu: ReactNod
   );
 }
 
-export function Composer({ store, session }: { store: Store; session: Session }) {
-  const [text, setTextState] = useState(() => store.draft(session.id));
+/** 输入框的文字、拖进来的文件和拖放高亮。`key` 是草稿键（会话 ID 或新会话）。 */
+function useInput(store: Store, key: string, cwd: string | undefined) {
+  const [text, setTextState] = useState(() => store.draft(key));
+  const [hover, setHover] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
-  const thread = session.thread;
-  const busy = thread.phase !== "idle" && !firstAsk(thread);
   const setText = (next: string) => {
     setTextState(next);
-    store.setDraft(session.id, next);
+    store.setDraft(key, next);
   };
-  const submit = (message: string) => {
-    if (!message.trim()) return;
-    store.sendText(session, message);
+  // 排队的消息被放回输入框时重读草稿。
+  useEffect(() => setTextState(store.draft(key)), [store.draftRev, key, store]);
+  useEffect(() => onFileDrop({
+    hover: setHover,
+    drop: (paths) => {
+      store.addFiles(key, paths.map((path) => dropRef(path, cwd)));
+      ref.current?.focus();
+    },
+  }), [store, key, cwd]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "";
+    // 矮窗口里不能把消息挤没：最多占窗口高度的 35%。
+    el.style.height = `${Math.min(el.scrollHeight, MAX_INPUT_HEIGHT, Math.max(68, innerHeight * 0.35))}px`;
+  }, [text]);
+  const files = store.files(key);
+  /** 取走文字和文件，拼成要发的消息。 */
+  const take = (message: string) => {
+    const paths = store.takeFiles(key).map((f) => f.path);
     setText("");
+    return mentionText(paths, message);
   };
-  const send = () => submit(text);
-  const commands = useCommandMenu(store.commandsFor(session), text, setText, submit);
+  return { text, setText, ref, hover, files, take, hasContent: !!text.trim() || files.length > 0 };
+}
+
+const MAX_INPUT_HEIGHT = 220;
+
+/** 拖进来的文件，显示成小标签；项目外的标黄，服务器读不到。 */
+function FileChips({ store, draftKey, files }: { store: Store; draftKey: string; files: DropRef[] }) {
+  if (!files.length) return null;
+  return (
+    <div className="file-chips">
+      {files.map((file) => (
+        <span key={file.path} className={`file-chip${file.reachable ? "" : " far"}`} title={file.reachable ? file.path : `${file.path}\n不在项目目录里，服务器读不到这个文件`}>
+          <Icon name={file.reachable ? "file" : "alert"} size={12} />
+          <span>{lastSegment(file.path)}</span>
+          <button type="button" aria-label="移除" onClick={() => store.removeFile(draftKey, file.path)}><Icon name="close" size={11} /></button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+const lastSegment = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+
+/** 一轮进行中发的消息：插入的等 CLI 收下，等结束的可以改或删。 */
+function QueueList({ store, session, onEdit }: { store: Store; session: Session; onEdit: (text: string) => void }) {
+  if (!session.queue.length) return null;
+  return (
+    <ul className="queue">
+      {session.queue.map((q) => (
+        <li key={q.id} className={q.mode}>
+          <span className="queue-tag">{q.mode === "insert" ? "待插入" : "等结束"}</span>
+          <span className="queue-text" title={q.text}>{q.text}</span>
+          {q.mode === "wait" ? (
+            <span className="queue-actions">
+              <button type="button" title="放回输入框修改" aria-label="修改" onClick={() => onEdit(store.unqueue(session, q.id))}><Icon name="edit" size={13} /></button>
+              <button type="button" title="删除" aria-label="删除" onClick={() => store.unqueue(session, q.id)}><Icon name="close" size={13} /></button>
+            </span>
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function Composer({ store, session }: { store: Store; session: Session }) {
+  const input = useInput(store, session.id, session.cwd);
+  const { text, setText, ref } = input;
+  const thread = session.thread;
+  const busy = thread.phase !== "idle" && !firstAsk(thread);
+  /** 空闲时直接发；一轮进行中按 `mode` 排队（回车等结束，Ctrl+Enter 插入）。 */
+  const submit = (message: string, mode: "wait" | "insert" = "wait") => {
+    if (!message.trim() && !input.files.length) return;
+    const full = input.take(message);
+    if (busy) store.enqueue(session, full, mode);
+    else store.sendText(session, full);
+  };
+  const send = (mode?: "wait" | "insert") => submit(text, mode);
+  const commands = useCommandMenu(store.commandsFor(session), text, setText, (message) => submit(message));
+  // 修改排队的消息：放回输入框，接在已有文字后面。
+  const edit = (queued: string) => {
+    setText(text.trim() ? `${text.trimEnd()}\n\n${queued}` : queued);
+    ref.current?.focus();
+  };
   // 有卡片等决定时不抢焦点，回车和 Esc 留给卡片。
   useEffect(() => {
     // 触屏上聚焦会弹出键盘，挡住内容。
     if (!isTouch && !firstAsk(session.thread)) ref.current?.focus();
-  }, [session]);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "24px";
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }, [text]);
+  }, [session, ref]);
   useEffect(() => {
     if (!busy) return;
     const onKey = (event: KeyboardEvent) => {
@@ -189,34 +263,41 @@ export function Composer({ store, session }: { store: Store; session: Session })
   return (
     <footer className="dock">
       <Activity store={store} session={session} />
-      <Box menu={commands.menu} onSubmit={send}>
-        <div className="box">
+      <Box menu={commands.menu} onSubmit={() => send()}>
+        <QueueList store={store} session={session} onEdit={edit} />
+        <div className={`box${input.hover ? " drop" : ""}`}>
+          <FileChips store={store} draftKey={session.id} files={input.files} />
           <textarea
             ref={ref}
             rows={1}
             aria-label="输入消息"
-            placeholder={busy ? "继续补充，这一轮结束后会处理" : "继续补充，输入 / 查看命令"}
+            placeholder={busy ? (isTouch ? "补充内容，这一轮结束后发送" : "补充内容：Enter 等这一轮结束后发送，Ctrl+Enter 插入这一轮") : "继续补充，输入 / 查看命令，可以拖入文件"}
             value={text}
             onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {
               if (commands.onKeyDown(event)) return;
               if (!isTouch && event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
-                send();
+                send(event.ctrlKey || event.metaKey ? "insert" : "wait");
               }
             }}
           />
-          {busy && !text ? (
-            <button type="button" className="send stop" aria-label="中断" title="中断（Esc）" onClick={() => store.interrupt(session)}><Icon name="stop" size={14} /></button>
-          ) : (
-            <button className={`send${text.trim() ? " ready" : ""}`} aria-label="发送" title="发送（Enter）"><Icon name="enter" size={15} /></button>
-          )}
-        </div>
-        <div className="tools">
-          <ModeLabel mode={thread.permissionMode} />
-          <span className="grow" />
-          <ModelMenu models={store.models} model={thread.model} effort={thread.effort} onChange={(value) => store.setModel(session, value)} onEffort={(value) => store.setEffort(session, value)} />
-          <UsageRing store={store} session={session} />
+          <div className="tools">
+            <ModeLabel mode={thread.permissionMode} />
+            <span className="grow" />
+            <ModelMenu models={store.models} model={thread.model} effort={thread.effort} onChange={(value) => store.setModel(session, value)} onEffort={(value) => store.setEffort(session, value)} />
+            <UsageRing store={store} session={session} />
+            {busy && !input.hasContent ? (
+              <button type="button" className="send stop" aria-label="中断" title="中断（Esc）" onClick={() => store.interrupt(session)}><Icon name="stop" size={14} /></button>
+            ) : busy ? (
+              <>
+                <button type="button" className="send insert" aria-label="插入这一轮" title="插入这一轮：在下一个工具调用之后交给它（Ctrl+Enter）" onClick={() => send("insert")}>插入</button>
+                <button className="send ready" aria-label="排队" title="等这一轮结束后发送（Enter）"><Icon name="enter" size={15} /></button>
+              </>
+            ) : (
+              <button className={`send${input.hasContent ? " ready" : ""}`} aria-label="发送" title="发送（Enter）"><Icon name="enter" size={15} /></button>
+            )}
+          </div>
         </div>
       </Box>
     </footer>
@@ -224,15 +305,12 @@ export function Composer({ store, session }: { store: Store; session: Session })
 }
 
 export function Welcome({ store }: { store: Store }) {
-  const [text, setTextState] = useState(() => store.draft(NEW_DRAFT));
+  const input = useInput(store, NEW_DRAFT, store.cwd);
+  const { text, setText } = input;
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState<string>();
-  const setText = (next: string) => {
-    setTextState(next);
-    store.setDraft(NEW_DRAFT, next);
-  };
   const submit = (message: string) => {
-    if (!message.trim()) return;
+    if (!message.trim() && !input.files.length) return;
     if (isResumeCommand(message)) {
       setText("");
       store.openResume();
@@ -244,8 +322,7 @@ export function Welcome({ store }: { store: Store }) {
       store.openWorkspace();
       return;
     }
-    setText("");
-    store.newSession(message, store.cwd, model, effort);
+    store.newSession(input.take(message), store.cwd, model, effort);
   };
   const send = () => submit(text);
   const commands = useCommandMenu(store.commandsFor(), text, setText, submit);
@@ -261,11 +338,13 @@ export function Welcome({ store }: { store: Store }) {
         </button>
       </div>
       <Box menu={commands.menu} onSubmit={send}>
-        <div className="box tall">
+        <div className={`box tall${input.hover ? " drop" : ""}`}>
+          <FileChips store={store} draftKey={NEW_DRAFT} files={input.files} />
           <textarea
+            ref={input.ref}
             autoFocus={!isTouch}
             aria-label="输入任务"
-            placeholder="描述任务，它会在后台持续运行，需要你时再叫你"
+            placeholder="描述任务，它会在后台持续运行，需要你时再叫你；可以拖入文件"
             value={text}
             onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {
@@ -276,13 +355,13 @@ export function Welcome({ store }: { store: Store }) {
               }
             }}
           />
-          <button className={`send${text.trim() ? " ready" : ""}`} aria-label="发送" title="发送（Enter）" disabled={!text.trim()}><Icon name="enter" size={15} /></button>
-        </div>
-        <div className="tools">
-          <ModeLabel />
-          <span className="grow" />
-          <ModelMenu models={store.models} model={model || "default"} effort={effort} onChange={setModel} onEffort={setEffort} />
-          <UsageRing store={store} />
+          <div className="tools">
+            <ModeLabel />
+            <span className="grow" />
+            <ModelMenu models={store.models} model={model || "default"} effort={effort} onChange={setModel} onEffort={setEffort} />
+            <UsageRing store={store} />
+            <button className={`send${input.hasContent ? " ready" : ""}`} aria-label="发送" title="发送（Enter）" disabled={!input.hasContent}><Icon name="enter" size={15} /></button>
+          </div>
         </div>
       </Box>
     </section>

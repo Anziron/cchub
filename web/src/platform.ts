@@ -20,6 +20,30 @@ export const pageVisible = () => document.visibilityState === "visible";
 /** 窄屏下会话列表是一个抽屉。 */
 export const isNarrow = () => matchMedia("(max-width: 860px)").matches;
 
+/**
+ * 从系统拖进窗口的文件。只有桌面端拿得到完整路径（Tauri 的拖放事件）；浏览器和手机上不支持，返回空操作。
+ * `hover` 在拖进窗口时为真、离开或放下时为假。
+ */
+export function onFileDrop(handlers: { hover: (on: boolean) => void; drop: (paths: string[]) => void }): () => void {
+  if (!isTauri() || isAndroid) return () => {};
+  let unlisten: (() => void) | undefined;
+  let gone = false;
+  void import("@tauri-apps/api/webview").then(({ getCurrentWebview }) =>
+    getCurrentWebview().onDragDropEvent(({ payload }) => {
+      if (payload.type === "enter") handlers.hover(true);
+      else if (payload.type === "leave") handlers.hover(false);
+      else if (payload.type === "drop") {
+        handlers.hover(false);
+        if (payload.paths.length) handlers.drop(payload.paths);
+      }
+    }).then((fn) => (gone ? fn() : (unlisten = fn))),
+  );
+  return () => {
+    gone = true;
+    unlisten?.();
+  };
+}
+
 export interface BackgroundStatus {
   notificationsAllowed: boolean;
   batteryUnrestricted: boolean;

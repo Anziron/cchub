@@ -285,6 +285,9 @@ function TurnNav({ turns, current, onJump }: { turns: { id: string; text: string
   );
 }
 
+/** 打开会话时画最后这么多轮，往上翻到顶每次再补这么多。 */
+const VISIBLE_TURNS = 20;
+
 export function ThreadView({ store, session }: { store: Store; session: Session }) {
   const ref = useRef<HTMLElement>(null);
   const column = useRef<HTMLDivElement>(null);
@@ -316,6 +319,8 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
   }, [toBottom]);
   const thread = session.thread;
   const turns = thread.items.flatMap((item) => (item.kind === "user" ? [{ id: item.id, text: item.text }] : []));
+  const turnsRef = useRef(turns);
+  turnsRef.current = turns;
   const [current, setCurrent] = useState(-1);
   const navFrame = useRef(0);
   // 当前轮：顶部 30% 以内最后一条用户消息；贴底时是最后一轮。
@@ -329,20 +334,47 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
       const line = el.getBoundingClientRect().top + el.clientHeight * 0.3;
       let index = pinned.current ? marks.length - 1 : 0;
       if (!pinned.current) marks.forEach((mark, i) => { if (mark.getBoundingClientRect().top <= line) index = i; });
-      setCurrent(index);
+      // 前面可能有没画出来的轮次，按 ID 换算成在全部轮次里的位置。
+      const id = marks[index]?.dataset.turn;
+      setCurrent(id ? turnsRef.current.findIndex((t) => t.id === id) : -1);
     });
   };
   useEffect(syncCurrent, [turns.length]);
   useEffect(() => () => cancelAnimationFrame(navFrame.current), []);
+  // 长会话只画最后几轮，往上翻到顶再补更早的，打开会话时不用一次画完。
+  const [shown, setShown] = useState(VISIBLE_TURNS);
+  const hidden = Math.max(0, turns.length - shown);
+  const cut = hidden ? thread.items.findIndex((item) => item.kind === "user" && item.id === turns[hidden].id) : 0;
+  const items = cut > 0 ? thread.items.slice(cut) : thread.items;
+  // 补上更早的内容后保持当前看到的位置不跳。
+  const anchor = useRef<number | null>(null);
+  const showMore = () => {
+    if (!hidden || anchor.current != null) return;
+    anchor.current = ref.current ? ref.current.scrollHeight - ref.current.scrollTop : null;
+    setShown((n) => n + VISIBLE_TURNS);
+  };
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (anchor.current == null || !el) return;
+    el.scrollTop = el.scrollHeight - anchor.current;
+    lastTop.current = el.scrollTop;
+    anchor.current = null;
+  }, [shown]);
   const jump = (id: string) => {
     const mark = column.current?.querySelector<HTMLElement>(`.user[data-turn="${CSS.escape(id)}"]`);
     const el = ref.current;
+    if (!mark && el && turns.some((t) => t.id === id)) {
+      // 跳到还没画出来的轮次：先全部画出来，下一帧再跳。
+      setShown(turns.length);
+      requestAnimationFrame(() => requestAnimationFrame(() => jump(id)));
+      return;
+    }
     if (!mark || !el) return;
     pinned.current = false;
     el.scrollTo({ top: el.scrollTop + mark.getBoundingClientRect().top - el.getBoundingClientRect().top - 16, behavior: "smooth" });
   };
   // 详细档：工具逐条显示，不合并。
-  const blocks: RenderBlock[] = store.verbose ? thread.items.map((item) => ({ kind: "item", item })) : groupTools(thread.items);
+  const blocks: RenderBlock[] = store.verbose ? items.map((item) => ({ kind: "item", item })) : groupTools(items);
   const activeIn = (tools: ToolItem[]) => (thread.phase === "tool" && thread.activeTool ? tools.find((t) => t.id === thread.activeTool) : undefined);
   return (
     <div className="stream-wrap">
@@ -357,10 +389,12 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
           if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) pinned.current = true;
           else if (el.scrollTop < lastTop.current - 1) pinned.current = false;
           lastTop.current = el.scrollTop;
+          if (el.scrollTop < 300 && !pinned.current) showMore();
           syncCurrent();
         }}
       >
         <div className="column" ref={column}>
+          {hidden ? <button type="button" className="show-earlier" onClick={showMore}>显示更早的 {hidden} 轮</button> : null}
           {blocks.map((block) => block.kind === "tools" ? (
             <ToolGroup key={block.id} tools={block.tools} cwd={session.cwd} active={activeIn(block.tools)} />
           ) : (

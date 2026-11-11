@@ -84,20 +84,70 @@ export function groupByDate<T extends RowSession>(sessions: T[], now: number): D
   return groups.filter((g) => g.sessions.length);
 }
 
-export type DeviceState = "online" | "offline" | "unknown";
+/** `warn`：Tailscale 在线，但有项目目录读不到（挂载断了）。 */
+export type DeviceState = "online" | "offline" | "warn" | "unknown";
+
+export const DEVICE_STATE: Record<DeviceState, string> = {
+  online: "在线",
+  offline: "离线",
+  warn: "目录读不到",
+  unknown: "未检测",
+};
+
+export interface DeviceProject {
+  cwd: string;
+  project: string;
+  sessions: number;
+  running: number;
+}
+
+export interface DeviceEntry {
+  name: string;
+  os: string | null;
+  state: DeviceState;
+  projects: DeviceProject[];
+}
 
 /**
- * 侧栏底部的设备状态。hubd 只对已订阅的会话探测设备，所以没有订阅会话的设备是“未检测”；
- * 同一设备的几个项目目录各自探测，有一个在线就算在线。
+ * 侧栏底部的设备：登记的设备全部列出，在线状态以 hubd 的登记表（Tailscale）为准；
+ * 已订阅会话的挂载探测用来发现“设备在线但目录读不到”。还没拿到登记表时只按探测，没订阅的是“未检测”。
+ * 在线的排前面，其余按名字。
  */
-export function deviceStatus(sessions: { cwd?: string; attached: boolean; deviceOnline: boolean }[]): { device: string; state: DeviceState }[] {
-  const map = new Map<string, DeviceState>();
+export function deviceList(
+  registry: { name: string; os: string | null; online: boolean }[] | null,
+  sessions: { cwd?: string; attached: boolean; deviceOnline: boolean; running: boolean }[],
+): DeviceEntry[] {
+  const probes = new Map<string, DeviceState>();
+  const projects = new Map<string, Map<string, DeviceProject>>();
   for (const s of sessions) {
     const parts = (s.cwd ?? "").split("/").filter(Boolean);
-    if (parts[0] !== "mnt" || !parts[1]) continue;
-    const prev = map.get(parts[1]) ?? "unknown";
+    if (parts[0] !== "mnt" || !parts[1] || !s.cwd) continue;
+    const device = parts[1];
+    const prev = probes.get(device) ?? "unknown";
     const next: DeviceState = !s.attached ? "unknown" : s.deviceOnline ? "online" : "offline";
-    map.set(parts[1], prev === "online" || next === "unknown" ? prev : next);
+    // 有一个目录读不到就记下来；登记表说在线时据此提示挂载有问题。
+    probes.set(device, prev === "offline" || next === "unknown" ? prev : next);
+    const list = projects.get(device) ?? new Map<string, DeviceProject>();
+    const p = list.get(s.cwd) ?? { cwd: s.cwd, project: parts[parts.length - 1], sessions: 0, running: 0 };
+    p.sessions++;
+    if (s.running) p.running++;
+    list.set(s.cwd, p);
+    projects.set(device, list);
   }
-  return [...map].map(([device, state]) => ({ device, state })).sort((a, b) => a.device.localeCompare(b.device));
+  const names = new Set([...(registry ?? []).map((d) => d.name), ...probes.keys()]);
+  const entries = [...names].map((name): DeviceEntry => {
+    const reg = registry?.find((d) => d.name === name);
+    const probe = probes.get(name) ?? "unknown";
+    let state: DeviceState;
+    if (!reg) state = registry ? probe : probe === "offline" && hasOnlineProbe(sessions, name) ? "online" : probe;
+    else state = !reg.online ? "offline" : probe === "offline" ? "warn" : "online";
+    const list = [...(projects.get(name)?.values() ?? [])].sort((a, b) => a.cwd.localeCompare(b.cwd));
+    return { name, os: reg?.os ?? null, state, projects: list };
+  });
+  const rank = (s: DeviceState) => (s === "online" || s === "warn" ? 0 : 1);
+  return entries.sort((a, b) => rank(a.state) - rank(b.state) || a.name.localeCompare(b.name));
 }
+
+/** 没有登记表时沿用旧规则：同一设备有一个目录探测在线就算在线。 */
+const hasOnlineProbe = (sessions: { cwd?: string; attached: boolean; deviceOnline: boolean }[], device: string) =>
+  sessions.some((s) => s.attached && s.deviceOnline && s.cwd?.startsWith(`/mnt/${device}/`));

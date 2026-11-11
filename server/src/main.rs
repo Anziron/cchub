@@ -97,6 +97,7 @@ async fn run(config: config::Config) -> std::io::Result<()> {
         usage_cmd: config.usage_cmd,
         usage_lock: Default::default(),
         probes: device::Probes::default(),
+        devices_cache: Default::default(),
     });
 
     let retention = config.retention;

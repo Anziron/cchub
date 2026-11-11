@@ -1,7 +1,7 @@
 // 使用情况窗格的统计：解析、按范围截取、汇总、连续天数、排行、每日序列、热力图。运行：node --test web/test/
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addDays, dailySeries, heatmap, hourlySeries, modelLabel, parseUsage, summarize, type UsageDay } from "../src/usage.ts";
+import { addDays, dailySeries, dayTokens, heatmap, hourlySeries, modelLabel, parseUsage, summarize, type UsageDay } from "../src/usage.ts";
 
 const day = (date: string, messages: number, extra: Partial<UsageDay> = {}): UsageDay => ({
   date,
@@ -11,7 +11,7 @@ const day = (date: string, messages: number, extra: Partial<UsageDay> = {}): Usa
   output: 10,
   cacheWrite: 100,
   cacheRead: 1000,
-  models: { "claude-opus-5-5": 111 },
+  models: { "claude-opus-5-5": [1, 10, 100, 1000] },
   projects: { "/mnt/pc/d/a": messages },
   hours: Array.from({ length: 24 }, (_, h) => (h === 9 ? messages : 0)),
   ...extra,
@@ -19,9 +19,9 @@ const day = (date: string, messages: number, extra: Partial<UsageDay> = {}): Usa
 
 test("解析：版本不对、格式不对时返回 null", () => {
   assert.equal(parseUsage("not json"), null);
-  assert.equal(parseUsage(JSON.stringify({ version: 2, days: [] })), null);
-  assert.equal(parseUsage(JSON.stringify({ version: 1 })), null);
-  const ok = parseUsage(JSON.stringify({ version: 1, generatedAt: 1, tzOffset: 480, days: [day("2026-11-10", 3)] }));
+  assert.equal(parseUsage(JSON.stringify({ version: 1, days: [] })), null);
+  assert.equal(parseUsage(JSON.stringify({ version: 2 })), null);
+  const ok = parseUsage(JSON.stringify({ version: 2, generatedAt: 1, tzOffset: 480, days: [day("2026-11-10", 3)] }));
   assert.equal(ok?.days.length, 1);
 });
 
@@ -47,7 +47,8 @@ test("汇总：范围内的会话、回复、token、活跃天数、高峰时段
   const s = summarize(days, "7d", "2026-11-11");
   assert.equal(s.sessions, 3);
   assert.equal(s.messages, 12);
-  assert.equal(s.tokens, 3 * 111);
+  assert.equal(s.tokens, 3 * 1111);
+  assert.deepEqual(s.parts, { input: 3, output: 30, cacheWrite: 300, cacheRead: 3000 });
   assert.equal(s.activeDays, 3);
   // 今天还没用，从昨天往前数：11-10、11-09 连续，11-08 断开。
   assert.equal(s.streak, 2);
@@ -61,8 +62,8 @@ test("汇总：范围内的会话、回复、token、活跃天数、高峰时段
 
 test("排行：模型按 token、项目按回复数排序，占比相对总数", () => {
   const days = [
-    day("2026-11-10", 6, { models: { "claude-opus-5-5": 300, "claude-haiku-5-5": 100 }, projects: { "/mnt/pc/d/a": 2, "/mnt/pc/d/b": 4 } }),
-    day("2026-11-11", 2, { models: { "claude-haiku-5-5": 100 }, projects: { "": 2 } }),
+    day("2026-11-10", 6, { models: { "claude-opus-5-5": [100, 100, 50, 50], "claude-haiku-5-5": [50, 20, 20, 10] }, projects: { "/mnt/pc/d/a": 2, "/mnt/pc/d/b": 4 } }),
+    day("2026-11-11", 2, { models: { "claude-haiku-5-5": [100, 0, 0, 0] }, projects: { "": 2 } }),
   ];
   const s = summarize(days, "all", "2026-11-11");
   assert.deepEqual(s.models.map((m) => [m.name, m.tokens, m.share]), [["Opus 5.5", 300, 0.6], ["Haiku 5.5", 200, 0.4]]);
@@ -70,8 +71,8 @@ test("排行：模型按 token、项目按回复数排序，占比相对总数",
 });
 
 test("每日序列：7 天补齐空白日，前 3 个模型以外并入“其他”；“全部”按周（周一开始）合并", () => {
-  const models = { "claude-opus-5-5": 50, "claude-sonnet-5-5": 40, "claude-haiku-5-5": 30, "claude-fable-5-2": 20 };
-  const days = [day("2026-11-09", 1, { models }), day("2026-11-11", 1, { models: { "claude-opus-5-5": 10 } })];
+  const models: UsageDay["models"] = { "claude-opus-5-5": [50, 0, 0, 0], "claude-sonnet-5-5": [0, 40, 0, 0], "claude-haiku-5-5": [0, 0, 30, 0], "claude-fable-5-2": [0, 0, 0, 20] };
+  const days = [day("2026-11-09", 1, { models }), day("2026-11-11", 1, { models: { "claude-opus-5-5": [4, 3, 2, 1] } })];
   const week = dailySeries(days, "7d", "2026-11-11");
   assert.equal(week.bars.length, 7);
   assert.equal(week.bars[0].label, "2026-11-05");
@@ -84,6 +85,25 @@ test("每日序列：7 天补齐空白日，前 3 个模型以外并入“其他
   assert.equal(all.bars.length, 1);
   assert.equal(all.bars[0].label, "2026-11-09");
   assert.equal(all.bars[0].total, 150);
+});
+
+test("四项：总量含缓存读取，明细按范围汇总，柱子带当天明细，模型堆叠按四项之和", () => {
+  const days = [
+    day("2026-11-10", 1, { input: 5, output: 6, cacheWrite: 7, cacheRead: 8, models: { "claude-opus-5-5": [5, 6, 7, 8] } }),
+    day("2026-11-11", 1, { input: 1, output: 2, cacheWrite: 3, cacheRead: 4, models: { "claude-opus-5-5": [1, 2, 3, 4] } }),
+  ];
+  assert.equal(dayTokens(days[0]), 26);
+  const s = summarize(days, "7d", "2026-11-11");
+  assert.equal(s.tokens, 36);
+  assert.deepEqual(s.parts, { input: 6, output: 8, cacheWrite: 10, cacheRead: 12 });
+  assert.equal(s.models[0].tokens, 36);
+  const week = dailySeries(days, "7d", "2026-11-11");
+  assert.equal(week.bars[6].total, 10);
+  assert.deepEqual(week.bars[6].parts, { input: 1, output: 2, cacheWrite: 3, cacheRead: 4 });
+  assert.equal(week.bars[0].total, 0);
+  assert.deepEqual(week.bars[0].parts, { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 });
+  // “全部”按周合并时明细也相加。
+  assert.deepEqual(dailySeries(days, "all", "2026-11-11").bars[0].parts, { input: 6, output: 8, cacheWrite: 10, cacheRead: 12 });
 });
 
 test("热力图：按周排成列（周一在上），分 0～4 档，今天以后的格子不显示", () => {

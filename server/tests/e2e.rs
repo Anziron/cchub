@@ -783,6 +783,67 @@ async fn lists_started_sessions_with_title_and_memory() {
 }
 
 #[tokio::test]
+async fn devices_come_from_workspace_status_and_are_cached() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = Temp::new("devices");
+    let calls = temp.0.join("calls");
+    let script = temp.0.join("cc-workspace");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\necho \"$1\" >> {}\n[ \"$1\" = status ] || exit 1\nprintf 'pc\\tWindows\\tonline\\nmac\\t\\toffline\\n'\n",
+            calls.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let cmd = format!(
+        "{} {} 1",
+        env!("CARGO_BIN_EXE_fake-claude"),
+        recording_in("approval", "stream.jsonl").display()
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hubd"))
+        .env("HUBD_LISTEN", "127.0.0.1:0")
+        .env("HUBD_HOST", "direct")
+        .env("HUBD_STATE_DIR", &temp.0)
+        .env("HUBD_CLAUDE_CMD", cmd)
+        .env("HUBD_WORKSPACE_CMD", &script)
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let line = lines.next_line().await.unwrap().unwrap();
+    let addr = line.rsplit(' ').next().unwrap().to_string();
+
+    // 两条连接各请求一次，命令只该跑一次。
+    for _ in 0..2 {
+        let mut socket = connect(&addr).await;
+        send(&mut socket, ClientMsg::Devices).await;
+        let reply = tokio::time::timeout(TIMEOUT, async {
+            loop {
+                if let Message::Text(text) = socket.next().await.unwrap().unwrap() {
+                    let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
+                    if let ServerMsg::Devices { devices, error } = frame.msg {
+                        return (devices, error);
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(reply.1, None);
+        assert_eq!(reply.0.len(), 2);
+        assert_eq!(reply.0[0].name, "pc");
+        assert_eq!(reply.0[0].os.as_deref(), Some("Windows"));
+        assert!(reply.0[0].online);
+        assert_eq!(reply.0[1].os, None);
+        assert!(!reply.0[1].online);
+    }
+    assert_eq!(std::fs::read_to_string(&calls).unwrap(), "status\n");
+}
+
+#[tokio::test]
 async fn websocket_with_origin_is_rejected() {
     let temp = Temp::new("origin");
     let (_hubd, addr) = spawn_hubd(&temp.0).await;

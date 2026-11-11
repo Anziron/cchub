@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AppearanceMenu } from "./Dialogs";
+import { pageVisible } from "./platform";
 import type { Appearance } from "./appearance";
 import { askHint, Dropdown, MenuItem, Meter, quotaPercent, rowState, sessionStatus, SessionMenu, STATE_ORDER, StateIcon } from "./Common";
 import { Icon } from "./Icon";
 import { firstAsk, isWaiting } from "./model";
-import { deviceStatus, groupByDate, groupProjects, SERVER_GROUP, type DeviceState } from "./sidebar";
+import { DEVICE_STATE, deviceList, groupByDate, groupProjects, SERVER_GROUP } from "./sidebar";
 import { describeCwd, type Session, type Store } from "./store";
 
 type StatusFilter = "all" | "wait" | "running";
@@ -87,17 +88,20 @@ function QuotaLine({ label, window }: { label: string; window: QuotaWindow }) {
   );
 }
 
-const DEVICE_TITLE: Record<DeviceState, string> = {
-  online: "在线",
-  offline: "离线：这台设备上的会话读写文件会失败",
-  unknown: "没有运行中的会话，未检测",
-};
+const DEVICES_REFRESH_MS = 60_000;
 
-/** 侧栏底部：额度进度（点开窗格看重置时间）和各设备在线情况，分成两块。 */
+/** 侧栏底部：额度进度（点开窗格看重置时间）和全部设备，点设备弹窗看项目、开会话。 */
 function Status({ store }: { store: Store }) {
   const { fiveHour, sevenDay } = store.limits;
-  const devices = deviceStatus([...store.sessions.values()].filter((s) => !s.archived));
+  const devices = deviceList(store.devices, [...store.sessions.values()].filter((s) => !s.archived));
   const openUsage = () => store.togglePane("usage");
+  // 页面看得见时每分钟刷新一次在线状态；切回窗口时补一次。
+  useEffect(() => {
+    const tick = () => { if (pageVisible()) store.requestDevices(); };
+    const timer = setInterval(tick, DEVICES_REFRESH_MS);
+    document.addEventListener("visibilitychange", tick);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", tick); };
+  }, [store]);
   return (
     <>
       {fiveHour || sevenDay ? (
@@ -108,7 +112,13 @@ function Status({ store }: { store: Store }) {
       ) : null}
       {devices.length ? (
         <div className="side-devices">
-          {devices.map((d) => <span key={d.device} className={`dev ${d.state}`} title={`${d.device}：${DEVICE_TITLE[d.state]}`}><i />{d.device}</span>)}
+          {devices.map((d) => (
+            <button type="button" key={d.name} className={`dev ${d.state}`} title={`${d.name}：${DEVICE_STATE[d.state]}，点击查看项目或连接`} onClick={() => store.openDevice(d.name)}>
+              <i />
+              <span className="dev-name">{d.name}</span>
+              <small>{d.state === "online" ? (d.projects.length ? `${d.projects.length} 个项目` : "在线") : DEVICE_STATE[d.state]}</small>
+            </button>
+          ))}
         </div>
       ) : null}
     </>

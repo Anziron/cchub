@@ -2,27 +2,20 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "reac
 import { formatDuration, formatTokens, Meter } from "./Common";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
-import { backgroundTasks, collectChanges, findModel, isTranscript, latestPlan, parseTranscript, taskOutputPath, type FileChange, type Task } from "./model";
+import { backgroundTasks, collectChanges, findModel, groupChanges, isTranscript, latestPlan, parseTranscript, taskOutputPath, type ChangeGroup, type FileChange, type Task } from "./model";
 import { pageVisible } from "./platform";
 import { describeCwd, GLOBAL_PANES, type Session, type Store } from "./store";
 import { Diff, TranscriptView } from "./Thread";
 import { PANE_TITLES } from "./TopBar";
 import { UsagePane } from "./UsagePane";
 
-function splitPath(path: string, cwd?: string): { dir: string; name: string } {
-  const rel = cwd && path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path;
-  const cut = rel.lastIndexOf("/") + 1;
-  return { dir: rel.slice(0, cut), name: rel.slice(cut) };
-}
-
-function ChangeFile({ file, cwd }: { file: FileChange; cwd?: string }) {
+function ChangeFile({ file, name }: { file: FileChange; name: string }) {
   const [open, setOpen] = useState(false);
-  const { dir, name } = splitPath(file.path, cwd);
   return (
     <details className="change" onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary title={file.path}>
         <Icon name="chev" size={11} className="chev" />
-        <span className="path"><span className="dir">{dir}</span><b>{name}</b></span>
+        <span className="path"><b>{name}</b></span>
         <span className="added">+{file.added}</span>
         <span className="removed">−{file.removed}</span>
       </summary>
@@ -31,15 +24,39 @@ function ChangeFile({ file, cwd }: { file: FileChange; cwd?: string }) {
   );
 }
 
+/** 一个目录一组，可折叠；项目外的目录很长，省略开头、保留结尾。 */
+function ChangeGroupView({ group, single }: { group: ChangeGroup; single: boolean }) {
+  const files = group.files.map((file) => <ChangeFile key={file.path} file={file} name={file.name} />);
+  if (single && !group.outside) return <div className="change-group flat">{files}</div>;
+  return (
+    <details className="change-group" open>
+      <summary title={group.dir || "项目根目录"}>
+        <Icon name="chev" size={11} className="chev" />
+        <Icon name="folder" size={13} />
+        <span className={`group-dir${group.outside ? " far" : ""}`}><bdi>{group.dir || "项目根目录"}</bdi></span>
+        <span className="count">{group.files.length}</span>
+      </summary>
+      <div className="group-files">{files}</div>
+    </details>
+  );
+}
+
 function ChangesPane({ session }: { session: Session }) {
   const changes = collectChanges(session.thread.items);
+  const groups = groupChanges(changes, session.cwd);
   const added = changes.reduce((n, c) => n + c.added, 0);
   const removed = changes.reduce((n, c) => n + c.removed, 0);
   if (!changes.length) return <p className="empty">这次运行还没有改动文件。</p>;
+  const firstOutside = groups.findIndex((g) => g.outside);
   return (
     <>
       <p className="pane-sum">{changes.length} 个文件 <span className="added">+{added}</span> <span className="removed">−{removed}</span></p>
-      {changes.map((file) => <ChangeFile key={file.path} file={file} cwd={session.cwd} />)}
+      {groups.map((group, i) => (
+        <div key={`${group.outside}${group.dir}`}>
+          {i === firstOutside ? <h4 className="change-section">项目外</h4> : null}
+          <ChangeGroupView group={group} single={groups.length === 1} />
+        </div>
+      ))}
     </>
   );
 }

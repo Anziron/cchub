@@ -298,6 +298,10 @@ impl State {
                 on_event(UiEvent::Usage { stats, error });
                 Vec::new()
             }
+            ServerMsg::Devices { devices, error } => {
+                on_event(UiEvent::Devices { devices, error });
+                Vec::new()
+            }
             ServerMsg::Error { message } => {
                 on_event(UiEvent::Error { session, message });
                 Vec::new()

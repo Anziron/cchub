@@ -13,7 +13,9 @@ import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
+# 输出里每个模型的四项：[input, output, cacheWrite, cacheRead]
+OUTPUT_VERSION = 2
 # 一个桶的数值字段顺序：回复数、input、output、cacheWrite、cacheRead
 M, I, O, CW, CR = range(5)
 
@@ -84,7 +86,11 @@ def scan_lines(f, start, state):
         n[CW] += cw
         n[CR] += cr
         mk = model if isinstance(model, str) else ""
-        b["models"][mk] = b["models"].get(mk, 0) + inp + out + cw
+        m = b["models"].setdefault(mk, [0, 0, 0, 0])
+        m[0] += inp
+        m[1] += out
+        m[2] += cw
+        m[3] += cr
         cwd = obj.get("cwd")
         cwd = cwd if isinstance(cwd, str) else ""
         b["projects"][cwd] = b["projects"].get(cwd, 0) + 1
@@ -144,14 +150,53 @@ def update_cache(root, cache):
             gone[path] = {"main": ent.get("main"), "buckets": ent["buckets"]}
 
 
-def load_cache(path):
+def upgrade_buckets(buckets):
+    """v1 桶里每个模型只存了 input+output+cacheWrite 的合计，桶的 n 里有整桶的四项。
+    按各模型合计占比把 n 的四项分给它们：桶里只有一个模型时是精确的，多个模型时是近似。"""
+    for b in buckets.values():
+        models = b.get("models", {})
+        total = sum(v for v in models.values() if isinstance(v, int))
+        n = b["n"]
+        for k, v in list(models.items()):
+            if not isinstance(v, int):
+                continue
+            share = v / total if total else 1 / len(models)
+            models[k] = [round(n[x] * share) for x in (I, O, CW, CR)]
+
+
+def upgrade_v1(c, root):
+    """v1 -> v2。源文件还在的条目丢掉，让它按新格式重新扫描（精确）；
+    源文件已被 CLI 清理的条目（含原有的 gone）只剩缓存里的聚合，按 upgrade_buckets 转换后保留。"""
+    gone = {}
+    for path, ent in (c.get("gone") or {}).items():
+        gone[path] = {"main": ent.get("main"), "buckets": ent["buckets"]}
+    for path, ent in c["files"].items():
+        if not os.path.exists(path):
+            gone[path] = {"main": ent.get("main"), "buckets": ent["buckets"]}
+    for ent in gone.values():
+        upgrade_buckets(ent["buckets"])
+    return {"version": CACHE_VERSION, "files": {}, "gone": gone}
+
+
+def read_cache_file(path, version):
     try:
         with open(path, "r", encoding="utf-8") as f:
             c = json.load(f)
-        if isinstance(c, dict) and c.get("version") == CACHE_VERSION and isinstance(c.get("files"), dict):
+        if isinstance(c, dict) and c.get("version") == version and isinstance(c.get("files"), dict):
             return c
     except (OSError, ValueError):
         pass
+    return None
+
+
+def load_cache(path, root):
+    c = read_cache_file(path, CACHE_VERSION)
+    if c is not None:
+        return c
+    # 没有 v2 缓存：从同目录的旧 cache-v1.json 迁移（旧文件不改动）。
+    old = read_cache_file(os.path.join(os.path.dirname(path), "cache-v2.json"), 1)
+    if old is not None:
+        return upgrade_v1(old, root)
     return {"version": CACHE_VERSION, "files": {}}
 
 
@@ -196,7 +241,9 @@ def build_output(cache, tz):
             d["cacheWrite"] += n[CW]
             d["cacheRead"] += n[CR]
             for k, v in b["models"].items():
-                d["models"][k] = d["models"].get(k, 0) + v
+                m = d["models"].setdefault(k, [0, 0, 0, 0])
+                for x in range(4):
+                    m[x] += v[x]
             for k, v in b["projects"].items():
                 d["projects"][k] = d["projects"].get(k, 0) + v
             d["hours"][lt.hour] += n[M]
@@ -205,7 +252,7 @@ def build_output(cache, tz):
     for date, s in day_sessions.items():
         days[date]["sessions"] = len(s)
     return {
-        "version": 1,
+        "version": OUTPUT_VERSION,
         "generatedAt": int(time.time()),
         "tzOffset": tz,
         "days": [days[k] for k in sorted(days)],
@@ -223,7 +270,7 @@ def main(argv=None):
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     with open(cache_path + ".lock", "w") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)  # 防止两个进程同时读写缓存
-        cache = load_cache(cache_path)
+        cache = load_cache(cache_path, root)
         update_cache(root, cache)
         save_cache(cache_path, cache)
         out = build_output(cache, args.tz)

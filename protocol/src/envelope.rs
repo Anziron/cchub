@@ -114,9 +114,99 @@ pub fn turn_finished(log: &str) -> bool {
     ended
 }
 
+/// 超过这个长度的行才会尝试省略 base64。
+const ELIDE_MIN_LINE: usize = 64 * 1024;
+/// 字符串长度达到这个值且全是 base64 字符才省略。
+const ELIDE_MIN_STRING: usize = 4096;
+
+/// 大行里的 base64（截图等）界面不显示，传输前换成空串；
+/// 所在对象加 `"cchub_omitted": 被省略的总字节数`。没有改动或解析失败返回 `None`。
+pub fn elide_base64(line: &str) -> Option<String> {
+    if line.len() <= ELIDE_MIN_LINE {
+        return None;
+    }
+    let mut value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let mut total = 0;
+    elide_value(&mut value, &mut total);
+    if total == 0 {
+        return None;
+    }
+    serde_json::to_string(&value).ok()
+}
+
+fn is_base64_blob(s: &str) -> bool {
+    s.len() >= ELIDE_MIN_STRING
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+}
+
+/// 返回要记到外层对象上的省略字节数；`total` 累计全部省略量。
+/// 对象把直接子树的省略数记在自己身上（`cchub_omitted`）并返回 0，
+/// 所以数组里的字符串归最近的外层对象。
+fn elide_value(value: &mut serde_json::Value, total: &mut u64) -> u64 {
+    use serde_json::Value;
+    match value {
+        Value::String(s) if is_base64_blob(s) => {
+            let n = s.len() as u64;
+            *s = String::new();
+            *total += n;
+            n
+        }
+        Value::Array(items) => items.iter_mut().map(|v| elide_value(v, total)).sum(),
+        Value::Object(map) => {
+            let here: u64 = map.values_mut().map(|v| elide_value(v, total)).sum();
+            if here > 0 {
+                map.insert("cchub_omitted".into(), Value::from(here));
+            }
+            0
+        }
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn blob(n: usize) -> String {
+        "QUJD".repeat(n / 4)
+    }
+
+    #[test]
+    fn elides_image_block_in_tool_result() {
+        let line = serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","content":[
+            {"type":"text","text":"ok"},
+            {"type":"image","source":{"type":"base64","media_type":"image/png","data":blob(70000)}}
+        ]}]}})
+        .to_string();
+        let out: serde_json::Value = serde_json::from_str(&elide_base64(&line).unwrap()).unwrap();
+        let source = &out["message"]["content"][0]["content"][1]["source"];
+        assert_eq!(source["data"], "");
+        assert_eq!(source["cchub_omitted"], 70000);
+        assert_eq!(out["message"]["content"][0]["content"][0]["text"], "ok");
+    }
+
+    #[test]
+    fn elides_tool_use_result_file_base64() {
+        let line = serde_json::json!({"type":"user","tool_use_result":{"type":"image","file":{"base64":blob(70000),"type":"image/png"}}})
+            .to_string();
+        let out: serde_json::Value = serde_json::from_str(&elide_base64(&line).unwrap()).unwrap();
+        let file = &out["tool_use_result"]["file"];
+        assert_eq!(file["base64"], "");
+        assert_eq!(file["cchub_omitted"], 70000);
+        assert_eq!(file["type"], "image/png");
+        assert!(out["tool_use_result"].get("cchub_omitted").is_none());
+    }
+
+    #[test]
+    fn leaves_small_lines_and_plain_text_alone() {
+        let small = serde_json::json!({"data": blob(5000)}).to_string();
+        assert_eq!(elide_base64(&small), None);
+        let text = "word and\\nspace ".repeat(8000);
+        let big = serde_json::json!({"type":"assistant","text":text}).to_string();
+        assert_eq!(elide_base64(&big), None);
+        assert_eq!(elide_base64("not json ".repeat(10000).as_str()), None);
+    }
 
     #[test]
     fn classifies_by_envelope() {

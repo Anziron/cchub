@@ -12,7 +12,7 @@ use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
 use axum::http::{header::ORIGIN, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use cchub_protocol::{
-    is_user_message, ClientMsg, Frame, LineSplitter, Outbound, OutboundLimits, ServerMsg,
+    is_user_message, ClientMsg, DeviceInfo, Frame, LineSplitter, Outbound, OutboundLimits, ServerMsg,
 };
 use futures_util::{SinkExt, StreamExt};
 use inotify::{Inotify, WatchMask};
@@ -48,6 +48,8 @@ pub struct App {
     pub usage_lock: tokio::sync::Mutex<()>,
     /// 设备探测按项目目录共享，所有连接订阅同一个结果。
     pub probes: Probes,
+    /// `cc-workspace status` 的结果和取得时间。
+    pub devices_cache: tokio::sync::Mutex<Option<(std::time::Instant, Vec<DeviceInfo>)>>,
 }
 
 pub async fn upgrade(
@@ -131,6 +133,10 @@ async fn serve(app: Arc<App>, socket: WebSocket) {
             }
             ClientMsg::Usage { tz_offset } => {
                 tokio::spawn(usage_stats(app.clone(), *tz_offset, tx.clone()));
+                continue;
+            }
+            ClientMsg::Devices => {
+                tokio::spawn(devices(app.clone(), tx.clone()));
                 continue;
             }
             ClientMsg::Start { session, .. }
@@ -329,9 +335,44 @@ async fn handle(
         | ClientMsg::Browse { .. }
         | ClientMsg::Mount { .. }
         | ClientMsg::TaskOutput { .. }
-        | ClientMsg::Usage { .. } => {}
+        | ClientMsg::Usage { .. }
+        | ClientMsg::Devices => {}
     }
     Ok(())
+}
+
+/// 设备状态在 hubd 内缓存这么久：多个连接、频繁刷新只跑一次命令。
+const DEVICES_TTL: Duration = Duration::from_secs(15);
+
+async fn devices(app: Arc<App>, tx: mpsc::Sender<Frame>) {
+    // 持锁期间命令只跑一次，排队的请求拿到的是刚写好的缓存。失败不缓存。
+    let result = {
+        let mut cache = app.devices_cache.lock().await;
+        match &*cache {
+            Some((at, devices)) if at.elapsed() < DEVICES_TTL => Ok(devices.clone()),
+            _ => {
+                let from = app.clone();
+                let fresh = spawn_blocking(move || workspace::status(&from.workspace_cmd))
+                    .await
+                    .unwrap_or_else(|error| Err(error.to_string()));
+                if let Ok(devices) = &fresh {
+                    *cache = Some((std::time::Instant::now(), devices.clone()));
+                }
+                fresh
+            }
+        }
+    };
+    let msg = match result {
+        Ok(devices) => ServerMsg::Devices {
+            devices,
+            error: None,
+        },
+        Err(error) => ServerMsg::Devices {
+            devices: Vec::new(),
+            error: Some(error),
+        },
+    };
+    let _ = tx.send(Frame { session: None, msg }).await;
 }
 
 async fn browse(

@@ -6,6 +6,8 @@ import plan from "../../testdata/recordings/plan/stream.jsonl?raw";
 import question from "../../testdata/recordings/question/stream.jsonl?raw";
 import type { UiEvent } from "./generated/UiEvent";
 import type { Hub } from "./hub";
+import { dropRef } from "./paths";
+import { NEW_DRAFT, type Store } from "./store";
 
 const params = new URLSearchParams(location.search);
 const scene = params.get("scene");
@@ -34,6 +36,17 @@ function until(recording: string, needle: string): string[] {
   const lines = recording.split("\n").filter(Boolean);
   const index = lines.findIndex((line) => line.includes(needle));
   return index < 0 ? lines : lines.slice(0, index + 1);
+}
+
+/** 使用情况演示数据：按权重把当天的四项分给各模型。 */
+function demoModels(messages: number, weights: Record<string, number>): Record<string, [number, number, number, number]> {
+  const total = Object.values(weights).reduce((a, b) => a + b, 0);
+  return Object.fromEntries(
+    Object.entries(weights).map(([model, w]) => {
+      const share = w / total;
+      return [model, [messages * 3, messages * 900, messages * 4000, messages * 60000].map((v) => Math.round(v * share)) as [number, number, number, number]];
+    }),
+  );
 }
 
 const user = (text: string) =>
@@ -90,10 +103,38 @@ const SESSIONS: { id: string; title: string; running: boolean; lines: string[] }
 
 let emit: (event: UiEvent) => void = () => {};
 
+/**
+ * 需要操作界面状态的场景。`?scene=queue`：运行中排了两条消息、拖入两个文件（一个在项目外）、输入框里一段长文字。
+ * `?draft=long`：只放长文字，检查滚动条和发送按钮的位置。
+ */
+export function setupDemo(store: Store): void {
+  const long = Array.from({ length: 14 }, (_, i) => `第 ${i + 1} 行：补充说明，输入框变高后滚动条和发送按钮的位置。`).join("\n");
+  // 草稿要在输入框挂载前写好：无头浏览器的虚拟时钟到点就截图，之后的重画赶不上。
+  const key = params.get("s") ?? NEW_DRAFT;
+  store.setDraft(key, scene === "queue" || params.get("draft") === "long" ? long : "");
+  if (scene === "queue") store.addFiles(key, [dropRef("D:\\work\\src\\auth.py", "/mnt/laptop/d/work"), dropRef("C:\\Users\\me\\Desktop\\需求说明.docx", "/mnt/laptop/d/work")]);
+  setTimeout(() => {
+    const session = store.sessions.get(key);
+    if (scene === "queue" && session) {
+      store.enqueue(session, "顺便看下 CI 日志里为什么慢", "insert");
+      store.enqueue(session, "这一轮结束后把改动提交了，提交信息写清楚改了哪些接口", "wait");
+      store.enqueue(session, "然后跑一遍完整测试", "wait");
+    }
+  }, 600);
+}
+
 export const demoHub: Hub = {
   connect: async () => (scene === "conn" ? "disconnected" : "connected"),
   onEvent: async (handler) => { emit = (event) => handler([event]); },
   send: async (msg) => {
+    if (msg.type === "devices") {
+      setTimeout(() => emit({ type: "devices", error: null, devices: [
+        { name: "laptop", os: "windows", online: true },
+        { name: "office-pc", os: "windows", online: false },
+        { name: "mac-mini", os: "macos", online: true },
+      ] }), 100);
+      return;
+    }
     if (msg.type === "browse") {
       if (!msg.device) emit({ type: "browse", device: null, path: null, parent: null, entries: ["laptop", "office-pc"], error: null });
       else if (msg.device === "office-pc") emit({ type: "browse", device: msg.device, path: null, parent: null, entries: [], error: "读取目录失败：设备离线、没有权限或路径不存在" });
@@ -121,12 +162,12 @@ export const demoHub: Hub = {
           date: new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10),
           messages, sessions: messages ? 1 + (seed % 4) : 0,
           input: messages * 3, output: messages * 900, cacheWrite: messages * 4000, cacheRead: messages * 60000,
-          models: messages ? { "claude-opus-5-5": messages * 3200, "claude-sonnet-5-5": messages * 1200, "claude-haiku-5-5": messages * (seed % 3) * 300, ...(seed > 8 ? { "claude-fable-5-2": messages * 200 } : {}) } : {},
+          models: messages ? demoModels(messages, { "claude-opus-5-5": 3200, "claude-sonnet-5-5": 1200, "claude-haiku-5-5": (seed % 3) * 300, ...(seed > 8 ? { "claude-fable-5-2": 200 } : {}) }) : {},
           projects: messages ? { "/mnt/pc/d/demo-api": Math.round(messages * 0.6), "/mnt/pc/d/cchub": Math.round(messages * 0.3), "/root/notes": Math.round(messages * 0.1) } : {},
           hours,
         };
       }).filter((d) => d.messages);
-      setTimeout(() => emit({ type: "usage", stats: JSON.stringify({ version: 1, generatedAt: Math.floor(Date.now() / 1000) - 120, tzOffset: 480, days }), error: scene === "usage-error" ? "统计命令没有安装，或运行超时" : null }), 300);
+      setTimeout(() => emit({ type: "usage", stats: JSON.stringify({ version: 2, generatedAt: Math.floor(Date.now() / 1000) - 120, tzOffset: 480, days }), error: scene === "usage-error" ? "统计命令没有安装，或运行超时" : null }), 300);
     } else if (msg.type === "mount") {
       emit({ type: "mounted", device: msg.device, path: msg.path, cwd: `/mnt/${msg.device}/${msg.path[0].toLowerCase()}/${msg.path.slice(3).replaceAll("\\", "/")}`, error: null });
     } else if (msg.type === "input") {

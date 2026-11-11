@@ -65,6 +65,17 @@ pub enum ClientMsg {
         #[serde(default)]
         tz_offset: i32,
     },
+    /// 列出所有登记的设备和在线状态。
+    Devices,
+}
+
+/// 登记的设备。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct DeviceInfo {
+    pub name: String,
+    pub os: Option<String>,
+    pub online: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,6 +157,11 @@ pub enum ServerMsg {
         stats: Option<String>,
         error: Option<String>,
     },
+    /// 回复 `Devices`。
+    Devices {
+        devices: Vec<DeviceInfo>,
+        error: Option<String>,
+    },
     Error {
         message: String,
     },
@@ -208,6 +224,10 @@ pub enum UiEvent {
     },
     Usage {
         stats: Option<String>,
+        error: Option<String>,
+    },
+    Devices {
+        devices: Vec<DeviceInfo>,
         error: Option<String>,
     },
     Error {

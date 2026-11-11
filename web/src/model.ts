@@ -164,7 +164,8 @@ function resultText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return content == null ? "" : JSON.stringify(content);
   return content
-    .map((part: Json) => part.text ?? part.tool_name ?? "")
+    // 图片不显示（hubd 也会把大图的 base64 省掉），只留占位。
+    .map((part: Json) => part.text ?? part.tool_name ?? (part.type === "image" ? "[图片]" : ""))
     .filter(Boolean)
     .join("\n");
 }
@@ -883,6 +884,39 @@ export function collectChanges(items: Item[]): FileChange[] {
     files.set(path, file);
   }
   return [...files.values()];
+}
+
+export interface ChangeGroup {
+  /** 项目内是相对目录（根目录为空串），项目外是完整目录；都以 `/` 结尾。 */
+  dir: string;
+  outside: boolean;
+  files: (FileChange & { name: string })[];
+  added: number;
+  removed: number;
+}
+
+/**
+ * 改动窗格按目录分组，只分一层：组标题是目录，行里只放文件名，窄窗格里也看得清。
+ * 项目内的组在前（根目录最前），项目外的排在后面；目录和文件名按字母排。
+ */
+export function groupChanges(changes: FileChange[], cwd: string | undefined): ChangeGroup[] {
+  const root = cwd?.replace(/\/+$/, "");
+  const groups = new Map<string, ChangeGroup>();
+  for (const file of changes) {
+    const outside = !root || !file.path.startsWith(`${root}/`);
+    const rel = outside ? file.path : file.path.slice(root!.length + 1);
+    const cut = rel.lastIndexOf("/") + 1;
+    const dir = rel.slice(0, cut);
+    const key = `${outside ? 1 : 0}${dir}`;
+    const group = groups.get(key) ?? { dir, outside, files: [], added: 0, removed: 0 };
+    group.files.push({ ...file, name: rel.slice(cut) });
+    group.added += file.added;
+    group.removed += file.removed;
+    groups.set(key, group);
+  }
+  const list = [...groups.values()];
+  for (const g of list) g.files.sort((a, b) => a.name.localeCompare(b.name));
+  return list.sort((a, b) => Number(a.outside) - Number(b.outside) || a.dir.localeCompare(b.dir));
 }
 
 /** 最近一次提交的方案：方案确认请求或 ExitPlanMode 调用里的 `plan`。 */

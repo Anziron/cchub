@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { formatTokens, Quota, resetWhen } from "./Common";
 import { Icon } from "./Icon";
 import type { Store } from "./store";
-import { addDays, dailySeries, heatmap, hourlySeries, localDate, OTHER, summarize, type UsageDay, type UsageRange } from "./usage";
+import { addDays, dailySeries, dayTokens, heatmap, hourlySeries, localDate, OTHER, summarize, type TokenParts, type UsageDay, type UsageRange } from "./usage";
 
 const RANGES: [UsageRange, string][] = [["today", "今天"], ["7d", "7 天"], ["30d", "30 天"], ["all", "全部"]];
 const RANGE_KEY = "cchub.usageRange";
@@ -86,6 +86,18 @@ function TipRow({ color, label, value }: { color?: string; label: string; value:
   return <div className="tip-row">{color ? <i style={{ background: color }} /> : null}<span>{label}</span><b>{value}</b></div>;
 }
 
+/** 四项明细，浮层里用。 */
+function PartRows({ parts }: { parts: TokenParts }) {
+  return (
+    <>
+      <TipRow label="输入" value={formatTokens(parts.input)} />
+      <TipRow label="输出" value={formatTokens(parts.output)} />
+      <TipRow label="缓存写入" value={formatTokens(parts.cacheWrite)} />
+      <TipRow label="缓存读取" value={formatTokens(parts.cacheRead)} />
+    </>
+  );
+}
+
 function Heatmap({ days, today }: { days: UsageDay[]; today: string }) {
   const weeks = heatmap(days, today, HEAT_WEEKS);
   const cells = weeks.flat();
@@ -101,7 +113,8 @@ function Heatmap({ days, today }: { days: UsageDay[]; today: string }) {
           <>
             <TipRow label="回复" value={`${cell.value} 条`} />
             {day ? <TipRow label="会话" value={`${day.sessions} 个`} /> : null}
-            {day ? <TipRow label="token" value={formatTokens(day.input + day.output + day.cacheWrite)} /> : null}
+            {day ? <TipRow label="token" value={formatTokens(dayTokens(day))} /> : null}
+            {day ? <PartRows parts={day} /> : null}
           </>
         ) : <div className="tip-empty">没有使用</div>}
       </>
@@ -130,6 +143,7 @@ function Bars({ days, range, today }: { days: UsageDay[]; range: UsageRange; tod
       <>
         <div className="tip-title">{weekly ? `${shortDate(bar.label)} 起的一周` : dayTitle(bar.label, today)}</div>
         <TipRow label="合计" value={`${formatTokens(bar.total)} token`} />
+        <PartRows parts={bar.parts} />
         {keys.map((key, k) => (bar.values[key] ? <TipRow key={key} color={seriesColor(key, k)} label={key} value={formatTokens(bar.values[key])} /> : null))}
       </>
     );
@@ -237,10 +251,16 @@ export function UsagePane({ store }: { store: Store }) {
           <div className="usage-sum">
             <div><b>{summary.sessions}</b><span>会话</span></div>
             <div><b>{summary.messages}</b><span>回复</span></div>
-            <div title="input + output + 缓存写入，不含缓存读取"><b>{formatTokens(summary.tokens)}</b><span>token</span></div>
+            <div title="输入 + 输出 + 缓存写入 + 缓存读取"><b>{formatTokens(summary.tokens)}</b><span>token</span></div>
             <div><b>{summary.activeDays}</b><span>活跃天数</span></div>
             <div><b>{summary.streak}</b><span>连续天数</span></div>
             <div><b>{summary.peakHour == null ? "—" : `${summary.peakHour}–${summary.peakHour + 1}`}</b><span>高峰时段（点）</span></div>
+          </div>
+          <div className="usage-sum parts">
+            <div><b>{formatTokens(summary.parts.input)}</b><span>输入</span></div>
+            <div><b>{formatTokens(summary.parts.output)}</b><span>输出</span></div>
+            <div><b>{formatTokens(summary.parts.cacheWrite)}</b><span>缓存写入</span></div>
+            <div><b>{formatTokens(summary.parts.cacheRead)}</b><span>缓存读取</span></div>
           </div>
           <h4>{range === "today" ? "今天每小时" : range === "all" ? "每周用量" : "每日用量"}</h4>
           {!summary.messages ? <p className="empty">这段时间没有使用。</p> : range === "today" ? <HourBars days={stats.days} today={today} /> : <Bars days={stats.days} range={range} today={today} />}

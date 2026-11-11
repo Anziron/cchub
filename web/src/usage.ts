@@ -1,5 +1,15 @@
 // 使用情况窗格：解析 `cchub-usage` 的输出并做汇总。纯函数，不依赖浏览器；日期都是客户端时区的 "YYYY-MM-DD"。
 
+/** [input, output, cacheWrite, cacheRead]。 */
+export type TokenQuad = [number, number, number, number];
+
+export interface TokenParts {
+  input: number;
+  output: number;
+  cacheWrite: number;
+  cacheRead: number;
+}
+
 export interface UsageDay {
   date: string;
   /** 去重后的模型回复数。 */
@@ -10,8 +20,8 @@ export interface UsageDay {
   output: number;
   cacheWrite: number;
   cacheRead: number;
-  /** 各模型的 token（input + output + cache 写）。 */
-  models: Record<string, number>;
+  /** 各模型的 [input, output, cacheWrite, cacheRead]。 */
+  models: Record<string, TokenQuad>;
   /** 各项目目录的回复数；没有目录的是空串。 */
   projects: Record<string, number>;
   /** 每个本地小时的回复数，长度 24。 */
@@ -32,7 +42,7 @@ export const RANGE_DAYS: Record<Exclude<UsageRange, "all">, number> = { today: 1
 export function parseUsage(text: string): UsageStats | null {
   try {
     const value = JSON.parse(text) as UsageStats;
-    return value && value.version === 1 && Array.isArray(value.days) ? value : null;
+    return value && value.version === 2 && Array.isArray(value.days) ? value : null;
   } catch {
     return null;
   }
@@ -67,7 +77,26 @@ function projectLabel(cwd: string): string {
   return cwd.split("/").filter(Boolean).pop() ?? (cwd ? "/" : "未知");
 }
 
-export const dayTokens = (d: UsageDay) => d.input + d.output + d.cacheWrite;
+/** 四项合计，含缓存读取。 */
+export const dayTokens = (d: UsageDay) => d.input + d.output + d.cacheWrite + d.cacheRead;
+
+export const quadTotal = (q: TokenQuad) => q[0] + q[1] + q[2] + q[3];
+
+const emptyParts = (): TokenParts => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0 });
+
+function addParts(into: TokenParts, d: TokenParts) {
+  into.input += d.input;
+  into.output += d.output;
+  into.cacheWrite += d.cacheWrite;
+  into.cacheRead += d.cacheRead;
+}
+
+/** 这些天的四项明细汇总。 */
+export function tokenParts(days: UsageDay[]): TokenParts {
+  const parts = emptyParts();
+  for (const d of days) addParts(parts, d);
+  return parts;
+}
 
 function pick(days: UsageDay[], range: UsageRange, today: string): UsageDay[] {
   if (range === "all") return days;
@@ -85,7 +114,10 @@ export interface Ranked {
 export interface UsageSummary {
   sessions: number;
   messages: number;
+  /** 四项之和。 */
   tokens: number;
+  /** 四项明细：输入、输出、缓存写入、缓存读取。 */
+  parts: TokenParts;
   activeDays: number;
   /** 到今天（今天还没用就到昨天）为止连续有使用的天数，按全部数据算。 */
   streak: number;
@@ -97,7 +129,12 @@ export interface UsageSummary {
 
 function sumBy(days: UsageDay[], field: "models" | "projects"): Map<string, number> {
   const map = new Map<string, number>();
-  for (const d of days) for (const [key, value] of Object.entries(d[field])) map.set(key, (map.get(key) ?? 0) + value);
+  for (const d of days) {
+    for (const [key, value] of Object.entries(d[field])) {
+      const amount = typeof value === "number" ? value : quadTotal(value);
+      map.set(key, (map.get(key) ?? 0) + amount);
+    }
+  }
   return map;
 }
 
@@ -122,6 +159,7 @@ export function summarize(days: UsageDay[], range: UsageRange, today: string): U
     sessions: list.reduce((sum, d) => sum + d.sessions, 0),
     messages: list.reduce((sum, d) => sum + d.messages, 0),
     tokens: list.reduce((sum, d) => sum + dayTokens(d), 0),
+    parts: tokenParts(list),
     activeDays: list.filter((d) => d.messages > 0).length,
     streak,
     peakHour: peak > 0 ? hours.indexOf(peak) : null,
@@ -137,6 +175,8 @@ export interface Bar {
   /** 这根柱子的起始日期（“全部”时是那一周的周一）。 */
   label: string;
   total: number;
+  /** 这根柱子的四项明细。 */
+  parts: TokenParts;
   values: Record<string, number>;
 }
 
@@ -151,12 +191,14 @@ export function dailySeries(days: UsageDay[], range: UsageRange, today: string):
   const first = range === "all" ? (list[0] ? weekStart(list[0].date) : weekStart(today)) : addDays(today, 1 - RANGE_DAYS[range]);
   const bars = new Map<string, Bar>();
   for (let date = first; date <= today; date = addDays(date, step)) {
-    bars.set(date, { label: date, total: 0, values: Object.fromEntries(keys.map((k) => [k, 0])) });
+    bars.set(date, { label: date, total: 0, parts: emptyParts(), values: Object.fromEntries(keys.map((k) => [k, 0])) });
   }
   for (const d of list) {
     const bar = bars.get(bucket(d.date));
     if (!bar) continue;
-    for (const [model, tokens] of Object.entries(d.models)) {
+    addParts(bar.parts, d);
+    for (const [model, quad] of Object.entries(d.models)) {
+      const tokens = quadTotal(quad);
       const key = top.includes(model) ? modelLabel(model) : OTHER;
       bar.values[key] = (bar.values[key] ?? 0) + tokens;
       bar.total += tokens;

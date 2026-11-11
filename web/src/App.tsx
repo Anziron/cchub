@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Composer, Welcome } from "./Composer";
-import { ConfirmDialog, ConnectDialog, ResumeDialog, WorkspaceDialog } from "./Dialogs";
+import { ConfirmDialog, ConnectDialog, DeviceDialog, ResumeDialog, WorkspaceDialog } from "./Dialogs";
 import { loadAppearance, resolveTheme, saveAppearance, type Appearance } from "./appearance";
 import { Icon } from "./Icon";
 import type { Todo } from "./model";
@@ -123,6 +123,7 @@ export function App({ store }: { store: Store }) {
       {store.showWorkspace ? <WorkspaceDialog store={store} /> : null}
       {store.stopping ? <ConfirmDialog store={store} session={store.stopping} /> : null}
       {store.showResume ? <ResumeDialog store={store} /> : null}
+      {store.deviceDialog ? <DeviceDialog store={store} name={store.deviceDialog} /> : null}
     </div>
   );
 }
