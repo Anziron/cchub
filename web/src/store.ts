@@ -6,7 +6,7 @@ import { isNarrow } from "./platform";
 import { sortKey } from "./sidebar";
 import { parseUsage, type UsageStats } from "./usage";
 import { afterTurn, confirmInserted, joinQueued, type Queued } from "./queue";
-import type { DropRef } from "./paths";
+import { dropRef, mountTarget, type DropRef } from "./paths";
 import type { DeviceInfo } from "./generated/DeviceInfo";
 import {
   addSending,
@@ -161,6 +161,8 @@ export class Store {
   private initialized = new Set<string>();
   private drafts = loadJson<Record<string, string>>(DRAFTS_KEY, {});
   private attached: Record<string, DropRef[]> = {};
+  /** 为拖入的文件挂载目录，等结果的标签；键是 `设备\n目录`。 */
+  private fileMounts = new Map<string, { key: string; path: string; name: string }[]>();
   private taskTimes = loadJson<Record<string, number>>(TASK_TIMES_KEY, {});
 
   constructor(private hub: Hub) {
@@ -304,6 +306,8 @@ export class Store {
         if (!this.browsesInFlight) this.browse = { ...event, loading: false };
         break;
       case "mounted":
+        // 为拖入文件挂的目录不是选工作区，不能切换工作区。
+        if (this.takeFileMount(event.device, event.path, event.cwd, event.error)) break;
         this.mounting = false;
         if (event.cwd) this.chooseWorkspace(event.cwd);
         else this.mountError = event.error ?? "挂载失败";
@@ -412,6 +416,46 @@ export class Store {
     if (!fresh.length) return;
     this.attached[key] = [...have, ...fresh];
     this.changed();
+  }
+
+  /**
+   * 从系统拖进来的文件。项目外、同一台设备上的文件先挂载它所在的目录（hubd 的 `mount`，
+   * 和选工作区一样），挂上后换成服务器上的绝对路径；挂不上才标成读不到。
+   */
+  dropFiles(key: string, paths: string[], cwd: string | undefined): void {
+    const mounts: { device: string; dir: string }[] = [];
+    const refs = paths.map((path): DropRef => {
+      const ref = dropRef(path, cwd);
+      const target = ref.reachable ? null : mountTarget(path, cwd);
+      if (!target) return ref;
+      const id = `${target.device}\n${target.dir}`;
+      const waiting = this.fileMounts.get(id);
+      if (waiting) waiting.push({ key, path, name: target.name });
+      else {
+        this.fileMounts.set(id, [{ key, path, name: target.name }]);
+        mounts.push(target);
+      }
+      return { path, reachable: false, pending: true };
+    });
+    // 先放标签再发请求：回复可能马上到，到时要能找到等它的标签。
+    this.addFiles(key, refs);
+    for (const m of mounts) void this.send({ type: "mount", device: m.device, path: m.dir });
+  }
+
+  /** 文件所在目录挂载完成：等它的标签换成服务器路径，失败时标出原因。 */
+  private takeFileMount(device: string, dir: string, cwd: string | null, error: string | null): boolean {
+    const id = `${device}\n${dir}`;
+    const waiting = this.fileMounts.get(id);
+    if (!waiting) return false;
+    this.fileMounts.delete(id);
+    for (const w of waiting) {
+      this.attached[w.key] = this.files(w.key).map((ref) =>
+        ref.path !== w.path ? ref
+        : cwd ? { path: `${cwd.replace(/\/+$/, "")}/${w.name}`, reachable: true }
+        : { path: w.path, reachable: false, error: error ?? "挂载失败" },
+      );
+    }
+    return true;
   }
 
   removeFile(key: string, path: string): void {

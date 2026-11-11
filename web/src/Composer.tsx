@@ -3,7 +3,7 @@ import { CommandMenu, ModelMenu } from "./Dialogs";
 import { Dropdown, Elapsed, formatDuration, formatTokens, Meter, Quota, quotaPercent, sessionStatus } from "./Common";
 import { Icon } from "./Icon";
 import { firstAsk, matchCommands, runningTasks, turnTokens, type SlashCommand } from "./model";
-import { dropRef, mentionText, type DropRef } from "./paths";
+import { mentionText, type DropRef } from "./paths";
 import { isTouch, onFileDrop, pageVisible } from "./platform";
 import { describeCwd, isResumeCommand, NEW_DRAFT, type Session, type Store } from "./store";
 
@@ -166,7 +166,7 @@ function useInput(store: Store, key: string, cwd: string | undefined) {
   useEffect(() => onFileDrop({
     hover: setHover,
     drop: (paths) => {
-      store.addFiles(key, paths.map((path) => dropRef(path, cwd)));
+      store.dropFiles(key, paths, cwd);
       ref.current?.focus();
     },
   }), [store, key, cwd]);
@@ -189,14 +189,18 @@ function useInput(store: Store, key: string, cwd: string | undefined) {
 
 const MAX_INPUT_HEIGHT = 220;
 
-/** 拖进来的文件，显示成小标签；项目外的标黄，服务器读不到。 */
+/** 拖进来的文件，显示成小标签；项目外的先挂载所在目录（变淡），挂不上才标黄。 */
 function FileChips({ store, draftKey, files }: { store: Store; draftKey: string; files: DropRef[] }) {
   if (!files.length) return null;
   return (
     <div className="file-chips">
       {files.map((file) => (
-        <span key={file.path} className={`file-chip${file.reachable ? "" : " far"}`} title={file.reachable ? file.path : `${file.path}\n不在项目目录里，服务器读不到这个文件`}>
-          <Icon name={file.reachable ? "file" : "alert"} size={12} />
+        <span
+          key={file.path}
+          className={`file-chip${file.pending ? " pending" : file.reachable ? "" : " far"}`}
+          title={file.reachable ? file.path : file.pending ? `${file.path}\n正在挂载所在目录…` : `${file.path}\n服务器读不到这个文件${file.error ? `：${file.error}` : ""}`}
+        >
+          <Icon name={file.reachable || file.pending ? "file" : "alert"} size={12} />
           <span>{lastSegment(file.path)}</span>
           <button type="button" aria-label="移除" onClick={() => store.removeFile(draftKey, file.path)}><Icon name="close" size={11} /></button>
         </span>

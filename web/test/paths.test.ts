@@ -1,7 +1,7 @@
 // 拖进输入框的文件路径怎么转成服务器能读的引用。运行：node --test web/test/
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { dropRef, mentionText } from "../src/paths.ts";
+import { dropRef, mentionText, mountTarget } from "../src/paths.ts";
 
 const cwd = "/mnt/pc-company/d/cchub";
 
@@ -33,6 +33,17 @@ test("服务器上的项目（不在 /mnt 下）只认完全相同的路径前�
 
 test("没有工作区时原样保留", () => {
   assert.deepEqual(dropRef("D:\\a\\b.txt", undefined), { path: "D:\\a\\b.txt", reachable: false });
+});
+
+test("项目外、同一台设备上的文件：挂载它所在的目录", () => {
+  assert.deepEqual(mountTarget("D:\\blog\\PLAN.md", cwd), { device: "pc-company", dir: "D:\\blog", name: "PLAN.md" });
+  assert.deepEqual(mountTarget("D:\\a\\b c\\x.txt", cwd), { device: "pc-company", dir: "D:\\a\\b c", name: "x.txt" });
+  assert.deepEqual(mountTarget("/Users/me/notes/a.md", "/mnt/mac/Users/me/proj"), { device: "mac", dir: "/Users/me/notes", name: "a.md" });
+  // 盘符根目录下的文件不挂整个盘；服务器上的项目不知道是哪台设备。
+  assert.equal(mountTarget("D:\\x.txt", cwd), null);
+  assert.equal(mountTarget("/x.txt", "/mnt/mac/Users/me/proj"), null);
+  assert.equal(mountTarget("D:\\blog\\PLAN.md", "/root/work"), null);
+  assert.equal(mountTarget("D:\\blog\\PLAN.md", undefined), null);
 });
 
 test("发送时以 @路径 拼在正文前，含空格的路径加引号", () => {

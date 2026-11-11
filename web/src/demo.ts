@@ -6,7 +6,6 @@ import plan from "../../testdata/recordings/plan/stream.jsonl?raw";
 import question from "../../testdata/recordings/question/stream.jsonl?raw";
 import type { UiEvent } from "./generated/UiEvent";
 import type { Hub } from "./hub";
-import { dropRef } from "./paths";
 import { NEW_DRAFT, type Store } from "./store";
 
 const params = new URLSearchParams(location.search);
@@ -114,7 +113,8 @@ export function setupDemo(store: Store): void {
   // 草稿要在输入框挂载前写好：无头浏览器的虚拟时钟到点就截图，之后的重画赶不上。
   const key = params.get("s") ?? NEW_DRAFT;
   store.setDraft(key, scene === "queue" || params.get("draft") === "long" ? long : "");
-  if (scene === "queue") store.addFiles(key, [dropRef("D:\\work\\src\\auth.py", "/mnt/laptop/d/work"), dropRef("C:\\Users\\me\\Desktop\\需求说明.docx", "/mnt/laptop/d/work")]);
+  // 项目内一个；项目外同设备的一个（自动挂载所在目录后可读）；盘符根目录下的一个（不挂整个盘，标黄）。
+  if (scene === "queue") store.dropFiles(key, ["D:\\work\\src\\auth.py", "C:\\Users\\me\\Desktop\\需求说明.docx", "D:\\notes.txt"], "/mnt/laptop/d/work");
   setTimeout(() => {
     const session = store.sessions.get(key);
     if (scene === "queue" && session) {

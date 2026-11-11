@@ -6,6 +6,27 @@
 export interface DropRef {
   path: string;
   reachable: boolean;
+  /** 正在挂载所在目录，挂上后换成服务器路径。 */
+  pending?: boolean;
+  /** 挂载失败的原因。 */
+  error?: string;
+}
+
+/**
+ * 项目外的文件：假定和项目在同一台设备上（设备名取自项目目录），挂载它所在的目录后服务器就能读。
+ * 盘符或根目录下的文件不挂整个盘；项目不在 `/mnt/<设备>/` 下时不知道是哪台设备，返回 null。
+ */
+export function mountTarget(path: string, cwd: string | undefined): { device: string; dir: string; name: string } | null {
+  const device = cwd ? /^\/mnt\/([^/]+)\//.exec(`${cwd.replace(/\/+$/, "")}/`)?.[1] : undefined;
+  if (!device) return null;
+  const win = WINDOWS.test(path);
+  if (!win && !path.startsWith("/")) return null;
+  const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+  const dir = path.slice(0, cut);
+  const name = path.slice(cut + 1);
+  // `D:` 或空串：文件在盘符或根目录下。
+  if (!name || (win ? dir.length <= 2 : !dir)) return null;
+  return { device, dir, name };
 }
 
 const WINDOWS = /^([A-Za-z]):[\\/]?(.*)$/;

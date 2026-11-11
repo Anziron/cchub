@@ -612,6 +612,7 @@ a.link:hover { text-decoration-thickness: 2px; }
 .file-chip svg { flex: none; color: var(--muted); }
 .file-chip.far { background: var(--warn-bg); color: var(--warn); }
 .file-chip.far svg { color: var(--warn); }
+.file-chip.pending { opacity: .55; }
 .file-chip button { display: grid; flex: none; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--faint); }
 .file-chip button:hover { background: var(--active); color: var(--text); }
 .queue { display: flex; flex-direction: column; gap: 2px; margin: 0 0 6px; padding: 4px; list-style: none; border-radius: var(--r-lg); background: var(--surface); box-shadow: 0 0 0 1px var(--line); }
