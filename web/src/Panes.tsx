@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { formatDuration, formatTokens, Meter, resumeCommand } from "./Common";
+import { formatDuration, formatTokens, Meter } from "./Common";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 import { backgroundTasks, collectChanges, findModel, isTranscript, latestPlan, parseTranscript, taskOutputPath, type FileChange, type Task } from "./model";
@@ -146,7 +146,6 @@ function InfoPane({ store, session }: { store: Store; session: Session }) {
   const { project, device } = describeCwd(session.cwd);
   const context = thread.context;
   const model = findModel(store.models, thread.model);
-  const command = resumeCommand(session);
   const stats = thread.stats;
   return (
     <>
@@ -161,7 +160,7 @@ function InfoPane({ store, session }: { store: Store; session: Session }) {
         <Meter value={context?.max ? context.used / context.max : null} />
         <span className="num">{context ? `${formatTokens(context.used)}${context.max ? ` / ${formatTokens(context.max)}` : ""}` : "—"}</span>
       </div>
-      <h4>这次运行</h4>
+      <h4 title="只统计当前进程，进程被回收后重新计数">这次运行</h4>
       <Row label="轮数">{stats.turns}</Row>
       <Row label="用时">{formatDuration(stats.durationMs)}</Row>
       <Row label="输出">{formatTokens(stats.outputTokens)} tokens</Row>
@@ -169,10 +168,6 @@ function InfoPane({ store, session }: { store: Store; session: Session }) {
       <h4>模型</h4>
       <Row label="模型">{model?.displayName ?? thread.model ?? "默认"}</Row>
       <Row label="会话 ID"><code>{thread.claudeSessionId ?? "—"}</code></Row>
-      {command ? (
-        <button type="button" className="btn ghost copy-cmd" onClick={() => void navigator.clipboard?.writeText(command)}><Icon name="copy" size={13} />复制终端恢复命令</button>
-      ) : null}
-      <p className="help">“这次运行”只统计当前进程；进程被回收后重新开始计数。</p>
     </>
   );
 }
