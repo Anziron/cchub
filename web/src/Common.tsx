@@ -1,5 +1,6 @@
 // 侧栏、标题栏、输入区、窗格共用的小组件和格式化函数。
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useMenuFit } from "./Dialogs";
 import { Icon } from "./Icon";
 import { firstAsk, isSending, isWaiting, runningTasks, type Ask } from "./model";
@@ -123,25 +124,38 @@ export function Quota({ label, window }: { label: string; window?: QuotaWindow }
  * 按钮加弹出菜单：点外面或 Esc 关闭，放上方还是下方由 useMenuFit 按剩余空间决定。
  * `children` 拿到 close，选中菜单项后自己关。
  */
-export function Dropdown({ button, label, className, menuClass, align = "right", children }: {
+export function Dropdown({ button, label, className, menuClass, align = "right", fixed = false, children }: {
   button: ReactNode;
   label: string;
   className?: string;
   menuClass?: string;
   align?: "left" | "right";
+  /** 菜单按窗口定位，不被滚动列表裁剪（侧栏会话行用）；列表一滚动就关上，免得菜单和按钮错开。 */
+  fixed?: boolean;
   children: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const fit = useMenuFit(ref, open, []);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const fit = useMenuFit(ref, open, [], fixed, align, menuRef);
   useEffect(() => {
     if (!open) return;
     const onDown = (event: MouseEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (!ref.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    };
+    // 只有包含按钮的列表滚动时才关；消息流自动贴底之类别处的滚动不管。
+    const onScroll = (event: Event) => {
+      const target = event.target;
+      if (ref.current && target instanceof Node && target.contains(ref.current)) setOpen(false);
     };
     addEventListener("mousedown", onDown);
-    return () => removeEventListener("mousedown", onDown);
-  }, [open]);
+    if (fixed) addEventListener("scroll", onScroll, true);
+    return () => {
+      removeEventListener("mousedown", onDown);
+      removeEventListener("scroll", onScroll, true);
+    };
+  }, [open, fixed]);
   const close = () => setOpen(false);
   return (
     <div
@@ -157,11 +171,16 @@ export function Dropdown({ button, label, className, menuClass, align = "right",
       <button type="button" className="dd-btn" aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} onClick={(event) => { event.stopPropagation(); setOpen(!open); }}>
         {button}
       </button>
-      {open ? (
-        <div className={`menu${align === "left" ? " left" : ""}${menuClass ? ` ${menuClass}` : ""}`} role="menu" style={fit}>
-          {children(close)}
-        </div>
-      ) : null}
+      {open ? (() => {
+        const menu = (
+          <div ref={menuRef} className={`menu${align === "left" ? " left" : ""}${menuClass ? ` ${menuClass}` : ""}`} role="menu" style={fit}>
+            {children(close)}
+          </div>
+        );
+        // 按窗口定位的菜单放到 body 下：侧栏列表的 mask-image 会连 fixed 的子元素一起裁掉。
+        // React 事件照常沿组件树冒泡，Esc 仍由外层处理。
+        return fixed ? createPortal(menu, document.body) : menu;
+      })() : null}
     </div>
   );
 }

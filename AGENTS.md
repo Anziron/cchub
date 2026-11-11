@@ -84,4 +84,5 @@
 - 一轮进行中写进 FIFO 的用户消息，CLI 会在下一个工具结果之后插进同一轮（回传同一 `uuid`、带 `isReplay`，只出一个 `result`）→ “插入”直接发，看到回传才算送达；“等结束”留在桌面端（`queue.ts`），中断或进程结束时放回输入框，不自动发。
 - 设备列表来自 `cc-workspace status`（登记表 + `tailscale status --json` 的 `Online`），hubd 缓存 15 秒；会话里的离线提示仍靠挂载探测（`Device` 消息），两者不一致时侧栏显示黄色“目录读不到”。
 - 被测模块（`web/test/` 直接用 `node --test` 跑）之间只能有类型导入，导入函数会因缺 `.ts` 扩展名失败 → 小工具函数在模块内重写或放进 `model.ts`。Windows 上 `node --test test/` 不认目录，要写 `test/*.test.ts`。
+- 侧栏会话行的菜单曾往上弹并被列表裁掉：判断上下空间时只按窗口算，而 `.side-scroll` 会裁剪（它的 `-webkit-mask-image` 连 `position: fixed` 的子元素也裁）→ `useMenuFit` 按最近的裁剪祖先算；侧栏行菜单用 `Dropdown` 的 `fixed`，经 portal 放到 `body` 下按窗口定位，所在列表滚动时关闭。
 - 弹出菜单统一用 `Common.tsx` 的 `Dropdown`（外层 `.dd` 是 `position: relative`）→ 要绝对定位的下拉要写 `.dd.xxx`，只写 `.xxx` 会被 `.dd` 覆盖，行高被撑开。

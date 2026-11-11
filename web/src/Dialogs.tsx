@@ -178,19 +178,50 @@ export function WorkspaceDialog({ store }: { store: Store }) {
  * 弹出菜单放在按钮上方还是下方，最高多高。新会话页的输入框在窗口中间，
  * 上方空间不够时菜单会被 `.main` 的 `overflow: hidden` 裁掉，滚也滚不到被裁的部分。
  */
-export function useMenuFit(anchor: RefObject<HTMLElement | null>, open: boolean, deps: unknown[]): CSSProperties {
+/**
+ * 菜单能显示的上下范围：最近一个会裁剪内容的祖先（`overflow` 不是 visible，如侧栏的会话列表、`.main`），
+ * 再和窗口取交集。只按窗口算时，侧栏第二行的菜单会以为上方够放，结果被列表裁掉。
+ */
+function clipBounds(el: HTMLElement): { top: number; bottom: number } {
+  let top = 0;
+  let bottom = innerHeight;
+  for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (style.overflowY === "visible" && style.overflowX === "visible") continue;
+    const rect = node.getBoundingClientRect();
+    top = Math.max(top, rect.top);
+    bottom = Math.min(bottom, rect.bottom);
+    break;
+  }
+  return { top, bottom };
+}
+
+/**
+ * `fixed`：菜单按窗口定位（`position: fixed`），不受滚动列表裁剪，用于侧栏的会话行；
+ * 此时按窗口判断上下，`align` 决定和按钮的哪一边对齐。
+ */
+export function useMenuFit(anchor: RefObject<HTMLElement | null>, open: boolean, deps: unknown[], fixed = false, align: "left" | "right" = "right", menuRef?: RefObject<HTMLElement | null>): CSSProperties {
   const [fit, setFit] = useState<CSSProperties>({});
   useLayoutEffect(() => {
     if (!open || !anchor.current) return;
     const measure = () => {
       const box = anchor.current!.getBoundingClientRect();
-      const bounds = anchor.current!.closest(".main")?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight };
+      const bounds = fixed ? { top: 0, bottom: innerHeight } : clipBounds(anchor.current!);
       const gap = 6 + 8;
       const above = box.top - bounds.top - gap;
       const below = bounds.bottom - box.bottom - gap;
-      const menu = anchor.current!.querySelector<HTMLElement>(".menu");
+      // 放到 body 下的菜单不在按钮里面，由调用方传进来。
+      const menu = menuRef?.current ?? anchor.current!.querySelector<HTMLElement>(".menu");
       const need = menu ? menu.scrollHeight : 0;
-      const down = above < need && below > above;
+      // 按窗口定位时优先往下（侧栏行菜单的自然方向）；其余优先往上（输入框上的菜单）。
+      const down = fixed ? below >= need || below > above : above < need && below > above;
+      if (fixed) {
+        const side = align === "left" ? { left: box.left, right: "auto" } : { right: innerWidth - box.right, left: "auto" };
+        setFit(down
+          ? { position: "fixed", top: box.bottom + 6, bottom: "auto", maxHeight: below, ...side }
+          : { position: "fixed", bottom: innerHeight - box.top + 6, top: "auto", maxHeight: above, ...side });
+        return;
+      }
       setFit(down ? { top: "calc(100% + 6px)", bottom: "auto", maxHeight: below } : { maxHeight: above });
     };
     measure();

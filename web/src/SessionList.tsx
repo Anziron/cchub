@@ -38,7 +38,7 @@ function SessionRow({ store, session, project }: { store: Store; session: Sessio
           {waiting ? <small>{askHint(firstAsk(session.thread))}</small> : null}
         </span>
       </button>
-      <Dropdown className="row-more" label={`${session.title} 的操作`} button={<Icon name="more" size={14} />}>
+      <Dropdown className="row-more" fixed label={`${session.title} 的操作`} button={<Icon name="more" size={14} />}>
         {(close) => <SessionMenu store={store} session={session} close={close} />}
       </Dropdown>
     </div>
