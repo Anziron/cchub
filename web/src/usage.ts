@@ -28,6 +28,8 @@ export interface UsageDay {
   hours: number[];
   /** 各模型每个本地小时的 token（四项之和），长度 24；旧版统计命令没有。 */
   hourTokens?: Record<string, number[]>;
+  /** 各项目目录里各模型的四项；旧版统计命令没有，这时项目只能按回复数排。 */
+  projectTokens?: Record<string, Record<string, TokenQuad>>;
 }
 
 /** 柱状图显示什么：按模型堆叠的 token，或请求（回复）次数。 */
@@ -81,6 +83,11 @@ export function modelLabel(id: string): string {
 
 function projectLabel(cwd: string): string {
   return cwd.split("/").filter(Boolean).pop() ?? (cwd ? "/" : "未知");
+}
+
+/** 设备上的项目挂载在 `/mnt/<设备>/...`，取出设备名；服务器本地目录没有。 */
+function projectDevice(cwd: string): string | undefined {
+  return /^\/mnt\/([^/]+)\//.exec(cwd)?.[1];
 }
 
 /**
@@ -191,7 +198,40 @@ export interface UsageSummary {
   peakHour: number | null;
   /** `cost`：按标价折算的美元，不认识的模型为 null。 */
   models: (Ranked & { tokens: number; cost: number | null })[];
-  projects: (Ranked & { messages: number })[];
+  /**
+   * 有 `projectTokens` 时按 token 排，`share` 是 token 占比；否则按回复数排（`tokens` 为 0、`models` 为空）。
+   * `cost`：各模型折算费用之和，全是不认识的模型时为 null；`models`：各模型 token，多到少。
+   */
+  projects: (Ranked & { device?: string; messages: number; tokens: number; cost: number | null; models: [string, number][] })[];
+}
+
+function projectUsage(list: UsageDay[]): UsageSummary["projects"] {
+  const messages = sumBy(list, "projects");
+  const quads = new Map<string, Map<string, TokenQuad>>();
+  for (const d of list) {
+    for (const [cwd, models] of Object.entries(d.projectTokens ?? {})) {
+      const byModel = quads.get(cwd) ?? new Map<string, TokenQuad>();
+      quads.set(cwd, byModel);
+      for (const [model, q] of Object.entries(models)) {
+        const sum = byModel.get(model) ?? [0, 0, 0, 0];
+        for (let i = 0; i < 4; i += 1) sum[i] += q[i];
+        byModel.set(model, sum);
+      }
+    }
+  }
+  const base = (key: string, share: number) => ({ key, name: projectLabel(key), device: projectDevice(key), share, messages: messages.get(key) ?? 0 });
+  if (!quads.size) return ranked(messages).map(([key, , share]) => ({ ...base(key, share), tokens: 0, cost: null, models: [] }));
+  const tokens = new Map([...quads].map(([cwd, byModel]) => [cwd, [...byModel.values()].reduce((sum, q) => sum + quadTotal(q), 0)]));
+  return ranked(tokens).filter(([, n]) => n > 0).map(([key, n, share]) => {
+    const byModel = [...quads.get(key)!];
+    const costs = byModel.map(([model, q]) => modelCost(model, q)).filter((c): c is number => c != null);
+    return {
+      ...base(key, share),
+      tokens: n,
+      cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null,
+      models: byModel.map(([model, q]): [string, number] => [model, quadTotal(q)]).filter(([, t]) => t > 0).sort((a, b) => b[1] - a[1]),
+    };
+  });
 }
 
 function sumBy(days: UsageDay[], field: "models" | "projects"): Map<string, number> {
@@ -240,7 +280,7 @@ export function summarize(days: UsageDay[], range: UsageRange, today: string): U
     streak,
     peakHour: peak > 0 ? hours.indexOf(peak) : null,
     models: ranked(sumBy(list, "models")).filter(([, tokens]) => tokens > 0).map(([key, tokens, share]) => ({ key, name: modelLabel(key), tokens, share, cost: modelCost(key, quads.get(key) ?? [0, 0, 0, 0]) })),
-    projects: ranked(sumBy(list, "projects")).map(([key, messages, share]) => ({ key, name: projectLabel(key), messages, share })),
+    projects: projectUsage(list),
   };
 }
 

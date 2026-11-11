@@ -22,7 +22,9 @@ $shots = @(
   @("usage-light", "/?s=rich&theme=light&pane=usage&range=30d", "1440,900"),
   @("usage-dark", "/?theme=dark&pane=usage&range=30d", "1200,800"),
   @("usage-cost", "/?theme=light&pane=usage&range=30d&models=cost", "1200,1200"),
-  @("usage-small","/?s=rich&theme=light&pane=usage&range=30d", "900,460"),
+  @("usage-proj-tokens", "/?theme=dark&pane=usage&range=30d&models=tokens", "1200,1200"),
+  @("usage-proj-old", "/?scene=usage-old&theme=light&pane=usage&range=30d&models=tokens", "1200,1200"),
+  @("usage-small", "/?s=rich&theme=light&pane=usage&range=30d", "900,460"),
   @("usage-hover-heat", "/?theme=light&pane=usage&range=30d&hover=.heat-grid%20i.today", "1200,800"),
   @("usage-hover-bar", "/?theme=dark&pane=usage&range=30d&hover=.bars%20.bar:nth-last-child(2)", "1200,800"),
   @("usage-today", "/?theme=light&pane=usage&range=today&hover=.bars%20.bar.today", "1200,800")

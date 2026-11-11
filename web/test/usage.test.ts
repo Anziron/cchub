@@ -79,6 +79,24 @@ test("排行：模型按 token、项目按回复数排序，占比相对总数",
   assert.deepEqual(s.projects.map((p) => [p.name, p.messages]), [["b", 4], ["a", 2], ["未知", 2]]);
 });
 
+test("项目用量：有 projectTokens 时按 token 排序，带各模型 token、折算费用和设备名", () => {
+  const M = 1_000_000;
+  const days = [
+    day("2026-11-10", 6, { projects: { "/mnt/pc/d/a": 5, "/root/notes": 1 }, projectTokens: {
+      "/mnt/pc/d/a": { "claude-sonnet-5-5": [0, 0, 0, M] },
+      "/root/notes": { "claude-opus-5-5": [M, 0, 0, 0], "claude-haiku-5-5": [0, 0, 0, M] },
+    } }),
+    day("2026-11-11", 1, { projects: { "/mnt/pc/d/a": 1 }, projectTokens: { "/mnt/pc/d/a": { "claude-opus-5-5": [0, 0, 0, M] } } }),
+  ];
+  const s = summarize(days, "all", "2026-11-11");
+  // a：2M token（1M Sonnet 缓存读 $0.1 + 1M Opus 缓存读 $0.2）；notes：2M token（Opus 输入 $4 + Haiku 缓存读 $0.01）。同量时先出现的在前。
+  assert.deepEqual(s.projects.map((p) => [p.name, p.device, p.tokens, p.share, p.messages]), [["a", "pc", 2 * M, 0.5, 6], ["notes", undefined, 2 * M, 0.5, 1]]);
+  assert.ok(Math.abs((s.projects[0].cost ?? 0) - 0.3) < 1e-9);
+  assert.ok(Math.abs((s.projects[1].cost ?? 0) - 4.01) < 1e-9);
+  // 各模型 token 按多到少，柱子按这个分段着色。
+  assert.deepEqual(s.projects[1].models, [["claude-opus-5-5", M], ["claude-haiku-5-5", M]]);
+});
+
 test("每日序列：7 天补齐空白日，前 3 个模型以外并入“其他”；“全部”按周（周一开始）合并", () => {
   const models: UsageDay["models"] = { "claude-opus-5-5": [50, 0, 0, 0], "claude-sonnet-5-5": [0, 40, 0, 0], "claude-haiku-5-5": [0, 0, 30, 0], "claude-fable-5-2": [0, 0, 0, 20] };
   const days = [day("2026-11-09", 1, { models }), day("2026-11-11", 1, { models: { "claude-opus-5-5": [4, 3, 2, 1] } })];

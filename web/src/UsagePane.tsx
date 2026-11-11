@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { formatTokens, quotaPercent, resetText, resetWhen } from "./Common";
 import { Icon } from "./Icon";
 import type { Store } from "./store";
-import { addDays, dailySeries, heatmap, hourlySeries, localDate, OTHER, previousParts, quotaPace, summarize, type Bar, type TokenParts, type UsageDay, type UsageMetric, type UsageRange, type UsageSummary } from "./usage";
+import { addDays, dailySeries, heatmap, hourlySeries, localDate, modelLabel, OTHER, previousParts, quotaPace, summarize, type Bar, type TokenParts, type UsageDay, type UsageMetric, type UsageRange, type UsageSummary } from "./usage";
 
 const RANGES: [UsageRange, string][] = [["today", "今天"], ["7d", "7 天"], ["30d", "30 天"], ["all", "全部"]];
 const RANGE_KEY = "cchub.usageRange";
@@ -243,17 +243,28 @@ type ModelView = "tokens" | "cost";
 /** 美元金额：小额多留两位小数。 */
 const dollars = (n: number) => `$${n >= 100 ? n.toFixed(0) : n >= 1 ? n.toFixed(2) : n.toFixed(3)}`;
 
+interface ViewProps {
+  view: ModelView;
+  setView: (value: ModelView) => void;
+  /** 模型 ID → 颜色。 */
+  colors: Map<string, string>;
+}
+
+/** token / 费用切换。常用模型和常用项目各放一个，状态共用，切一处两处一起变。 */
+function ViewToggle({ view, setView }: Pick<ViewProps, "view" | "setView">) {
+  return (
+    <span className="seg small" role="radiogroup" aria-label="按 token 或费用">
+      {VIEWS.map(([value, label]) => (
+        <button key={value} type="button" role="radio" aria-checked={view === value} className={view === value ? "on" : undefined} onClick={() => setView(value)}>{label}</button>
+      ))}
+    </span>
+  );
+}
+
 /** 常用模型：可切换 token 和按 API 标价折算的费用。 */
-function ModelRanking({ models }: { models: UsageSummary["models"] }) {
-  const [view, setViewState] = useState<ModelView>(() => (localStorage.getItem(VIEW_KEY) === "cost" ? "cost" : "tokens"));
-  const setView = (value: ModelView) => {
-    setViewState(value);
-    localStorage.setItem(VIEW_KEY, value);
-  };
+function ModelRanking({ models, view, setView, colors: color }: { models: UsageSummary["models"] } & ViewProps) {
   if (!models.length) return null;
   const totalCost = models.reduce((sum, m) => sum + (m.cost ?? 0), 0);
-  // 颜色和柱状图一致：按 token 排名，前 3 个用系列色，其余灰色。切到费用时颜色跟着模型走，不跟名次。
-  const color = new Map(models.map((m, i) => [m.key, i < 3 ? `var(--series-${i + 1})` : "var(--faint)"]));
   const rows = view === "tokens"
     ? models.slice(0, 5).map((m) => ({ key: m.key, name: m.name, share: m.share, value: formatTokens(m.tokens) }))
     : [...models].sort((a, b) => (b.cost ?? -1) - (a.cost ?? -1)).slice(0, 5).map((m) => ({
@@ -266,11 +277,7 @@ function ModelRanking({ models }: { models: UsageSummary["models"] }) {
     <>
       <h4 className="rank-head">
         常用模型
-        <span className="seg small">
-          {VIEWS.map(([value, label]) => (
-            <button key={value} type="button" role="radio" aria-checked={view === value} className={view === value ? "on" : undefined} onClick={() => setView(value)}>{label}</button>
-          ))}
-        </span>
+        <ViewToggle view={view} setView={setView} />
       </h4>
       <div className="rank">
         {rows.map((row) => (
@@ -297,6 +304,51 @@ function ModelRanking({ models }: { models: UsageSummary["models"] }) {
   );
 }
 
+/**
+ * 常用项目：额度花在哪些项目上。和常用模型共用 token / 费用切换；条按模型分段着色，看得出项目主要用哪个模型。
+ * 旧版统计命令没有按项目的 token，这时只能按回复数排，并提示更新。
+ */
+function ProjectRanking({ projects, view, setView, colors }: { projects: UsageSummary["projects"] } & ViewProps) {
+  if (!projects.length) return null;
+  const hasTokens = projects.some((p) => p.tokens > 0);
+  const totalCost = projects.reduce((sum, p) => sum + (p.cost ?? 0), 0);
+  const cost = hasTokens && view === "cost";
+  const rows = (cost ? [...projects].sort((a, b) => (b.cost ?? -1) - (a.cost ?? -1)) : projects).slice(0, 5).map((p) => ({
+    ...p,
+    share: cost ? (totalCost && p.cost ? p.cost / totalCost : 0) : p.share,
+    value: !hasTokens ? `${p.messages} 次回复` : cost ? (p.cost == null ? "—" : dollars(p.cost)) : formatTokens(p.tokens),
+  }));
+  const top = rows[0]?.share || 1;
+  const breakdown = (p: (typeof rows)[number]) =>
+    [p.key || "未知目录", ...p.models.map(([model, n]) => `${modelLabel(model)}  ${formatTokens(n)}`)].join("\n");
+  return (
+    <>
+      <h4 className="rank-head">
+        常用项目
+        {hasTokens ? <ViewToggle view={view} setView={setView} /> : <span className="rank-unit">按回复次数；更新统计命令后可看 token</span>}
+      </h4>
+      <div className="rank">
+        {rows.map((row) => (
+          <div key={row.key} className="rank-row" title={breakdown(row)}>
+            <span className="rank-name">{row.name}{row.device ? <small>{row.device}</small> : null}</span>
+            <span className="rank-bar">
+              {hasTokens ? (
+                <span className="rank-stack" style={{ width: `${Math.max(2, (row.share / top) * 100)}%` }}>
+                  {row.models.map(([model, n]) => <i key={model} style={{ flexGrow: n, background: colors.get(model) ?? "var(--faint)" }} />)}
+                </span>
+              ) : (
+                <i style={{ width: `${Math.max(2, (row.share / top) * 100)}%` }} />
+              )}
+            </span>
+            <span className="rank-pct">{row.share > 0 ? percent(row.share) : ""}</span>
+            <span className="num">{row.value}</span>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 /** 使用情况：额度，以及服务器上全部会话记录的统计（由 `cchub-usage` 生成）。 */
 export function UsagePane({ store }: { store: Store }) {
   const [range, setRangeState] = useState<UsageRange>(storedRange);
@@ -315,7 +367,15 @@ export function UsagePane({ store }: { store: Store }) {
   const today = localDate(new Date());
   const summary = stats ? summarize(stats.days, range, today) : null;
   const previous = stats ? previousParts(stats.days, range, today) : null;
-  const previousLabel = `前 ${range === "7d" ? 7 : 30} 天`;  return (
+  const previousLabel = `前 ${range === "7d" ? 7 : 30} 天`;
+  const [view, setViewState] = useState<ModelView>(() => (localStorage.getItem(VIEW_KEY) === "cost" ? "cost" : "tokens"));
+  const setView = (value: ModelView) => {
+    setViewState(value);
+    localStorage.setItem(VIEW_KEY, value);
+  };
+  // 颜色和柱状图一致：模型按 token 排名，前 3 个用系列色，其余灰色。切到费用、或在项目里，颜色都跟着模型走。
+  const colors = new Map((summary?.models ?? []).map((m, i) => [m.key, i < 3 ? `var(--series-${i + 1})` : "var(--faint)"]));
+  return (
     <>
       <h4>额度</h4>
       <div className="quota-card">
@@ -341,8 +401,8 @@ export function UsagePane({ store }: { store: Store }) {
           <div className="usage-sum parts">
             {PARTS.map(([key, label]) => (
               <div key={key}>
-                <b>{formatTokens(summary.parts[key])}<Delta now={summary.parts[key]} before={previous?.[key]} title={`比${previousLabel}（${formatTokens(previous?.[key] ?? 0)}）`} /></b>
-                <span>{label}</span>
+                <b>{formatTokens(summary.parts[key])}</b>
+                <span>{label}<Delta now={summary.parts[key]} before={previous?.[key]} title={`比${previousLabel}（${formatTokens(previous?.[key] ?? 0)}）`} /></span>
               </div>
             ))}
           </div>
@@ -356,7 +416,9 @@ export function UsagePane({ store }: { store: Store }) {
           {!summary.messages ? <p className="empty">这段时间没有使用。</p> : <Bars days={stats.days} range={range} today={today} metric={metric} />}
           <h4>活跃</h4>
           <Heatmap days={stats.days} today={today} />
-          <ModelRanking models={summary.models} />        </>
+          <ModelRanking models={summary.models} view={view} setView={setView} colors={colors} />
+          <ProjectRanking projects={summary.projects} view={view} setView={setView} colors={colors} />
+        </>
       )}
     </>
   );

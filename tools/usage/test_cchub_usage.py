@@ -59,8 +59,27 @@ class UsageTest(Base):
         self.assertEqual(d["messages"], 2)
         self.assertEqual(d["input"], 2)
         self.assertEqual(d["cacheRead"], 2000)
-        self.assertEqual(d["models"], {"claude-opus-5-5": 2 * 111})
+        self.assertEqual(d["models"], {"claude-opus-5-5": [2, 20, 200, 2000]})
         self.assertEqual(d["projects"], {"/p": 2})
+
+    def test_project_tokens_by_model(self):
+        # 每个项目各模型的四项。桶按文件分，一个会话文件通常只有一个目录，这时是精确的。
+        self.write(self.path("a.jsonl"), line("m1", cwd="/a") + line("m2", cwd="/a"))
+        self.write(self.path("b.jsonl"), line("m3", cwd="/b", model="claude-sonnet-5-5"))
+        d = self.run_tool()["days"][0]
+        self.assertEqual(d["projectTokens"], {
+            "/a": {"claude-opus-5-5": [2, 20, 200, 2000]},
+            "/b": {"claude-sonnet-5-5": [1, 10, 100, 1000]},
+        })
+
+    def test_project_tokens_split_when_bucket_has_two_dirs(self):
+        # 同一个文件同一小时出现两个目录：按回复数把桶里各模型的 token 分给它们（近似）。
+        self.write(self.path("a.jsonl"), line("m1", cwd="/a") + line("m2", cwd="/b") + line("m3", cwd="/b"))
+        d = self.run_tool()["days"][0]
+        self.assertEqual(d["projectTokens"], {
+            "/a": {"claude-opus-5-5": [1, 10, 100, 1000]},
+            "/b": {"claude-opus-5-5": [2, 20, 200, 2000]},
+        })
 
     def test_subagent_counts_tokens_not_sessions(self):
         self.write(self.path("a.jsonl"), line("m1"))
@@ -182,11 +201,11 @@ class UsageTest(Base):
         self.write(self.path("a.jsonl"), line("m1"))
         r = self.run_tool(tz=480)
         self.assertEqual(set(r), {"version", "generatedAt", "tzOffset", "days"})
-        self.assertEqual(r["version"], 1)
+        self.assertEqual(r["version"], 2)
         self.assertIsInstance(r["generatedAt"], int)
         d = r["days"][0]
         self.assertEqual(set(d), {"date", "messages", "sessions", "input", "output", "cacheWrite",
-                                  "cacheRead", "models", "projects", "hours"})
+                                  "cacheRead", "models", "projects", "hours", "hourTokens", "projectTokens"})
         self.assertEqual(len(d["hours"]), 24)
         self.assertEqual(sum(d["hours"]), d["messages"])
 

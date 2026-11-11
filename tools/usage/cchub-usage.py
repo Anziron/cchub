@@ -235,6 +235,8 @@ def build_output(cache, tz):
                     "models": {}, "projects": {}, "hours": [0] * 24,
                     # 各模型每个本地小时的 token（四项之和），“今天”的柱状图用。
                     "hourTokens": {},
+                    # 各项目目录里各模型的四项，“常用项目”用。
+                    "projectTokens": {},
                 }
             n = b["n"]
             d["messages"] += n[M]
@@ -249,11 +251,26 @@ def build_output(cache, tz):
                 d["hourTokens"].setdefault(k, [0] * 24)[lt.hour] += v[0] + v[1] + v[2] + v[3]
             for k, v in b["projects"].items():
                 d["projects"][k] = d["projects"].get(k, 0) + v
+            # 缓存里只按项目记了回复数。桶按文件和小时分，一个会话文件通常只有一个目录，
+            # 这时整桶的 token 都归它（精确）；偶尔有多个目录时按回复数分摊（近似）。
+            # 在输出时推算，缓存格式不变，已被 CLI 清理的会话也有数据。
+            total = sum(b["projects"].values())
+            for pk, count in b["projects"].items():
+                share = count / total if total else 0
+                pt = d["projectTokens"].setdefault(pk, {})
+                for k, v in b["models"].items():
+                    m = pt.setdefault(k, [0, 0, 0, 0])
+                    for x in range(4):
+                        m[x] += v[x] * share
             d["hours"][lt.hour] += n[M]
             if ent.get("main") and n[M] > 0:
                 day_sessions.setdefault(date, set()).add(fi)
     for date, s in day_sessions.items():
         days[date]["sessions"] = len(s)
+    for d in days.values():
+        for pt in d["projectTokens"].values():
+            for k, m in pt.items():
+                pt[k] = [round(v) for v in m]
     return {
         "version": OUTPUT_VERSION,
         "generatedAt": int(time.time()),

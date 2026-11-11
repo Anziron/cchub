@@ -724,11 +724,11 @@ a.link:hover { text-decoration-thickness: 2px; }
 .usage-sum { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 8px; margin: 2px 0 4px; }
 .usage-sum div { display: flex; flex-direction: column; min-width: 0; }
 .usage-sum b { overflow: hidden; color: var(--text); font: 500 17px/1.3 var(--sans); font-variant-numeric: tabular-nums; white-space: nowrap; text-overflow: ellipsis; }
-.usage-sum span { color: var(--muted); font-size: 11.5px; }
+.usage-sum span { overflow: hidden; color: var(--muted); font-size: 11.5px; white-space: nowrap; text-overflow: ellipsis; }
 .usage-sum.parts { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 6px; margin-top: 2px; }
 .usage-sum.parts b { font-size: 16px; }
 /* 和上期比的涨跌：中性灰，不用红绿（用得多不一定是坏事） */
-.usage-sum .delta { margin-left: 4px; color: var(--faint); font-size: 10.5px; font-weight: 400; font-style: normal; font-variant-numeric: tabular-nums; }
+.usage-sum .delta { display: block; margin-top: 1px; color: var(--faint); font-size: 10.5px; font-weight: 400; font-style: normal; font-variant-numeric: tabular-nums; }
 .chart-head { display: flex; justify-content: flex-end; margin: 16px 0 4px; }
 .seg.small button { height: 20px; padding: 0 8px; font-size: 11.5px; }
 .rank-head { display: flex; align-items: center; gap: 6px; }
@@ -771,6 +771,11 @@ a.link:hover { text-decoration-thickness: 2px; }
 .heat-grid i.today { box-shadow: 0 0 0 1px var(--text-2); }
 .heat-grid i[data-i]:hover { box-shadow: 0 0 0 1.5px var(--text); }
 /* 常用模型：每行色点、相对条、占比和数值，底部合计；模型颜色与柱状图同系 */
+.rank-name small { margin-left: 6px; color: var(--faint); font-size: 11px; }
+.rank-unit { margin-left: auto; color: var(--faint); font-weight: 400; letter-spacing: 0; }
+/* 项目的条：按模型分段，段间 1px 缝 */
+.rank-stack { display: flex; gap: 1px; height: 100%; overflow: hidden; border-radius: 3px; }
+.rank-bar .rank-stack i { flex-basis: 0; min-width: 1px; border-radius: 0; opacity: .85; }
 .rank-total { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; padding-top: 7px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .rank-note { overflow: hidden; color: var(--faint); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
 .rank-total .num { margin-left: auto; color: var(--text); font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }

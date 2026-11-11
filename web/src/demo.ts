@@ -52,6 +52,18 @@ function demoModels(messages: number, weights: Record<string, number>): Record<s
   );
 }
 
+/** 假的按项目用量：每个模型的 token 按各项目的偏好分给三个项目，看得出项目之间的模型构成不同。 */
+const DEMO_PROJECT_MIX: Record<string, Record<string, number>> = {
+  "/mnt/pc/d/demo-api": { "claude-opus-5-5": 0.7, "claude-sonnet-5-5": 0.2, "claude-haiku-5-5": 0.1, "claude-fable-5-2": 0.6 },
+  "/mnt/mac-mini/Users/dev/cchub": { "claude-opus-5-5": 0.25, "claude-sonnet-5-5": 0.7, "claude-haiku-5-5": 0.3, "claude-fable-5-2": 0.4 },
+  "/root/notes": { "claude-opus-5-5": 0.05, "claude-sonnet-5-5": 0.1, "claude-haiku-5-5": 0.6, "claude-fable-5-2": 0 },
+};
+function demoProjectTokens(models: Record<string, [number, number, number, number]>) {
+  return Object.fromEntries(Object.entries(DEMO_PROJECT_MIX).map(([cwd, mix]) => [cwd, Object.fromEntries(
+    Object.entries(models).filter(([model]) => mix[model]).map(([model, q]) => [model, q.map((v) => Math.round(v * mix[model])) as [number, number, number, number]]),
+  )]));
+}
+
 const user = (text: string) =>
   JSON.stringify({ type: "user", uuid: crypto.randomUUID(), timestamp: new Date(Date.now() - 12000).toISOString(), message: { role: "user", content: text } });
 
@@ -162,12 +174,14 @@ export const demoHub: Hub = {
         const hours = isToday
           ? Array.from({ length: 24 }, (_, h) => (h <= today.getHours() && h >= 8 ? 2 + ((h * 7) % 9) : 0))
           : Array.from({ length: 24 }, (_, h) => (h >= 9 && h <= 22 && messages ? Math.round(messages / 14) : 0));
+        const models = messages ? demoModels(messages, { "claude-opus-5-5": 3200, "claude-sonnet-5-5": 1200, "claude-haiku-5-5": (seed % 3) * 300, ...(seed > 8 ? { "claude-fable-5-2": 200 } : {}) }) : {};
         return {
           date: new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10),
           messages, sessions: messages ? 1 + (seed % 4) : 0,
           input: messages * 3, output: messages * 900, cacheWrite: messages * 4000, cacheRead: messages * 60000,
-          models: messages ? demoModels(messages, { "claude-opus-5-5": 3200, "claude-sonnet-5-5": 1200, "claude-haiku-5-5": (seed % 3) * 300, ...(seed > 8 ? { "claude-fable-5-2": 200 } : {}) }) : {},
-          projects: messages ? { "/mnt/pc/d/demo-api": Math.round(messages * 0.6), "/mnt/pc/d/cchub": Math.round(messages * 0.3), "/root/notes": Math.round(messages * 0.1) } : {},
+          models,
+          projects: messages ? { "/mnt/pc/d/demo-api": Math.round(messages * 0.6), "/mnt/mac-mini/Users/dev/cchub": Math.round(messages * 0.3), "/root/notes": Math.round(messages * 0.1) } : {},
+          projectTokens: scene === "usage-old" ? undefined : demoProjectTokens(models),
           hours,
           hourTokens: isToday ? {
             "claude-opus-5-5": hours.map((n) => n * 52000),
