@@ -27,6 +27,7 @@ const PATHS: Record<string, string> = {
   diff: "M5 2.500v7M1.500 6h7M8.500 12.500h6",
   info: "M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2ZM8 7.300v3.700M8 5v.01",
   plan: "M4 2.500h8v11H4zM6 5.500h4M6 8h4M6 10.500h2.500",
+  pin: "M5.500 2.500h5M6.500 2.500v3.500L4.500 9h7L9.500 6V2.500M8 9v4.500",
 };
 
 export function Icon({ name, size = 16, className }: { name: string; size?: number; className?: string }) {

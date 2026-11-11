@@ -15,6 +15,7 @@ function ChangeFile({ file, name }: { file: FileChange; name: string }) {
     <details className="change" onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary title={file.path}>
         <Icon name="chev" size={11} className="chev" />
+        <Icon name="file" size={13} className="file-icon" />
         <span className="path"><b>{name}</b></span>
         <span className="added">+{file.added}</span>
         <span className="removed">−{file.removed}</span>
@@ -32,7 +33,7 @@ function ChangeGroupView({ group, single }: { group: ChangeGroup; single: boolea
     <details className="change-group" open>
       <summary title={group.dir || "项目根目录"}>
         <Icon name="chev" size={11} className="chev" />
-        <Icon name="folder" size={13} />
+        <Icon name="folder" size={13} className="folder-icon" />
         <span className={`group-dir${group.outside ? " far" : ""}`}><bdi>{group.dir || "项目根目录"}</bdi></span>
         <span className="count">{group.files.length}</span>
       </summary>

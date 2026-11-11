@@ -10,6 +10,7 @@ $shots = @(
   @("rich-light", "/?s=rich&theme=light&pane=", "1440,900"),
   @("rich-dark", "/?s=rich&theme=dark&pane=", "1440,900"),
   @("rich-changes", "/?s=rich&theme=light&pane=changes", "1440,900"),
+  @("pin-on", "/?s=rich&theme=dark&pane=&click=.icon.pin", "1200,700"),
   @("tasks-1200", "/?s=rich&scene=tasks&theme=light&pane=tasks", "1200,800"),
   @("welcome", "/?theme=light&pane=", "1440,900"),
   @("approval", "/?s=approval&theme=light&pane=", "1200,800"),

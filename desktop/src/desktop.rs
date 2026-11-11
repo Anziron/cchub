@@ -85,6 +85,13 @@ fn open_url(url: String) -> Result<(), String> {
     command.spawn().map(drop).map_err(|e| e.to_string())
 }
 
+/// 窗口置顶。窗口关到托盘再打开是新窗口，由界面启动时按保存的选择再设一次。
+#[tauri::command]
+fn set_on_top(app: AppHandle, on: bool) -> Result<(), String> {
+    let window = app.get_webview_window(MAIN).ok_or("窗口不存在")?;
+    window.set_always_on_top(on).map_err(|e| e.to_string())
+}
+
 /// 第二个实例会多一条连接和一份通知，所以只唤起已有实例的窗口后退出。
 fn listen_for_reopen(app: &AppHandle, listener: TcpListener) {
     let app = app.clone();
@@ -114,7 +121,8 @@ pub(crate) fn run() {
         .invoke_handler(tauri::generate_handler![
             crate::hub_connect,
             crate::hub_send,
-            open_url
+            open_url,
+            set_on_top
         ])
         .setup(move |app| {
             if let Some(listener) = instance {

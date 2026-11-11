@@ -9,6 +9,14 @@ export function openUrl(url: string): void {
   else window.open(url, "_blank", "noopener");
 }
 
+/** 只有桌面端能把窗口置顶。 */
+export const canPin = () => isTauri() && !isAndroid;
+
+/** 窗口总在最上面。走桌面端的 `set_on_top` 命令。 */
+export function setOnTop(on: boolean): Promise<void> {
+  return canPin() ? invoke<void>("set_on_top", { on }) : Promise.resolve();
+}
+
 /** 触屏上回车换行、不自动弹键盘。 */
 export const isTouch = matchMedia("(pointer: coarse)").matches;
 export const isAndroid = /Android/i.test(navigator.userAgent);

@@ -7,3 +7,4 @@ PLAN.md
 .cc/
 .claude/handoff.md
 desktop/gen/
+__pycache__/
