@@ -67,6 +67,7 @@
 - Android 上 Activity 销毁后，`run_mobile_plugin` 和页面发起的 IPC 都会让 wry 以 `no available activity` panic，进程直接退出 → 通知和状态走本地 socket 发给前台服务；界面销毁时同时销毁 WebView。
 - Android 上最后一个窗口销毁时 Tauri 会退出进程，要在 `ExitRequested` 里 `prevent_exit`；之后同一进程不能重建界面（白屏）→ 新 Activity 出现时由 `RestartActivity` 换一个干净的进程。
 - `hubd` 不推送会话列表，订阅原本全由界面发起 → 手机端用 `HubClient::watching` 定时取列表并自动订阅，否则后台收不到别处新开会话的审批。
+- `ui-redesign` 分支上 Android 冒烟测试偶发失败（“等不到通知：已连接”“重开后：进程不在了”等，同一份代码重跑能过，原因未查）→ 先看失败的代码是否碰了 Android 或连接，没碰就 `gh run rerun <id> --failed` 再判断。
 - `android-smoke.sh` 全绿不等于界面正常，曾经白屏也通过 → 要检查界面内容并看 `android-shots` 截图。`HUBD_CLAUDE_CMD` 里的路径必须是绝对路径，会话在别的目录启动。
 - 手机端 APK 由 CI 编译，产物是 `cchub-android`；`desktop/gen/` 不入库，Android 的清单和原生代码都放在 `desktop/android-bridge/android/`，由 Gradle 合并。
 - `ClientMsg::List` 不等进程启动 → `Start` 之后马上 `List` 可能看到 `running: false`，测试要重试。
