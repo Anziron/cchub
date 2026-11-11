@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { AppearanceMenu } from "./Dialogs";
 import type { Appearance } from "./appearance";
-import { askHint, Dropdown, MenuItem, rowState, sessionStatus, SessionMenu, STATE_ORDER, StateIcon } from "./Common";
+import { askHint, Dropdown, MenuItem, Meter, quotaPercent, resetText, resetWhen, rowState, sessionStatus, SessionMenu, STATE_ORDER, StateIcon } from "./Common";
 import { Icon } from "./Icon";
 import { firstAsk, isWaiting } from "./model";
-import { groupByDate, groupProjects, SERVER_GROUP } from "./sidebar";
+import { deviceStatus, groupByDate, groupProjects, SERVER_GROUP, type DeviceState } from "./sidebar";
 import { describeCwd, type Session, type Store } from "./store";
 
 type StatusFilter = "all" | "wait" | "running";
@@ -73,11 +73,52 @@ function Group({ store, id, label, sub, sessions, collapsed, toggle, withProject
   );
 }
 
+type QuotaWindow = Store["limits"]["fiveHour"];
+
+function QuotaLine({ label, window }: { label: string; window: QuotaWindow }) {
+  if (!window) return null;
+  const value = quotaPercent(window);
+  return (
+    <div className="quota-line" title={resetText(window)}>
+      <span>{label}</span>
+      <Meter value={value} />
+      <b>{value != null ? `${Math.round(value * 100)}%` : "—"}</b>
+      <small>{resetWhen(window)}</small>
+    </div>
+  );
+}
+
+const DEVICE_TITLE: Record<DeviceState, string> = {
+  online: "在线",
+  offline: "离线：这台设备上的会话读写文件会失败",
+  unknown: "没有运行中的会话，未检测",
+};
+
+/** 侧栏底部：额度（含重置时间）和各设备在线情况。 */
+function Status({ store }: { store: Store }) {
+  const { fiveHour, sevenDay } = store.limits;
+  const devices = deviceStatus([...store.sessions.values()].filter((s) => !s.archived));
+  if (!fiveHour && !sevenDay && !devices.length) return null;
+  return (
+    <div className="side-status">
+      <QuotaLine label="5 小时" window={fiveHour} />
+      <QuotaLine label="本周" window={sevenDay} />
+      {devices.length ? (
+        <div className="devices">
+          {devices.map((d) => <span key={d.device} className={`dev ${d.state}`} title={`${d.device}：${DEVICE_TITLE[d.state]}`}><i />{d.device}</span>)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function Footer({ store, look, onLook }: { store: Store; look: Appearance; onLook: (patch: Partial<Appearance>) => void }) {
   const conn = store.connection;
   const connClass = !store.url ? "bad" : conn === "connected" ? "ok" : conn === "disconnected" ? "bad" : "pending";
   const connText = !store.url ? "未连接服务器" : conn === "connected" ? "已连接" : conn === "disconnected" ? "已断开" : "重连中";
   return (
+    <>
+    <Status store={store} />
     <div className="side-foot">
       <button className={`conn ${connClass}`} title="连接服务器" onClick={() => store.toggleSettings()}>
         <i />
@@ -87,6 +128,7 @@ function Footer({ store, look, onLook }: { store: Store; look: Appearance; onLoo
       <AppearanceMenu look={look} onChange={onLook} />
       <button className="icon" aria-label="连接服务器" title="连接服务器" onClick={() => store.toggleSettings()}><Icon name="server" /></button>
     </div>
+    </>
   );
 }
 

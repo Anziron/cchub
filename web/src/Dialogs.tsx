@@ -201,8 +201,8 @@ export function useMenuFit(anchor: RefObject<HTMLElement | null>, open: boolean,
 }
 
 /**
- * 模型和推理强度（参考 Codex）：主视图是强度滑块，上面显示强度和当前模型，点模型名换成模型列表。
- * 拖滑块不关菜单；右上角恢复成模型默认强度。
+ * 模型和推理强度：上面一行是当前模型，点开换成模型列表；下面是强度滑块和档位名。
+ * 拖滑块、点档位都不关菜单；设过强度时标题行右边可以恢复默认。
  */
 export function ModelMenu({ models, model, effort, onChange, onEffort }: {
   models: ModelOption[];
@@ -267,29 +267,43 @@ export function ModelMenu({ models, model, effort, onChange, onEffort }: {
         </div>
       ) : open ? (
         <div className="menu effort-card" style={fit}>
-          {effortLabel ? (
-            <button type="button" className="effort-reset" title="恢复默认强度" aria-label="恢复默认强度" onClick={() => onEffort(undefined)}><Icon name="reset" size={14} /></button>
-          ) : null}
-          <strong className={effortLabel ? (effort === "max" ? "max" : "") : "unset"}>{efforts.length ? effortLabel ?? "默认" : "不支持调强度"}</strong>
-          <button type="button" className="effort-model" onClick={() => setPicking(true)}>{modelName}<Icon name="chev" size={11} /></button>
+          <div className="menu-title">模型</div>
+          <button type="button" className="effort-model" onClick={() => setPicking(true)}>
+            <span><b>{modelName}</b></span>
+            <Icon name="chev" size={12} />
+          </button>
+          <div className="menu-sep" />
+          <div className="effort-head">
+            <span className="menu-title">推理强度</span>
+            {!efforts.length ? <small>这个模型不支持</small> : effortLabel ? (
+              <button type="button" className="effort-reset" title="恢复成模型的默认强度" onClick={() => onEffort(undefined)}><Icon name="reset" size={12} />恢复默认</button>
+            ) : <small>默认</small>}
+          </div>
           {efforts.length ? (
-            <div className={`effort-slider${effortLabel ? "" : " unset"}${effort === "max" ? " max" : ""}`} style={{ "--pos": efforts.length > 1 ? position / (efforts.length - 1) : 0 } as CSSProperties}>
-              <div className="effort-dots" aria-hidden>{efforts.map((e) => <i key={e.value} />)}</div>
-              <input
-                type="range"
-                min={0}
-                max={efforts.length - 1}
-                step={1}
-                value={position}
-                aria-label="推理强度"
-                aria-valuetext={effortLabel ?? "默认"}
-                onChange={(event) => onEffort(efforts[Number(event.target.value)].value)}
-                // 点在当前位置上也算选中，没设过强度时第一次点“中”要能生效。
-                onPointerUp={(event) => { if (index < 0) onEffort(efforts[Number(event.currentTarget.value)].value); }}
-              />
+            <div className="effort-body">
+              <div className={`effort-slider${effortLabel ? "" : " unset"}${effort === "max" ? " max" : ""}`} style={{ "--pos": efforts.length > 1 ? position / (efforts.length - 1) : 0 } as CSSProperties}>
+                <div className="effort-dots" aria-hidden>{efforts.map((e) => <i key={e.value} />)}</div>
+                <input
+                  type="range"
+                  min={0}
+                  max={efforts.length - 1}
+                  step={1}
+                  value={position}
+                  aria-label="推理强度"
+                  aria-valuetext={effortLabel ?? "默认"}
+                  onChange={(event) => onEffort(efforts[Number(event.target.value)].value)}
+                  // 点在当前位置上也算选中，没设过强度时第一次点“中”要能生效。
+                  onPointerUp={(event) => { if (index < 0) onEffort(efforts[Number(event.currentTarget.value)].value); }}
+                />
+              </div>
+              <div className="effort-ticks">
+                {efforts.map((e, i) => (
+                  <button type="button" key={e.value} className={i === index ? `on${e.value === "max" ? " max" : ""}` : undefined} onClick={() => onEffort(e.value)}>{e.label}</button>
+                ))}
+              </div>
+              <p className="effort-hint">{index >= 0 ? efforts[index].description : "跟随模型的默认设置"}</p>
             </div>
           ) : null}
-          {efforts.length ? <p className="effort-hint">{index >= 0 ? efforts[index].description : "跟随模型的默认设置"}</p> : null}
         </div>
       ) : null}
     </div>

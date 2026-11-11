@@ -84,29 +84,20 @@ export function groupByDate<T extends RowSession>(sessions: T[], now: number): D
   return groups.filter((g) => g.sessions.length);
 }
 
-export interface OverviewStats {
-  /** 近 7 天有用户发言的会话数。 */
-  week: number;
-  /** 这些会话涉及的项目（cwd）数。 */
-  projects: number;
-  running: number;
-  /** 近 30 天会话最多的项目；并列时取最近用过的。 */
-  top?: { project: string; count: number };
-}
+export type DeviceState = "online" | "offline" | "unknown";
 
-/** 新会话页的统计卡：只用会话列表里已有的时间和 cwd，不读会话记录。 */
-export function overviewStats(sessions: (RowSession & { running: boolean })[], now: number): OverviewStats {
-  const week = sessions.filter((s) => sortKey(s) >= now - 7 * 86400);
-  const counts = new Map<string, number>();
-  // 按时间倒序累计，Map 的插入顺序就是最近使用顺序，并列时先出现的胜出。
-  for (const s of [...sessions].sort(byTime)) {
-    if (sortKey(s) < now - 30 * 86400) break;
-    const key = s.cwd ?? "";
-    counts.set(key, (counts.get(key) ?? 0) + 1);
+/**
+ * 侧栏底部的设备状态。hubd 只对已订阅的会话探测设备，所以没有订阅会话的设备是“未检测”；
+ * 同一设备的几个项目目录各自探测，有一个在线就算在线。
+ */
+export function deviceStatus(sessions: { cwd?: string; attached: boolean; deviceOnline: boolean }[]): { device: string; state: DeviceState }[] {
+  const map = new Map<string, DeviceState>();
+  for (const s of sessions) {
+    const parts = (s.cwd ?? "").split("/").filter(Boolean);
+    if (parts[0] !== "mnt" || !parts[1]) continue;
+    const prev = map.get(parts[1]) ?? "unknown";
+    const next: DeviceState = !s.attached ? "unknown" : s.deviceOnline ? "online" : "offline";
+    map.set(parts[1], prev === "online" || next === "unknown" ? prev : next);
   }
-  let top: OverviewStats["top"];
-  for (const [key, count] of counts) {
-    if (!top || count > top.count) top = { project: key ? describeCwd(key).project : SERVER_GROUP, count };
-  }
-  return { week: week.length, projects: new Set(week.map((s) => s.cwd ?? "")).size, running: sessions.filter((s) => s.running).length, top };
+  return [...map].map(([device, state]) => ({ device, state })).sort((a, b) => a.device.localeCompare(b.device));
 }

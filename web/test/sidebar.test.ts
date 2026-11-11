@@ -80,18 +80,20 @@ test("按日期分组：今天 / 昨天 / 7 天内 / 更早，组内按时间倒
   assert.deepEqual(groupByDate([{ id: "x", updated: noon - 30 * 86400 }], noon).map((g) => g.label), ["更早"]);
 });
 
-test("新会话页统计：近 7 天会话和项目数、运行中、近 30 天最常用项目", async () => {
-  const { overviewStats } = await import("../src/sidebar.ts");
-  const now = 1_800_000_000;
-  const day = 86400;
-  const stats = overviewStats([
-    { id: "a", cwd: "/mnt/pc/a", updated: now - day, running: true },
-    { id: "b", cwd: "/mnt/pc/a", updated: now - 20 * day, running: false },
-    { id: "c", cwd: "/mnt/pc/a", updated: now - 25 * day, running: false },
-    { id: "d", cwd: "/mnt/pc/b", updated: now - 40 * day, active: now - 2 * day, running: true },
-    { id: "e", cwd: undefined, updated: now - 3 * day, running: false },
-    { id: "f", cwd: "/mnt/pc/c", updated: now - 40 * day, running: false },
-  ], now);
-  assert.deepEqual(stats, { week: 3, projects: 3, running: 2, top: { project: "a", count: 3 } });
-  assert.deepEqual(overviewStats([], now), { week: 0, projects: 0, running: 0, top: undefined });
+test("设备在线状态：来自已订阅会话的探测，没订阅的设备是未检测，服务器上的会话不算设备", async () => {
+  const { deviceStatus } = await import("../src/sidebar.ts");
+  const list = deviceStatus([
+    { cwd: "/mnt/office/d/a", attached: true, deviceOnline: true },
+    { cwd: "/mnt/office/d/b", attached: true, deviceOnline: false },
+    { cwd: "/mnt/laptop/x", attached: true, deviceOnline: false },
+    { cwd: "/mnt/laptop/y", attached: false, deviceOnline: true },
+    { cwd: "/mnt/nas/z", attached: false, deviceOnline: true },
+    { cwd: "/root/work", attached: true, deviceOnline: true },
+    { cwd: undefined, attached: true, deviceOnline: true },
+  ]);
+  assert.deepEqual(list, [
+    { device: "laptop", state: "offline" },
+    { device: "nas", state: "unknown" },
+    { device: "office", state: "online" },
+  ]);
 });

@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { CommandMenu, ModelMenu } from "./Dialogs";
-import { Dropdown, Elapsed, formatDuration, formatTokens, Meter, Quota, quotaPercent, resetText, resetWhen, sessionStatus } from "./Common";
+import { Dropdown, Elapsed, formatDuration, formatTokens, Meter, Quota, quotaPercent, sessionStatus } from "./Common";
 import { Icon } from "./Icon";
 import { firstAsk, matchCommands, runningTasks, type SlashCommand } from "./model";
 import { isTouch, pageVisible } from "./platform";
-import { overviewStats } from "./sidebar";
 import { describeCwd, isResumeCommand, NEW_DRAFT, type Session, type Store } from "./store";
 
 const INTERRUPT_TIMEOUT_MS = 5000;
@@ -223,37 +222,6 @@ export function Composer({ store, session }: { store: Store; session: Session })
   );
 }
 
-/** 新会话页的统计卡：只用会话列表和额度事件里已有的数据。 */
-function Overview({ store }: { store: Store }) {
-  if (!store.sessions.size) return null;
-  const stats = overviewStats([...store.sessions.values()], Date.now() / 1000);
-  const percent = (window?: { utilization: number; resetsAt: number }) => {
-    const value = quotaPercent(window);
-    return value != null ? `${Math.round(value * 100)}%` : "—";
-  };
-  const { fiveHour, sevenDay } = store.limits;
-  // [标题, 数值, 小字, 悬停提示]
-  const tiles: [string, ReactNode, string?, string?][] = [
-    ["近 7 天会话", stats.week, stats.week ? `${stats.projects} 个项目` : undefined],
-    ["正在运行", stats.running],
-    ["常用项目", stats.top?.project ?? "—", stats.top ? `近 30 天 ${stats.top.count} 个会话` : undefined, stats.top?.project],
-    ["5 小时额度", percent(fiveHour), resetWhen(fiveHour), resetText(fiveHour)],
-    ["本周额度", percent(sevenDay), resetWhen(sevenDay), resetText(sevenDay)],
-    ["服务器内存", store.memAvailableMb == null ? "—" : `${store.memAvailableMb} MB`, store.memAvailableMb == null ? undefined : "可用"],
-  ];
-  return (
-    <div className="overview" aria-label="统计">
-      {tiles.map(([label, value, note, title]) => (
-        <div className="tile" key={label} title={title}>
-          <span>{label}</span>
-          <b>{value}</b>
-          {note ? <small>{note}</small> : null}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export function Welcome({ store }: { store: Store }) {
   const [text, setTextState] = useState(() => store.draft(NEW_DRAFT));
   const [model, setModel] = useState("");
@@ -316,7 +284,6 @@ export function Welcome({ store }: { store: Store }) {
           <UsageRing store={store} />
         </div>
       </Box>
-      <Overview store={store} />
     </section>
   );
 }

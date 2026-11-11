@@ -15,7 +15,9 @@ $shots = @(
   @("small", "/?s=rich&theme=light&pane=", "900,460"),
   @("menu-pane", "/?s=rich&theme=light&pane=&click=.pane-menu%20.dd-btn", "1200,700"),
   @("menu-usage", "/?theme=light&pane=&click=.usage%20.dd-btn", "900,460"),
-  @("turns", "/?s=turns&theme=light&pane=", "1200,800")
+  @("turns", "/?s=turns&theme=light&pane=", "1200,800"),
+  @("menu-model", "/?s=rich&theme=light&pane=&click=.tools%20.model", "1200,800"),
+  @("menu-effort", "/?s=rich&scene=effort&theme=dark&pane=&click=.tools%20.model", "1200,800")
 )
 $edge = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 if (-not (Test-Path $edge)) { $edge = "C:\Program Files\Microsoft\Edge\Application\msedge.exe" }

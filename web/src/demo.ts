@@ -64,7 +64,7 @@ const SESSIONS: { id: string; title: string; running: boolean; lines: string[] }
   { id: "approval", title: "修登录接口", running: true, lines: [user("把 hi 写进 marker，再写一句话。"), ...until(approval, '"can_use_tool"')] },
   { id: "plan", title: "拆分账单模块", running: true, lines: [user("先出方案，确认后再写 hello.txt。"), ...until(plan, '"can_use_tool"')] },
   { id: "question", title: "选择登录入口", running: true, lines: [user("问我选哪个颜色。"), ...until(question, '"can_use_tool"')] },
-  { id: "rich", title: "整理认证测试", running: true, lines: rich },
+  { id: "rich", title: "整理认证测试", running: true, lines: scene === "effort" ? [...rich, JSON.stringify({ type: "assistant", effort: "high", message: { id: "m9", model: "claude-sonnet-5-5", content: [] } })] : rich },
   { id: "interrupt", title: "跑一个长任务", running: false, lines: [user("运行 long.py"), ...interrupt.split("\n").filter(Boolean)] },
   // 多轮对话：检查左侧的轮次导航。
   { id: "turns", title: "多轮讨论", running: false, lines: Array.from({ length: 14 }, (_, i) => [
