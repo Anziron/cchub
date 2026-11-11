@@ -86,7 +86,7 @@ class KeepAliveService : Service() {
                     id,
                     builder
                         .setSmallIcon(R.drawable.ic_cchub_status)
-                        .setContentTitle("cchub")
+                        .setContentTitle("CcHub")
                         .setContentText(message.getString("body"))
                         .setAutoCancel(true)
                         .setContentIntent(openApp(this, session, id))
@@ -168,7 +168,7 @@ class KeepAliveService : Service() {
             }
             return builder
                 .setSmallIcon(R.drawable.ic_cchub_status)
-                .setContentTitle("cchub")
+                .setContentTitle("CcHub")
                 .setContentText(text)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)

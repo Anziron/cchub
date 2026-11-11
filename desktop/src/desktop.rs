@@ -25,7 +25,7 @@ pub(crate) fn notify(app: &AppHandle, class: EventClass) {
     let _ = app
         .notification()
         .builder()
-        .title("cchub")
+        .title("CcHub")
         .body(notification_body(class))
         .show();
 }
@@ -39,7 +39,7 @@ fn show_main(app: &AppHandle) {
         return;
     }
     let _ = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::default())
-        .title("cchub")
+        .title("CcHub")
         .inner_size(1100.0, 720.0)
         .min_inner_size(720.0, 480.0)
         .build();
@@ -115,11 +115,11 @@ pub(crate) fn run() {
             if let Some(listener) = instance {
                 listen_for_reopen(app.handle(), listener);
             }
-            let open = MenuItem::with_id(app, "open", "打开 cchub", true, None::<&str>)?;
+            let open = MenuItem::with_id(app, "open", "打开 CcHub", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;
             let mut tray = TrayIconBuilder::new()
-                .tooltip("cchub")
+                .tooltip("CcHub")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
