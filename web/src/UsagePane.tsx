@@ -270,28 +270,6 @@ function ModelRanking({ models }: { models: UsageSummary["models"] }) {
   );
 }
 
-/** 常用项目：按回复数排，取前 5 个；悬停显示完整目录。 */
-function ProjectRanking({ projects }: { projects: UsageSummary["projects"] }) {
-  const rows = projects.filter((p) => p.messages > 0).slice(0, 5);
-  if (!rows.length) return null;
-  const top = rows[0].share || 1;
-  return (
-    <>
-      <h4 className="rank-head">常用项目<span className="rank-unit">模型回复次数</span></h4>
-      <div className="rank">
-        {rows.map((row) => (
-          <div key={row.key} className="rank-row" title={row.key || undefined}>
-            <span className="rank-name">{row.name}</span>
-            <span className="rank-bar"><i style={{ width: `${Math.max(2, (row.share / top) * 100)}%` }} /></span>
-            <span className="rank-pct">{percent(row.share)}</span>
-            <span className="num">{row.messages} 次</span>
-          </div>
-        ))}
-      </div>
-    </>
-  );
-}
-
 /** 使用情况：额度，以及服务器上全部会话记录的统计（由 `cchub-usage` 生成）。 */
 export function UsagePane({ store }: { store: Store }) {
   const [range, setRangeState] = useState<UsageRange>(storedRange);
@@ -308,10 +286,7 @@ export function UsagePane({ store }: { store: Store }) {
   const { stats, error, loading } = store.usage;
   const { fiveHour, sevenDay } = store.limits;
   const today = localDate(new Date());
-  const summary = stats ? summarize(stats.days, range, today) : null;
-  const inputAll = summary ? summary.parts.input + summary.parts.cacheWrite + summary.parts.cacheRead : 0;
-  const cacheHit = summary && inputAll ? summary.parts.cacheRead / inputAll : null;
-  return (
+  const summary = stats ? summarize(stats.days, range, today) : null;  return (
     <>
       <h4>额度</h4>
       <div className="quota-card">
@@ -339,12 +314,6 @@ export function UsagePane({ store }: { store: Store }) {
             <div><b>{formatTokens(summary.parts.output)}</b><span>输出</span></div>
             <div><b>{formatTokens(summary.parts.cacheWrite)}</b><span>缓存写入</span></div>
             <div><b>{formatTokens(summary.parts.cacheRead)}</b><span>缓存读取</span></div>
-            <div title="去重后的模型回复数"><b>{summary.messages.toLocaleString()}</b><span>请求</span></div>
-            <div><b>{summary.activeDays} 天</b><span>有使用</span></div>
-            <div title="这段时间回复最多的本地小时"><b>{summary.peakHour == null ? "—" : `${summary.peakHour} 点`}</b><span>高峰时段</span></div>
-            <div title="缓存读取占全部输入（输入 + 缓存写入 + 缓存读取）的比例，越高越省额度">
-              <b>{cacheHit == null ? "—" : percent(cacheHit)}</b><span>缓存命中</span>
-            </div>
           </div>
           <div className="chart-head">
             <div className="seg small" role="radiogroup" aria-label="柱状图显示">
@@ -356,9 +325,7 @@ export function UsagePane({ store }: { store: Store }) {
           {!summary.messages ? <p className="empty">这段时间没有使用。</p> : <Bars days={stats.days} range={range} today={today} metric={metric} />}
           <h4>活跃</h4>
           <Heatmap days={stats.days} today={today} />
-          <ModelRanking models={summary.models} />
-          <ProjectRanking projects={summary.projects} />
-        </>
+          <ModelRanking models={summary.models} />        </>
       )}
     </>
   );
