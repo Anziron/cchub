@@ -10,6 +10,11 @@ const RANGE_KEY = "cchub.usageRange";
 const METRICS: [UsageMetric, string][] = [["tokens", "模型 token"], ["requests", "请求次数"]];
 const METRIC_KEY = "cchub.usageMetric";
 const HEAT_WEEKS = 18;
+const HEAT_MIN_WEEKS = 8;
+// 和 styles.css 的 `.heat` 一致：格子目标边长、格子间距、左侧星期标签列加间距的宽度。
+const HEAT_CELL = 11;
+const HEAT_GAP = 3;
+const HEAT_LABEL = 17;
 const WEEKDAYS = ["一", "", "三", "", "五", "", "日"];
 const WEEKDAY_NAMES = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
@@ -33,22 +38,25 @@ function ago(seconds: number): string {
   return minutes < 1 ? "刚刚" : minutes < 60 ? `${minutes} 分钟前` : `${Math.floor(minutes / 60)} 小时前`;
 }
 
-/** 额度卡片：大号百分比、按用量变色的进度条、重置时间。用到 80% 以上变成强调色。 */
-function QuotaCard({ label, window }: { label: string; window?: { utilization: number; resetsAt: number } }) {
+/** 额度卡片里的一行：名称、重置时间、百分比，下面是按用量变色的进度条。用到 80% 以上变成强调色。 */
+function QuotaRow({ label, window }: { label: string; window?: { utilization: number; resetsAt: number } }) {
   const value = quotaPercent(window);
   const pct = value == null ? null : Math.round(value * 100);
   const level = value == null ? "" : value >= 0.8 ? " high" : value >= 0.5 ? " mid" : "";
   return (
-    <div className={`quota-card${level}`} title={resetText(window)}>
+    <div className={`quota-row${level}`} title={resetText(window)}>
       <div className="quota-top">
         <span>{label}</span>
+        <span className="quota-reset">{window ? resetWhen(window) : "下一轮回复后更新"}</span>
         <b>{pct == null ? "—" : pct}<small>{pct == null ? "" : "%"}</small></b>
       </div>
       <div className="quota-bar"><i style={{ width: `${Math.min(100, pct ?? 0)}%` }} /></div>
-      <div className="quota-reset">{window ? resetWhen(window) : "下一轮回复后更新"}</div>
     </div>
   );
 }
+
+/** 0.934 → `93%`，小于 10% 留一位小数。 */
+const percent = (n: number) => `${n >= 0.995 ? 100 : (n * 100).toFixed(n < 0.1 ? 1 : 0)}%`;
 
 interface TipApi {
   show(target: Element, content: ReactNode): void;
@@ -105,8 +113,28 @@ function TipRow({ color, label, value }: { color?: string; label: string; value:
   return <div className="tip-row">{color ? <i style={{ background: color }} /> : null}<span>{label}</span><b>{value}</b></div>;
 }
 
+/** 热力图的列数按宽度算：格子约 `HEAT_CELL` 像素，窗格越宽显示的周数越多，格子不会被拉得很大。 */
+function useHeatWeeks() {
+  const box = useRef<HTMLDivElement>(null);
+  const [weeks, setWeeks] = useState(HEAT_WEEKS);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const fit = () => {
+      const width = el.clientWidth - HEAT_LABEL;
+      setWeeks(Math.max(HEAT_MIN_WEEKS, Math.min(53, Math.floor((width + HEAT_GAP) / (HEAT_CELL + HEAT_GAP)))));
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return { box, weeks };
+}
+
 function Heatmap({ days, today }: { days: UsageDay[]; today: string }) {
-  const weeks = heatmap(days, today, HEAT_WEEKS);
+  const { box, weeks: weekCount } = useHeatWeeks();
+  const weeks = heatmap(days, today, weekCount);
   const cells = weeks.flat();
   const { tip, handlers } = useTip((i) => {
     const cell = cells[i];
@@ -120,7 +148,7 @@ function Heatmap({ days, today }: { days: UsageDay[]; today: string }) {
   });
   return (
     <div className="chart">
-      <div className="heat" role="img" aria-label={`最近 ${HEAT_WEEKS} 周每天的回复数`} {...handlers}>
+      <div ref={box} className="heat" role="img" aria-label={`最近 ${weekCount} 周每天的回复数`} {...handlers}>
         <div className="heat-days" aria-hidden="true">{WEEKDAYS.map((d, i) => <span key={i}>{d}</span>)}</div>
         <div className="heat-grid" style={{ gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))` }}>
           {cells.map((cell, i) => (cell.future ? <i key={i} className="future" /> : <i key={i} data-i={i} className={`l${cell.level}${cell.date === today ? " today" : ""}`} />))}
@@ -207,11 +235,12 @@ function ModelRanking({ models }: { models: UsageSummary["models"] }) {
       key: m.key, name: m.name, share: totalCost && m.cost ? m.cost / totalCost : 0, value: m.cost == null ? "—" : dollars(m.cost),
     }));
   const top = rows[0]?.share || 1;
+  const totalTokens = models.reduce((sum, m) => sum + m.tokens, 0);
+  const unpriced = models.filter((m) => m.cost == null).length;
   return (
     <>
       <h4 className="rank-head">
         常用模型
-        {view === "cost" ? <span className="tag" title="按 API 标价折算（缓存写入按 1 小时价），订阅用户实际不按这个付费">合计 {dollars(totalCost)}</span> : null}
         <span className="seg small">
           {VIEWS.map(([value, label]) => (
             <button key={value} type="button" role="radio" aria-checked={view === value} className={view === value ? "on" : undefined} onClick={() => setView(value)}>{label}</button>
@@ -224,8 +253,40 @@ function ModelRanking({ models }: { models: UsageSummary["models"] }) {
             <span className="rank-name"><i style={{ background: color.get(row.key) }} />{row.name}</span>
             {/* 条长相对第一名，看得出差距；百分比是占总量的比例 */}
             <span className="rank-bar"><i style={{ width: `${Math.max(2, (row.share / top) * 100)}%`, background: color.get(row.key) }} /></span>
-            <span className="rank-pct">{row.share > 0 ? `${row.share >= 0.995 ? 100 : (row.share * 100).toFixed(row.share < 0.1 ? 1 : 0)}%` : ""}</span>
+            <span className="rank-pct">{row.share > 0 ? percent(row.share) : ""}</span>
             <span className="num">{row.value}</span>
+          </div>
+        ))}
+      </div>
+      {/* 合计放在列表底部，和每行的数值右对齐；费用另附折算说明 */}
+      <div className="rank-total">
+        <span>{models.length > rows.length ? `全部 ${models.length} 个模型合计` : "合计"}</span>
+        {view === "cost" ? (
+          <span className="rank-note" title="缓存写入按 1 小时价计；订阅用户实际不按这个付费">
+            按 API 标价折算{unpriced ? `，${unpriced} 个模型没有标价未计入` : ""}
+          </span>
+        ) : null}
+        <span className="num">{view === "cost" ? dollars(totalCost) : formatTokens(totalTokens)}</span>
+      </div>
+    </>
+  );
+}
+
+/** 常用项目：按回复数排，取前 5 个；悬停显示完整目录。 */
+function ProjectRanking({ projects }: { projects: UsageSummary["projects"] }) {
+  const rows = projects.filter((p) => p.messages > 0).slice(0, 5);
+  if (!rows.length) return null;
+  const top = rows[0].share || 1;
+  return (
+    <>
+      <h4>常用项目</h4>
+      <div className="rank">
+        {rows.map((row) => (
+          <div key={row.key} className="rank-row" title={row.key || undefined}>
+            <span className="rank-name">{row.name}</span>
+            <span className="rank-bar"><i style={{ width: `${Math.max(2, (row.share / top) * 100)}%` }} /></span>
+            <span className="rank-pct">{percent(row.share)}</span>
+            <span className="num">{row.messages} 次</span>
           </div>
         ))}
       </div>
@@ -250,12 +311,14 @@ export function UsagePane({ store }: { store: Store }) {
   const { fiveHour, sevenDay } = store.limits;
   const today = localDate(new Date());
   const summary = stats ? summarize(stats.days, range, today) : null;
+  const inputAll = summary ? summary.parts.input + summary.parts.cacheWrite + summary.parts.cacheRead : 0;
+  const cacheHit = summary && inputAll ? summary.parts.cacheRead / inputAll : null;
   return (
     <>
       <h4>额度</h4>
-      <div className="quota-cards">
-        <QuotaCard label="5 小时" window={fiveHour} />
-        <QuotaCard label="本周" window={sevenDay} />
+      <div className="quota-card">
+        <QuotaRow label="5 小时" window={fiveHour} />
+        <QuotaRow label="本周" window={sevenDay} />
       </div>
 
       <div className="usage-head">
@@ -278,6 +341,12 @@ export function UsagePane({ store }: { store: Store }) {
             <div><b>{formatTokens(summary.parts.output)}</b><span>输出</span></div>
             <div><b>{formatTokens(summary.parts.cacheWrite)}</b><span>缓存写入</span></div>
             <div><b>{formatTokens(summary.parts.cacheRead)}</b><span>缓存读取</span></div>
+            <div title="去重后的模型回复数"><b>{summary.messages.toLocaleString()}</b><span>请求</span></div>
+            <div><b>{summary.activeDays} 天</b><span>有使用</span></div>
+            <div title="这段时间回复最多的本地小时"><b>{summary.peakHour == null ? "—" : `${summary.peakHour} 点`}</b><span>高峰时段</span></div>
+            <div title="缓存读取占全部输入（输入 + 缓存写入 + 缓存读取）的比例，越高越省额度">
+              <b>{cacheHit == null ? "—" : percent(cacheHit)}</b><span>缓存命中</span>
+            </div>
           </div>
           <div className="chart-head">
             <div className="seg small" role="radiogroup" aria-label="柱状图显示">
@@ -290,6 +359,7 @@ export function UsagePane({ store }: { store: Store }) {
           <h4>活跃</h4>
           <Heatmap days={stats.days} today={today} />
           <ModelRanking models={summary.models} />
+          <ProjectRanking projects={summary.projects} />
         </>
       )}
     </>

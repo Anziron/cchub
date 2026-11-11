@@ -71,6 +71,8 @@
 - `ui-redesign` 分支上 Android 冒烟测试偶发失败（“等不到通知：已连接”“重开后：进程不在了”等，同一份代码重跑能过，原因未查）→ 先看失败的代码是否碰了 Android 或连接，没碰就 `gh run rerun <id> --failed` 再判断。
 - `android-smoke.sh` 全绿不等于界面正常，曾经白屏也通过 → 要检查界面内容并看 `android-shots` 截图。`HUBD_CLAUDE_CMD` 里的路径必须是绝对路径，会话在别的目录启动。
 - 手机端 APK 由 CI 编译，产物是 `cchub-android`；`desktop/gen/` 不入库，Android 的清单和原生代码都放在 `desktop/android-bridge/android/`，由 Gradle 合并。
+- 设备上的 PowerShell 5 把无 BOM 的 `.ps1` 按 GBK 读，中文注释以全角标点结尾时会吞掉下一行 → `.ps1` 存成带 BOM 的 UTF-8（`scripts/ui-shots.ps1` 已是）。
+- 同名截图覆盖后，服务器上 Read 挂载路径可能读到旧图（sshfs 缓存）→ 换个文件名再读。截图用 `scripts/ui-shots.ps1 -Only <前缀>`。
 - `ClientMsg::List` 不等进程启动 → `Start` 之后马上 `List` 可能看到 `running: false`，测试要重试。
 - 子代理任务的 `output_file` 是指向子代理完整记录 `.jsonl` 的符号链接，夹着 `api-request-*`、`attachment` 等内部记录，单行可达几十 KB → `read_task_output` 对 `.jsonl` 只回整行的 `user` / `assistant`，前端用 `parseTranscript` 按对话显示；普通任务仍是纯文本末尾。
 - 空闲回收（`idle.rs`）判定只看 `out` 末尾的信封：`result` 要在最后的 `assistant` / `control_request` 之后，最近的 `background_tasks_changed` 快照要为空；用户输入和 `set_model` 回显是 `user`，不算活动。被回收的会话前端照常走 `--resume` 恢复。

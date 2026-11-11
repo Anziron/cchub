@@ -1,9 +1,10 @@
-# 在 Windows 设备上用无头 Edge 截 demo 界面，检查布局和弹出菜单。
+﻿# 在 Windows 设备上用无头 Edge 截 demo 界面，检查布局和弹出菜单。
 # 用法：pcrun "powershell -ExecutionPolicy Bypass -File scripts\ui-shots.ps1"，图片在 .cc\shots\。
+# 只截名称以某前缀开头的几张: -Only usage-
 # 每项是 名称、地址、窗口尺寸。demo 参数：?s=会话 ?theme= ?scene=tasks|offline|conn ?pane=窗格（空值关闭）?click=加载后点击的选择器。
 # ?click 触发的内层滚动在截图里看不到；要验证滚动，用 --dump-dom --enable-logging=stderr 看 console 输出。
 # 无头 Edge 窗口最窄约 500px，更窄的截图只会裁切，不能用来判断窄屏布局。
-param([string]$Out = ".cc\shots")
+param([string]$Out = ".cc\shots", [string]$Only = "")
 $ErrorActionPreference = "Continue"
 $shots = @(
   @("rich-light", "/?s=rich&theme=light&pane=", "1440,900"),
@@ -20,7 +21,8 @@ $shots = @(
   @("menu-effort", "/?s=rich&scene=effort&theme=dark&pane=&click=.tools%20.model", "1200,800"),
   @("usage-light", "/?s=rich&theme=light&pane=usage&range=30d", "1440,900"),
   @("usage-dark", "/?theme=dark&pane=usage&range=30d", "1200,800"),
-  @("usage-small", "/?s=rich&theme=light&pane=usage&range=30d", "900,460"),
+  @("usage-cost", "/?theme=light&pane=usage&range=30d&models=cost", "1200,1200"),
+  @("usage-small","/?s=rich&theme=light&pane=usage&range=30d", "900,460"),
   @("usage-hover-heat", "/?theme=light&pane=usage&range=30d&hover=.heat-grid%20i.today", "1200,800"),
   @("usage-hover-bar", "/?theme=dark&pane=usage&range=30d&hover=.bars%20.bar:nth-last-child(2)", "1200,800"),
   @("usage-today", "/?theme=light&pane=usage&range=today&hover=.bars%20.bar.today", "1200,800")
@@ -34,6 +36,7 @@ $p = Start-Process -PassThru -WindowStyle Hidden -FilePath "cmd.exe" -ArgumentLi
 for ($i = 0; $i -lt 80; $i++) { try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5199/ -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep -Milliseconds 500 } }
 $full = (Resolve-Path $Out).Path
 foreach ($s in $shots) {
+  if ($Only -and -not $s[0].StartsWith($Only)) { continue }
   $file = Join-Path $full ($s[0] + ".png")
   # 独立的用户目录：设备上开着 Edge 时，共用目录的无头实例会把请求交给已开的浏览器后直接退出，截不到图。
   & $edge --headless=new "--user-data-dir=$env:TEMP\cchub-shots-edge" --disable-gpu --hide-scrollbars --virtual-time-budget=4000 "--window-size=$($s[2])" "--screenshot=$file" "http://127.0.0.1:5199$($s[1])" 2>$null | Out-Null
