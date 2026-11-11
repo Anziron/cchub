@@ -193,8 +193,8 @@ def load_cache(path, root):
     c = read_cache_file(path, CACHE_VERSION)
     if c is not None:
         return c
-    # 没有 v2 缓存：从同目录的旧 cache-v1.json 迁移（旧文件不改动）。
-    old = read_cache_file(os.path.join(os.path.dirname(path), "cache-v2.json"), 1)
+    # 没有 v2 缓存：从旧格式迁移（旧文件不改动）。先看这个路径本身是不是旧格式（防止覆盖），再看同目录的 cache-v1.json。
+    old = read_cache_file(path, 1) or read_cache_file(os.path.join(os.path.dirname(path), "cache-v1.json"), 1)
     if old is not None:
         return upgrade_v1(old, root)
     return {"version": CACHE_VERSION, "files": {}}
@@ -262,7 +262,7 @@ def build_output(cache, tz):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="汇总 Claude Code 会话记录的用量，输出一行 JSON")
     ap.add_argument("--root", default=os.path.expanduser("~/.claude/projects"))
-    ap.add_argument("--cache", default=os.path.expanduser("~/.cache/cchub-usage/cache-v1.json"))
+    ap.add_argument("--cache", default=os.path.expanduser("~/.cache/cchub-usage/cache-v2.json"))
     ap.add_argument("--tz", type=int, default=0, help="相对 UTC 往东的分钟数（UTC+8 为 480）")
     args = ap.parse_args(argv)
     root = os.path.abspath(args.root)
