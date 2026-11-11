@@ -698,19 +698,20 @@ a.link:hover { text-decoration-thickness: 2px; }
 /* 使用情况窗格。系列色取自校验过的分类配色（浅色、深色各一套） */
 :root { --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; }
 [data-tone="dark"] { --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; }
-/* 使用情况的额度：一张卡片，5 小时和本周上下两行，中间细分隔线（侧栏仍是简单的进度行） */
-.quota-card { padding: 0 12px; border-radius: var(--r-lg); background: var(--surface); box-shadow: 0 0 0 1px var(--line); }
-.quota-row { padding: 10px 0 11px; }
+/* 使用情况的额度：一个细边框的框（不铺底色），5 小时和本周上下两行。
+   每行：名称 | 进度条 | 百分比（和正文同字号），重置时间在进度条下方（侧栏仍是简单的进度行） */
+.quota-card { padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r-lg); }
+.quota-row { display: grid; grid-template-columns: 3.6em minmax(0, 1fr) 3em; align-items: center; gap: 3px 10px; padding: 10px 0 9px; font-size: 12.5px; }
 .quota-row + .quota-row { border-top: 1px solid var(--line); }
-.quota-top { display: flex; align-items: baseline; gap: 8px; color: var(--text-2); font-size: 12.5px; }
-.quota-top b { margin-left: auto; color: var(--text); font: 500 20px/1.1 var(--sans); font-variant-numeric: tabular-nums; }
-.quota-top small { margin-left: 1px; color: var(--muted); font-size: 12px; font-weight: 400; }
-.quota-bar { height: 6px; margin-top: 7px; overflow: hidden; border-radius: 3px; background: var(--hover); }
+.quota-label { color: var(--text-2); }
+.quota-row b { color: var(--text); font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
+.quota-bar { height: 6px; overflow: hidden; border-radius: 3px; background: var(--hover); }
 .quota-bar i { display: block; height: 100%; border-radius: 3px; background: var(--ok); transition: width .3s var(--ease); }
 .quota-row.mid .quota-bar i { background: var(--warn); }
 .quota-row.high .quota-bar i { background: var(--accent); }
-.quota-row.high .quota-top b { color: var(--accent); }
-.quota-reset { overflow: hidden; color: var(--faint); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
+.quota-row.high b { color: var(--accent); }
+.quota-reset { grid-column: 2 / 4; overflow: hidden; color: var(--faint); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
+.rank-unit { margin-left: auto; color: var(--faint); font-weight: 400; letter-spacing: 0; }
 .usage-head { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 12px; }
 .seg { display: inline-flex; padding: 2px; border-radius: var(--r-md); background: var(--hover); }
 .seg button { height: 24px; padding: 0 12px; border-radius: var(--r-sm); color: var(--muted); font-size: 12px; }

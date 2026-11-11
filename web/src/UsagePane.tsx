@@ -45,12 +45,10 @@ function QuotaRow({ label, window }: { label: string; window?: { utilization: nu
   const level = value == null ? "" : value >= 0.8 ? " high" : value >= 0.5 ? " mid" : "";
   return (
     <div className={`quota-row${level}`} title={resetText(window)}>
-      <div className="quota-top">
-        <span>{label}</span>
-        <span className="quota-reset">{window ? resetWhen(window) : "下一轮回复后更新"}</span>
-        <b>{pct == null ? "—" : pct}<small>{pct == null ? "" : "%"}</small></b>
-      </div>
-      <div className="quota-bar"><i style={{ width: `${Math.min(100, pct ?? 0)}%` }} /></div>
+      <span className="quota-label">{label}</span>
+      <span className="quota-bar"><i style={{ width: `${Math.min(100, pct ?? 0)}%` }} /></span>
+      <b>{pct == null ? "—" : `${pct}%`}</b>
+      <span className="quota-reset">{window ? resetWhen(window) : "下一轮回复后更新"}</span>
     </div>
   );
 }
@@ -279,7 +277,7 @@ function ProjectRanking({ projects }: { projects: UsageSummary["projects"] }) {
   const top = rows[0].share || 1;
   return (
     <>
-      <h4>常用项目</h4>
+      <h4 className="rank-head">常用项目<span className="rank-unit">模型回复次数</span></h4>
       <div className="rank">
         {rows.map((row) => (
           <div key={row.key} className="rank-row" title={row.key || undefined}>
