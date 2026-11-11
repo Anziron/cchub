@@ -88,10 +88,10 @@ adb reverse tcp:$port tcp:$port
 adb shell pm grant "$pkg" android.permission.POST_NOTIFICATIONS
 adb logcat -c
 adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 >/dev/null
-sleep 2
-debug_fp "启动后 2 秒"
-sleep 6
-debug_fp "启动后 8 秒"
+for second in 1 2 3 4 5 6 7 8; do
+  sleep 1
+  debug_fp "启动后约 $second 秒"
+done
 shot 1-connect
 # 先点输入框：没有焦点时回车会落到列表的第一个按钮上。坐标按默认模拟器的屏幕换算。
 read -r width height < <(adb shell wm size | sed -E 's/.*: ([0-9]+)x([0-9]+).*/\1 \2/' | tr -d '\r')
