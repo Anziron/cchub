@@ -42,6 +42,9 @@
 - `hubd` 不认任何参数，`hubd --version` 会真的启动并用默认状态目录 → 手动运行时必须设临时 `HUBD_STATE_DIR` 和回环端口。
 - CI 的 `server` 任务先跑 `cargo fmt --all --check`，没格式化就直接失败、不出 `hubd-linux-musl` → 改了 Rust 要在服务器的编译副本里跑 `cargo fmt --all`，把差异改回挂载目录（任务单里也要写上）。
 - 部署 `hubd` 用 CI 产物 `hubd-linux-musl`（服务器的 Rust 在 `~/.cargo/bin`、不在 PATH，可以限内存跑 `cargo test`，但不用来出部署包；设备没有 Rust）。
+- 发布：推 `v*` 标签，`ci.yml` 的 `release` 任务等五个任务都通过后建 Release；Android 冒烟测试偶发失败会挡住发布 → `gh run rerun <id> --failed`。安装脚本 `scripts/install-server.sh` 可用 `--from <目录>` 和 `CCHUB_BIN_DIR` / `CCHUB_UNIT_DIR` / `CCHUB_NO_SYSTEMCTL=1` 在临时目录里测，不碰正式服务。
+- 打开长会话慢 → 先用 `scripts/replay-timer.py <地址> <会话 ID> --size <out 字节数> --idle 3 [--deflate]` 在设备上测回放耗时（服务器本机测不出网络和慢启动）；测新版 `hubd` 要在别的端口起临时实例，用复制的会话目录。
+- 线路压缩（`?z=deflate`，`protocol/src/codec.rs`）不能用 1 级：miniz_oxide 的快速路径同步刷新会漏掉一批结尾的数据，客户端解出半截 JSON；改压缩相关代码后跑 `long_mixed_stream_always_flushes_completely`。
 - “使用情况”窗格的数据来自 `tools/usage/cchub-usage.py`，服务器上装在 `/usr/local/bin/cchub-usage`（`HUBD_USAGE_CMD` 可替换），缓存在 `~/.cache/cchub-usage/` → 改了脚本要重新 `install -m 755` 过去；输出格式变了要同时改 `web/src/usage.ts` 并升 `version`。CLI 会清理旧会话记录，删掉的文件的统计留在缓存的 `gone` 里，不要清缓存。
 - 列表和状态检查很频繁，不要在热路径上起子进程（每次 `systemctl` 约 6ms CPU，空闲时曾累计每 30 秒 400ms）→ 会话是否运行读 cgroup 的 `cgroup.procs`。
 - 弱网测试不要动服务器真实网卡（代理和会话都走它）→ 用 `ip netns` 建独立命名空间，在其回环上加 `netem`。

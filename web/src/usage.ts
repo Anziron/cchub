@@ -85,11 +85,6 @@ function projectLabel(cwd: string): string {
   return cwd.split("/").filter(Boolean).pop() ?? (cwd ? "/" : "未知");
 }
 
-/** 设备上的项目挂载在 `/mnt/<设备>/...`，取出设备名；服务器本地目录没有。 */
-function projectDevice(cwd: string): string | undefined {
-  return /^\/mnt\/([^/]+)\//.exec(cwd)?.[1];
-}
-
 /**
  * API 标价（美元 / 百万 token）：输入、输出、缓存读取。缓存写入按 1 小时 TTL 算（输入价的 2 倍）：
  * CLI 的会话记录里缓存写入几乎都是 1 小时的。订阅用户实际不按这个付费，只是折算参考。
@@ -145,16 +140,33 @@ export function tokenParts(days: UsageDay[]): TokenParts {
 }
 
 /**
- * 上期四项：7 天、30 天取紧挨着的前一段同样长的日子，用来显示涨跌。
- * “今天”不比（今天还没过完，和整天的昨天比没意义），“全部”没有上期；上期没有数据也返回 null。
+ * 上期四项，用来显示涨跌。7 天、30 天取紧挨着的前一段同样长的日子；“全部”没有上期；上期没有数据返回 null。
+ * “今天”和昨天的同一时刻比：今天还没过完，和整天的昨天比上午总是大跌。统计只有每小时的 token 合计、
+ * 没有分项，所以按“昨天到此刻的 token 占全天的比例”缩放昨天的四项（旧版统计命令按每小时回复数算比例）。
  */
-export function previousParts(days: UsageDay[], range: UsageRange, today: string): TokenParts | null {
-  if (range === "today" || range === "all") return null;
+export function previousParts(days: UsageDay[], range: UsageRange, today: string, now: Date): TokenParts | null {
+  if (range === "all") return null;
+  if (range === "today") return yesterdaySoFar(days.find((d) => d.date === addDays(today, -1)), now);
   const n = RANGE_DAYS[range];
   const to = addDays(today, -n);
   const from = addDays(to, 1 - n);
   const list = days.filter((d) => d.date >= from && d.date <= to && dayTokens(d) > 0);
   return list.length ? tokenParts(list) : null;
+}
+
+/** 昨天截至 `now` 这个钟点的四项（按比例估算）；昨天没数据、或这个钟点之前还没用过时返回 null。 */
+function yesterdaySoFar(day: UsageDay | undefined, now: Date): TokenParts | null {
+  if (!day || dayTokens(day) <= 0) return null;
+  const perHour = day.hourTokens
+    ? Array.from({ length: 24 }, (_, h) => Object.values(day.hourTokens!).reduce((sum, hours) => sum + (hours[h] ?? 0), 0))
+    : day.hours;
+  const total = perHour.reduce((a, b) => a + b, 0);
+  const hour = now.getHours();
+  const sofar = perHour.slice(0, hour).reduce((a, b) => a + b, 0) + (perHour[hour] ?? 0) * (now.getMinutes() / 60);
+  if (!total || !sofar) return null;
+  const ratio = Math.min(1, sofar / total);
+  const scale = (n: number) => Math.round(n * ratio);
+  return { input: scale(day.input), output: scale(day.output), cacheWrite: scale(day.cacheWrite), cacheRead: scale(day.cacheRead) };
 }
 
 /**
@@ -202,7 +214,7 @@ export interface UsageSummary {
    * 有 `projectTokens` 时按 token 排，`share` 是 token 占比；否则按回复数排（`tokens` 为 0、`models` 为空）。
    * `cost`：各模型折算费用之和，全是不认识的模型时为 null；`models`：各模型 token，多到少。
    */
-  projects: (Ranked & { device?: string; messages: number; tokens: number; cost: number | null; models: [string, number][] })[];
+  projects: (Ranked & { messages: number; tokens: number; cost: number | null; models: [string, number][] })[];
 }
 
 function projectUsage(list: UsageDay[]): UsageSummary["projects"] {
@@ -219,7 +231,7 @@ function projectUsage(list: UsageDay[]): UsageSummary["projects"] {
       }
     }
   }
-  const base = (key: string, share: number) => ({ key, name: projectLabel(key), device: projectDevice(key), share, messages: messages.get(key) ?? 0 });
+  const base = (key: string, share: number) => ({ key, name: projectLabel(key), share, messages: messages.get(key) ?? 0 });
   if (!quads.size) return ranked(messages).map(([key, , share]) => ({ ...base(key, share), tokens: 0, cost: null, models: [] }));
   const tokens = new Map([...quads].map(([cwd, byModel]) => [cwd, [...byModel.values()].reduce((sum, q) => sum + quadTotal(q), 0)]));
   return ranked(tokens).filter(([, n]) => n > 0).map(([key, n, share]) => {

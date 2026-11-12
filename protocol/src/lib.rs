@@ -2,10 +2,14 @@
 //!
 //! 这里不碰网络和文件：输入事件，输出动作，所以两端都能在同一个测试里确定性地模拟。
 
+pub mod codec;
 pub mod envelope;
 pub mod sync;
 pub mod wire;
 
+pub use codec::{
+    wants_deflate, with_deflate_query, DecodeError, FrameDecoder, FrameEncoder, DEFLATE_QUERY,
+};
 pub use envelope::{
     classify, elide_base64, is_conversation_line, is_message_end, is_user_message, turn_finished,
     EventClass,

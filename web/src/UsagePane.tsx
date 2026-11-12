@@ -71,13 +71,14 @@ function runsOutText(at: number, now: number): string {
   return `${days === 1 ? "明天" : WEEKDAY_NAMES[date.getDay()]} ${date.getHours()} 点`;
 }
 
-/** 和上期比的涨跌：`+23%`、`−5%`，变化不到 1% 是“持平”。不用箭头：小字号下 `↑` 像数字 1。 */
+/** 和上期比的涨跌：`+23%`、`−5%`，变化不到 1% 是“持平”。不用箭头：小字号下 `↑` 像数字 1。涨红跌绿（用量涨了是提醒）。 */
 function Delta({ now, before, title }: { now: number; before?: number; title: string }) {
   if (!before) return null;
   const change = (now - before) / before;
   const size = Math.round(Math.abs(change) * 100);
   const text = size < 1 ? "持平" : `${change > 0 ? "+" : "−"}${size}%`;
-  return <em className="delta" title={title}>{text}</em>;
+  const tone = size < 1 ? "" : change > 0 ? " up" : " down";
+  return <em className={`delta${tone}`} title={title}>{text}</em>;
 }
 
 /** 0.934 → `93%`，小于 10% 留一位小数。 */
@@ -330,7 +331,7 @@ function ProjectRanking({ projects, view, setView, colors }: { projects: UsageSu
       <div className="rank">
         {rows.map((row) => (
           <div key={row.key} className="rank-row" title={breakdown(row)}>
-            <span className="rank-name">{row.name}{row.device ? <small>{row.device}</small> : null}</span>
+            <span className="rank-name">{row.name}</span>
             <span className="rank-bar">
               {hasTokens ? (
                 <span className="rank-stack" style={{ width: `${Math.max(2, (row.share / top) * 100)}%` }}>
@@ -365,10 +366,11 @@ export function UsagePane({ store }: { store: Store }) {
   useEffect(() => store.requestUsage(), [store]);
   const { stats, error, loading } = store.usage;
   const { fiveHour, sevenDay } = store.limits;
-  const today = localDate(new Date());
+  const now = new Date();
+  const today = localDate(now);
   const summary = stats ? summarize(stats.days, range, today) : null;
-  const previous = stats ? previousParts(stats.days, range, today) : null;
-  const previousLabel = `前 ${range === "7d" ? 7 : 30} 天`;
+  const previous = stats ? previousParts(stats.days, range, today, now) : null;
+  const previousLabel = range === "today" ? "昨天此时" : `前 ${range === "7d" ? 7 : 30} 天`;
   const [view, setViewState] = useState<ModelView>(() => (localStorage.getItem(VIEW_KEY) === "cost" ? "cost" : "tokens"));
   const setView = (value: ModelView) => {
     setViewState(value);

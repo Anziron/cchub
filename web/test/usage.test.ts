@@ -90,7 +90,8 @@ test("项目用量：有 projectTokens 时按 token 排序，带各模型 token�
   ];
   const s = summarize(days, "all", "2026-11-11");
   // a：2M token（1M Sonnet 缓存读 $0.1 + 1M Opus 缓存读 $0.2）；notes：2M token（Opus 输入 $4 + Haiku 缓存读 $0.01）。同量时先出现的在前。
-  assert.deepEqual(s.projects.map((p) => [p.name, p.device, p.tokens, p.share, p.messages]), [["a", "pc", 2 * M, 0.5, 6], ["notes", undefined, 2 * M, 0.5, 1]]);
+  assert.deepEqual(s.projects.map((p) => [p.name, p.tokens, p.share, p.messages]), [["a", 2 * M, 0.5, 6], ["notes", 2 * M, 0.5, 1]]);
+  assert.ok(s.projects.every((p) => !("device" in p)), "常用项目不再显示设备");
   assert.ok(Math.abs((s.projects[0].cost ?? 0) - 0.3) < 1e-9);
   assert.ok(Math.abs((s.projects[1].cost ?? 0) - 4.01) < 1e-9);
   // 各模型 token 按多到少，柱子按这个分段着色。
@@ -178,14 +179,27 @@ test("请求次数：每天一根柱子，值是回复数；全部范围按周�
   assert.equal(dailySeries(days, "all", "2026-11-11", "requests").bars[0].total, 10);
 });
 
-test("上期对比：7 天、30 天取紧挨着的前一段同样长的日子；今天、全部、上期没有数据时返回 null", () => {
+test("上期对比：7 天、30 天取紧挨着的前一段同样长的日子；全部、上期没有数据时返回 null", () => {
   const big = { input: 2, output: 20, cacheWrite: 200, cacheRead: 2000 };
   // 本期 11-05～11-11，上期 10-29～11-04；10-28 不算。
   const days = [day("2026-10-28", 1, big), day("2026-10-29", 1), day("2026-11-04", 1, big), day("2026-11-05", 1)];
-  assert.deepEqual(previousParts(days, "7d", "2026-11-11"), { input: 3, output: 30, cacheWrite: 300, cacheRead: 3000 });
-  assert.equal(previousParts(days, "today", "2026-11-11"), null);
-  assert.equal(previousParts(days, "all", "2026-11-11"), null);
-  assert.equal(previousParts([day("2026-11-10", 1)], "7d", "2026-11-11"), null);
+  const now = new Date(2026, 10, 11, 12, 0);
+  assert.deepEqual(previousParts(days, "7d", "2026-11-11", now), { input: 3, output: 30, cacheWrite: 300, cacheRead: 3000 });
+  assert.equal(previousParts(days, "today", "2026-11-11", now), null, "没有昨天的数据");
+  assert.equal(previousParts(days, "all", "2026-11-11", now), null);
+  assert.equal(previousParts([day("2026-11-10", 1)], "7d", "2026-11-11", now), null);
+});
+
+test("今天和昨天此时比：按昨天到同一时刻的 token 占全天的比例缩放昨天的四项", () => {
+  // 昨天 2 点用了 300、10 点用了 700（token），四项合计 1100 里输入 100、输出 1000。
+  const hourTokens = { "claude-opus-5-5": Array.from({ length: 24 }, (_, h) => (h === 2 ? 300 : h === 10 ? 700 : 0)) };
+  const yesterday = day("2026-11-10", 4, { input: 100, output: 1000, cacheWrite: 0, cacheRead: 0, hourTokens });
+  // 10:30：2 点全部 + 10 点的一半 = 650 / 1000。
+  assert.deepEqual(previousParts([yesterday], "today", "2026-11-11", new Date(2026, 10, 11, 10, 30)), { input: 65, output: 650, cacheWrite: 0, cacheRead: 0 });
+  // 2:00 整：昨天这时还没用，比不了。
+  assert.equal(previousParts([yesterday], "today", "2026-11-11", new Date(2026, 10, 11, 2, 0)), null);
+  // 旧版统计命令没有 hourTokens：按每小时回复数算比例（默认 9 点有回复，10 点时已经全部用完）。
+  assert.deepEqual(previousParts([day("2026-11-10", 4)], "today", "2026-11-11", new Date(2026, 10, 11, 10, 0)), { input: 1, output: 10, cacheWrite: 100, cacheRead: 1000 });
 });
 
 test("额度节奏：时间进度按窗口长度算；照当前速度在重置前用完时给出用完的时刻", () => {

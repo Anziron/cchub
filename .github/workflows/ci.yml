@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+    # 推 v* 标签时全部任务通过后发布 Release（见最后的 release 任务）。
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -157,3 +159,35 @@ jobs:
           name: android-shots
           path: android-shots
           if-no-files-found: ignore
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [server, types, web, desktop, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir dist
+          cp artifacts/hubd-linux-musl/hubd dist/hubd-linux-x86_64
+          cp artifacts/cchub-windows/cchub-desktop.exe dist/cchub-windows.exe
+          cp artifacts/cchub-android/cchub.apk dist/cchub.apk
+          cp tools/usage/cchub-usage.py scripts/install-server.sh dist/
+          (cd dist && sha256sum * > SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes \
+            --notes-file - <<'EOF'
+          服务器端（Linux x86_64，root）：
+
+          ```bash
+          curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install-server.sh | bash -s -- --allow <你的 Tailscale 账号>
+          ```
+
+          桌面端下载 `cchub-windows.exe`，手机端下载 `cchub.apk`，首次打开时填服务器的 Tailscale 地址。详见 README 的“部署”。
+          EOF

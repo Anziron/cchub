@@ -738,8 +738,10 @@ a.link:hover { text-decoration-thickness: 2px; }
 .usage-sum span { overflow: hidden; color: var(--muted); font-size: 11.5px; white-space: nowrap; text-overflow: ellipsis; }
 .usage-sum.parts { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 6px; margin-top: 2px; }
 .usage-sum.parts b { font-size: 16px; }
-/* 和上期比的涨跌：中性灰，不用红绿（用得多不一定是坏事） */
+/* 和上期比的涨跌：涨红跌绿（用户要求：用量涨了是提醒），持平灰色 */
 .usage-sum .delta { display: block; margin-top: 1px; color: var(--faint); font-size: 10.5px; font-weight: 400; font-style: normal; font-variant-numeric: tabular-nums; }
+.usage-sum .delta.up { color: var(--del); }
+.usage-sum .delta.down { color: var(--add); }
 .chart-head { display: flex; justify-content: flex-end; margin: 16px 0 4px; }
 .seg.small button { height: 20px; padding: 0 8px; font-size: 11.5px; }
 .rank-head { display: flex; align-items: center; gap: 6px; }
@@ -782,7 +784,6 @@ a.link:hover { text-decoration-thickness: 2px; }
 .heat-grid i.today { box-shadow: 0 0 0 1px var(--text-2); }
 .heat-grid i[data-i]:hover { box-shadow: 0 0 0 1.5px var(--text); }
 /* 常用模型：每行色点、相对条、占比和数值，底部合计；模型颜色与柱状图同系 */
-.rank-name small { margin-left: 6px; color: var(--faint); font-size: 11px; }
 .rank-unit { margin-left: auto; color: var(--faint); font-weight: 400; letter-spacing: 0; }
 /* 项目的条：按模型分段，段间 1px 缝 */
 .rank-stack { display: flex; gap: 1px; height: 100%; overflow: hidden; border-radius: 3px; }

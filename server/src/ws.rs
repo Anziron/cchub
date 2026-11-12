@@ -8,12 +8,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, RawQuery, State, WebSocketUpgrade};
 use axum::http::{header::ORIGIN, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use cchub_protocol::{
-    is_user_message, ClientMsg, DeviceInfo, Frame, LineSplitter, Outbound, OutboundLimits,
-    ServerMsg,
+    is_user_message, wants_deflate, ClientMsg, DeviceInfo, Frame, FrameEncoder, LineSplitter,
+    Outbound, OutboundLimits, ServerMsg,
 };
 use futures_util::{SinkExt, StreamExt};
 use inotify::{Inotify, WatchMask};
@@ -33,6 +33,8 @@ const HEARTBEAT: Duration = Duration::from_secs(15);
 const STATUS_EVERY: Duration = Duration::from_secs(5);
 const READ_CHUNK: usize = 64 * 1024;
 const CHANNEL_FRAMES: usize = 16;
+/// 压缩连接一批最多合并这么多字节的帧原文。
+const BATCH_BYTES: usize = 256 * 1024;
 const TITLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct App {
@@ -56,6 +58,7 @@ pub struct App {
 pub async fn upgrade(
     State(app): State<Arc<App>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    RawQuery(query): RawQuery,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -71,22 +74,51 @@ pub async fn upgrade(
     if !allowed {
         return StatusCode::FORBIDDEN.into_response();
     }
-    ws.on_upgrade(move |socket| serve(app, socket))
+    let deflate = wants_deflate(query.as_deref());
+    ws.on_upgrade(move |socket| serve(app, socket, deflate))
 }
 
-async fn serve(app: Arc<App>, socket: WebSocket) {
+/// `deflate`：客户端要求压缩（见 `cchub_protocol::codec`）。这时把已经就绪的帧合成一批，
+/// 压缩后作为一条二进制消息发出；回放长会话时消息数和字节数都大幅减少。
+async fn serve(app: Arc<App>, socket: WebSocket, deflate: bool) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<Frame>(CHANNEL_FRAMES);
 
     let writer = tokio::spawn(async move {
         let mut heartbeat = tokio::time::interval(HEARTBEAT);
+        let mut encoder = deflate.then(FrameEncoder::new);
         loop {
             let message = tokio::select! {
                 frame = rx.recv() => match frame {
-                    Some(frame) => match serde_json::to_string(&frame) {
-                        Ok(text) => Message::Text(text.into()),
-                        Err(_) => continue,
-                    },
+                    Some(frame) => {
+                        let Ok(text) = serde_json::to_string(&frame) else { continue };
+                        match encoder.take() {
+                            None => Message::Text(text.into()),
+                            Some(enc) => {
+                                let mut size = text.len();
+                                let mut batch = vec![text];
+                                while size < BATCH_BYTES {
+                                    let Ok(frame) = rx.try_recv() else { break };
+                                    if let Ok(text) = serde_json::to_string(&frame) {
+                                        size += text.len();
+                                        batch.push(text);
+                                    }
+                                }
+                                // 运行时是单线程的：压缩放到阻塞线程池，读日志的任务同时接着读。
+                                let Ok((enc, bytes)) = spawn_blocking(move || {
+                                    let mut enc = enc;
+                                    let bytes = enc.encode(&batch);
+                                    (enc, bytes)
+                                })
+                                .await
+                                else {
+                                    return;
+                                };
+                                encoder = Some(enc);
+                                Message::Binary(bytes.into())
+                            }
+                        }
+                    }
                     None => return,
                 },
                 _ = heartbeat.tick() => Message::Ping(Vec::new().into()),

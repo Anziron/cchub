@@ -244,8 +244,11 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 3. **编号补齐**：每个会话的事件带递增序号。桌面端记录收到的最后序号，重连或发现序号跳跃时向 `hubd` 请求补发；超出 `hubd` 内存缓存范围的部分，从 `.jsonl` 读取。不允许出现“缺了一段但两边都不知道”。
 4. **状态分开显示**：界面上分开显示“连接状态”（已连接、重连中、已断开）和“会话状态”（执行中第几步、等待审批、空闲），用户能分清是在等 Claude 还是在等网络。
 5. **心跳**：WebSocket 心跳约 15 秒，断线后自动重连并补齐，不需要用户操作。
+6. **压缩合批**（2026-11-12）：客户端连接地址带 `?z=deflate` 时，`hubd` 把发送通道里已经就绪的帧合成一批（原文最多 256KB），用 raw deflate（3 级，整条连接共用上下文，每批同步刷新）压缩成一条二进制消息；不带参数的连接仍是一帧一条文本，新旧两端可以混用。实现在 `protocol/src/codec.rs`。不能用 1 级：miniz_oxide 的快速路径同步刷新会漏数据。
 
 参考数据（2026-10-30，设备到服务器，Tailscale 直连）：往返约 168ms，执行完成到桌面端收到约 0.1 秒；偶发抖动 1～2 秒。
+
+长会话回放（2026-11-12，往返 187ms，裸速约 2.3MB/s，`scripts/replay-timer.py --idle` 测常驻连接）：`out` 22.3MB，省略截图后原文 8.3MB / 3200 条。文本模式线上 8.33MB，压缩后 1.84MB / 约 280 条消息。同一时段交替测，文本 3.5～23.6 秒，压缩 1.9～7.3 秒（线路波动比两者差距还大）。服务器端每次回放约 1 秒 CPU；空闲后 TCP 慢启动传 1.84MB 约需 1.3 秒。
 
 ## 6. 通用化（给别人部署）
 
@@ -253,6 +256,7 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 - 项目挂载可替换：默认调用 `cc-mount`（按 `hub-setup` 搭建的环境）；也可配置成自定义挂载命令，或直接用服务器本地目录。设备登记文件路径等放配置文件，不写死。
 - 连接：默认只监听 Tailscale 地址，用 `tailscale whois` 识别来访设备；不用 Tailscale 时可选访问令牌，不建议直接暴露公网。
 - 发布：`hubd` 出 x86_64、arm64 Linux 二进制和安装脚本（装 systemd 服务和默认配置）；桌面端出 Windows 安装包，首次打开填服务器地址。作者自己的环境可通过 `agent-config` 的 `cc-config apply` 安装。
+  - 已做（2026-11-12）：推 `v*` 标签时 CI 发 Release（`hubd-linux-x86_64`、`cchub-usage.py`、`install-server.sh`、`cchub-windows.exe`、`cchub.apk`、`SHA256SUMS`）；`scripts/install-server.sh` 装 `hubd` 和统计命令、首次安装时写 systemd 服务。还没有 arm64 和 Windows 安装包。
 ## 7. 界面设计（初稿）
 
 ```

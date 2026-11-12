@@ -5,7 +5,7 @@
 - **`hubd`**：服务器上的常驻服务，用 systemd 托管官方 `claude` CLI 进程，只做转发和进程管理。
 - **桌面端**（Tauri + React）：对话、查看进度、审批和回答提问，断线后自动补齐消息。
 
-> **早期项目。** 作者自己在日常使用，接口和部署方式还会变，暂时没有安装包和安装脚本。
+> **早期项目。** 作者自己在日常使用，接口和部署方式还会变。
 >
 > 这是个人项目，与 Anthropic 没有关联，也未获其认可。
 
@@ -72,15 +72,31 @@ HUBD_STATE_DIR=/tmp/hubd cargo run -p hubd --bin hubd
 curl http://127.0.0.1:7878/health
 ```
 
-CI 会构建 `hubd` 静态二进制和 Windows 桌面端，产物在 Actions 页面下载（需要登录 GitHub）。
+CI 会构建 `hubd` 静态二进制、Windows 桌面端和 Android APK，每次提交的产物在 Actions 页面下载（需要登录 GitHub），正式版本在 Releases。
 
 ## 部署
 
-还没有安装脚本，下面是手动步骤（以 root 运行、systemd 托管为例）：
+安装包在 [Releases](https://github.com/Anziron/cchub/releases)：`hubd-linux-x86_64`（服务器）、`cchub-usage.py`（使用情况统计）、`install-server.sh`（安装脚本）、`cchub-windows.exe`（桌面端）、`cchub.apk`（手机端）。
 
-1. 在服务器上装好 `claude` CLI 并登录（`hubd` 用运行它的用户的登录状态）。
-2. 把 `hubd`（CI 产物 `hubd-linux-musl`，或 `cargo build --release -p hubd`）放到 `/usr/local/bin/hubd`。
-3. 安装使用情况统计命令：`install -m 755 tools/usage/cchub-usage.py /usr/local/bin/cchub-usage`（需要 Python 3）。不装的话“使用情况”窗格会报错，其余功能不受影响。
+### 一键安装（推荐）
+
+服务器上先装好 Tailscale，再装好 `claude` CLI 并登录（`hubd` 用运行它的用户的登录状态），然后以 root 运行：
+
+```bash
+curl -fsSL https://github.com/Anziron/cchub/releases/latest/download/install-server.sh | bash -s -- --allow <你的 Tailscale 账号>
+```
+
+脚本做这几件事：把 `hubd` 和统计命令装到 `/usr/local/bin/`（旧的留成 `.bak`）；第一次运行时写 `/etc/systemd/system/hubd.service`，默认监听本机 Tailscale 地址的 7878 端口，可用 `--listen` 改；然后启动服务，用 `/health` 检查。升级时运行同一条命令，不用加 `--allow`：已有服务文件就不改配置，只换程序并重启。`--version v0.1.0` 安装指定版本，`--from <目录>` 用本地文件。
+
+桌面端下载 `cchub-windows.exe`、手机端安装 `cchub.apk`，首次打开时填服务器的 Tailscale 地址（默认端口 7878，改过端口时写成 `IP:端口`）。升级桌面端前先从托盘菜单退出旧进程。
+
+### 手动安装
+
+以 root 运行、systemd 托管为例：
+
+1. 在服务器上装好 `claude` CLI 并登录。
+2. 把 `hubd`（Release 里的 `hubd-linux-x86_64`，或 `cargo build --release -p hubd`）放到 `/usr/local/bin/hubd`。
+3. 安装使用情况统计命令：`install -m 755 cchub-usage.py /usr/local/bin/cchub-usage`（需要 Python 3）。不装的话“使用情况”窗格会报错，其余功能不受影响。
 4. 写 systemd 服务，例如 `/etc/systemd/system/hubd.service`：
 
    ```ini
@@ -104,9 +120,13 @@ CI 会构建 `hubd` 静态二进制和 Windows 桌面端，产物在 Actions 页
    ```
 
    然后 `systemctl daemon-reload && systemctl enable --now hubd`，用 `curl http://<地址>:7878/health` 检查。
-5. 桌面端（CI 产物 `cchub-windows`）首次打开时填服务器的 Tailscale IP（默认端口 7878，改过端口时写成 `IP:端口`）。
+5. 桌面端同上。
 
 浏览、挂载设备目录要自己提供工作区命令（见下），没有它也能用：新建会话时手填服务器上的目录。
+
+### 发布新版本（维护者）
+
+推一个 `v*` 标签（如 `git tag v0.1.0 && git push origin v0.1.0`），CI 全部任务通过后自动创建 Release 并上传上面的文件和 `SHA256SUMS`。
 
 ## 配置
 
