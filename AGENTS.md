@@ -85,6 +85,7 @@
 - `web/src` 里的文件名不能只差大小写：设备是 Windows，`Sidebar.tsx` 和 `sidebar.ts` 会被当成同一个文件（tsc 报 TS1149）→ 侧栏组件叫 `SessionList.tsx`。
 - 无头 Edge 截图的虚拟时钟会跑在网络加载前面，数据到达后马上抓图：`setTimeout` 等元素、React 异步调度的更新、demo 里延迟回复的定时器都可能赶不上 → demo 里用 `MutationObserver` 等元素出现（`whenPresent`），模拟回复用 `queueMicrotask`；图表浮层用 `flushSync` 同步更新（也让悬停立刻跟手）。截图 PNG 过大时图片接口会拒收，用 `System.Drawing` 裁成 JPEG 再看。
 - 图表悬停浮层（`UsagePane.tsx` 的 `ChartTip`）：容器上事件委托找 `data-i`，只有浮层重画；不要给每个格子加 `title` 或各自的状态。
+- 消息区只画最后 20 轮，每来一轮裁掉最上面一轮；滚动锚定会把 `scrollTop` 减掉那一轮的高度，`onScroll` 误判成往上翻、取消贴底，长会话发消息后不回底部 → 贴底时 `.stream` 的 `overflow-anchor: none`（`Thread.tsx` 的 `syncAnchor`，要在布局效果里设，赶在别处强制排版之前），离开底部再恢复。
 - 窗格里的长内容（后台任务输出、子任务记录）不能跟着每秒的读秒重画：读秒放进独立的小组件，输出区 `memo` 按文本比较，子任务记录先只画最后 30 条。
 - 外部链接走 `platform.ts` 的 `openUrl`（桌面端是 `desktop.rs` 的 `open_url` 命令，只放行 http/https；Windows 用 `rundll32 url.dll,FileProtocolHandler`，不要经 `cmd start`，网址里的 `&` 会被拆开）。
 - 一轮进行中写进 FIFO 的用户消息，CLI 会在下一个工具结果之后插进同一轮（回传同一 `uuid`、带 `isReplay`，只出一个 `result`）→ “插入”直接发，看到回传才算送达；“等结束”留在桌面端（`queue.ts`），中断或进程结束时放回输入框，不自动发。回传之前可以用控制消息 `cancel_async_message`（`message_uuid`）撤回，回复 `cancelled: false` 表示已经交给模型（`store.ts` 的 `cancelInsert` / `takeCancel`）。

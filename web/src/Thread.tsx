@@ -304,14 +304,23 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
       if (element && pinned.current) element.scrollTop = element.scrollHeight;
     });
   }).current;
+  const syncAnchor = () => {
+    if (ref.current) ref.current.style.overflowAnchor = pinned.current ? "none" : "";
+  };
   // 自己刚发出的消息（新出现的“发送中”）总是回到底部，不管之前翻到了哪里。
   const sent = useRef<string | undefined>(undefined);
   let lastSending: string | undefined;
   for (const item of session.thread.items) if (item.kind === "user" && item.state === "sending") lastSending = item.id;
-  if (lastSending && lastSending !== sent.current) pinned.current = true;
-  sent.current = lastSending ?? sent.current;
   // 用户往上翻时不打扰，在底部时跟随新内容。
-  useLayoutEffect(toBottom);
+  // 贴底时关掉滚动锚定：满 20 轮后每来一轮会裁掉最上面一轮，锚定会把 scrollTop 减掉那一轮的高度，
+  // 下一帧 onScroll 先于 rAF 运行，看到 scrollTop 变小就误判成往上翻、取消贴底。离开底部后再打开，
+  // 阅读时补内容、裁内容不跳。要在布局效果里设，赶在输入框读 scrollHeight 强制排版之前。
+  useLayoutEffect(() => {
+    if (lastSending && lastSending !== sent.current) pinned.current = true;
+    sent.current = lastSending ?? sent.current;
+    syncAnchor();
+    toBottom();
+  });
   // 长消息用了 content-visibility，渲染后高度才准，高度变了要再贴一次底；
   // 输入框变高、排队消息出现时消息区变矮，也要再贴一次。
   useEffect(() => {
@@ -397,6 +406,7 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
           if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) pinned.current = true;
           else if (el.scrollTop < lastTop.current - 1) pinned.current = false;
           lastTop.current = el.scrollTop;
+          syncAnchor();
           if (el.scrollTop < 300 && !pinned.current) showMore();
           syncCurrent();
         }}
