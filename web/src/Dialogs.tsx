@@ -1,11 +1,10 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { Icon } from "./Icon";
 import { FONTS, SIZES, THEMES, type Appearance } from "./appearance";
-import { backgroundTasks, effortsFor, findModel, hubHost, hubUrl, isTranscript, parseTranscript, runningTasks, taskOutputPath, type ModelOption, type SlashCommand, type Task } from "./model";
-import { backgroundStatus, isAndroid, pageVisible, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
-import { formatAgo } from "./sidebar";
+import { effortsFor, findModel, hubHost, hubUrl, runningTasks, type ModelOption, type SlashCommand } from "./model";
+import { backgroundStatus, isAndroid, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
+import { DEVICE_STATE, deviceList, formatAgo } from "./sidebar";
 import { describeCwd, type Session, type Store } from "./store";
-import { TranscriptView } from "./Thread";
 
 /** 弹窗。Esc 只关弹窗，不能冒泡到窗口上变成中断任务。 */
 /** `local`：只盖住对话区并在其中居中（和输入框对齐），要放在 `.main` 里渲染。 */
@@ -179,19 +178,50 @@ export function WorkspaceDialog({ store }: { store: Store }) {
  * 弹出菜单放在按钮上方还是下方，最高多高。新会话页的输入框在窗口中间，
  * 上方空间不够时菜单会被 `.main` 的 `overflow: hidden` 裁掉，滚也滚不到被裁的部分。
  */
-function useMenuFit(anchor: RefObject<HTMLElement | null>, open: boolean, deps: unknown[]): CSSProperties {
+/**
+ * 菜单能显示的上下范围：最近一个会裁剪内容的祖先（`overflow` 不是 visible，如侧栏的会话列表、`.main`），
+ * 再和窗口取交集。只按窗口算时，侧栏第二行的菜单会以为上方够放，结果被列表裁掉。
+ */
+function clipBounds(el: HTMLElement): { top: number; bottom: number } {
+  let top = 0;
+  let bottom = innerHeight;
+  for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (style.overflowY === "visible" && style.overflowX === "visible") continue;
+    const rect = node.getBoundingClientRect();
+    top = Math.max(top, rect.top);
+    bottom = Math.min(bottom, rect.bottom);
+    break;
+  }
+  return { top, bottom };
+}
+
+/**
+ * `fixed`：菜单按窗口定位（`position: fixed`），不受滚动列表裁剪，用于侧栏的会话行；
+ * 此时按窗口判断上下，`align` 决定和按钮的哪一边对齐。
+ */
+export function useMenuFit(anchor: RefObject<HTMLElement | null>, open: boolean, deps: unknown[], fixed = false, align: "left" | "right" = "right", menuRef?: RefObject<HTMLElement | null>): CSSProperties {
   const [fit, setFit] = useState<CSSProperties>({});
   useLayoutEffect(() => {
     if (!open || !anchor.current) return;
     const measure = () => {
       const box = anchor.current!.getBoundingClientRect();
-      const bounds = anchor.current!.closest(".main")?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight };
+      const bounds = fixed ? { top: 0, bottom: innerHeight } : clipBounds(anchor.current!);
       const gap = 6 + 8;
       const above = box.top - bounds.top - gap;
       const below = bounds.bottom - box.bottom - gap;
-      const menu = anchor.current!.querySelector<HTMLElement>(".menu");
+      // 放到 body 下的菜单不在按钮里面，由调用方传进来。
+      const menu = menuRef?.current ?? anchor.current!.querySelector<HTMLElement>(".menu");
       const need = menu ? menu.scrollHeight : 0;
-      const down = above < need && below > above;
+      // 按窗口定位时优先往下（侧栏行菜单的自然方向）；其余优先往上（输入框上的菜单）。
+      const down = fixed ? below >= need || below > above : above < need && below > above;
+      if (fixed) {
+        const side = align === "left" ? { left: box.left, right: "auto" } : { right: innerWidth - box.right, left: "auto" };
+        setFit(down
+          ? { position: "fixed", top: box.bottom + 6, bottom: "auto", maxHeight: below, ...side }
+          : { position: "fixed", bottom: innerHeight - box.top + 6, top: "auto", maxHeight: above, ...side });
+        return;
+      }
       setFit(down ? { top: "calc(100% + 6px)", bottom: "auto", maxHeight: below } : { maxHeight: above });
     };
     measure();
@@ -202,8 +232,8 @@ function useMenuFit(anchor: RefObject<HTMLElement | null>, open: boolean, deps: 
 }
 
 /**
- * 模型和推理强度（参考 Codex）：主视图是强度滑块，上面显示强度和当前模型，点模型名换成模型列表。
- * 拖滑块不关菜单；右上角恢复成模型默认强度。
+ * 模型和推理强度：上面一行是当前模型，点开换成模型列表；下面是强度滑块和档位名。
+ * 拖滑块、点档位都不关菜单；设过强度时标题行右边可以恢复默认。
  */
 export function ModelMenu({ models, model, effort, onChange, onEffort }: {
   models: ModelOption[];
@@ -268,29 +298,43 @@ export function ModelMenu({ models, model, effort, onChange, onEffort }: {
         </div>
       ) : open ? (
         <div className="menu effort-card" style={fit}>
-          {effortLabel ? (
-            <button type="button" className="effort-reset" title="恢复默认强度" aria-label="恢复默认强度" onClick={() => onEffort(undefined)}><Icon name="reset" size={14} /></button>
-          ) : null}
-          <strong className={effortLabel ? (effort === "max" ? "max" : "") : "unset"}>{efforts.length ? effortLabel ?? "默认" : "不支持调强度"}</strong>
-          <button type="button" className="effort-model" onClick={() => setPicking(true)}>{modelName}<Icon name="chev" size={11} /></button>
+          <div className="menu-title">模型</div>
+          <button type="button" className="effort-model" onClick={() => setPicking(true)}>
+            <span><b>{modelName}</b></span>
+            <Icon name="chev" size={12} />
+          </button>
+          <div className="menu-sep" />
+          <div className="effort-head">
+            <span className="menu-title">推理强度</span>
+            {!efforts.length ? <small>这个模型不支持</small> : effortLabel ? (
+              <button type="button" className="effort-reset" title="恢复成模型的默认强度" onClick={() => onEffort(undefined)}><Icon name="reset" size={12} />恢复默认</button>
+            ) : <small>默认</small>}
+          </div>
           {efforts.length ? (
-            <div className={`effort-slider${effortLabel ? "" : " unset"}${effort === "max" ? " max" : ""}`} style={{ "--pos": efforts.length > 1 ? position / (efforts.length - 1) : 0 } as CSSProperties}>
-              <div className="effort-dots" aria-hidden>{efforts.map((e) => <i key={e.value} />)}</div>
-              <input
-                type="range"
-                min={0}
-                max={efforts.length - 1}
-                step={1}
-                value={position}
-                aria-label="推理强度"
-                aria-valuetext={effortLabel ?? "默认"}
-                onChange={(event) => onEffort(efforts[Number(event.target.value)].value)}
-                // 点在当前位置上也算选中，没设过强度时第一次点“中”要能生效。
-                onPointerUp={(event) => { if (index < 0) onEffort(efforts[Number(event.currentTarget.value)].value); }}
-              />
+            <div className="effort-body">
+              <div className={`effort-slider${effortLabel ? "" : " unset"}${effort === "max" ? " max" : ""}`} style={{ "--pos": efforts.length > 1 ? position / (efforts.length - 1) : 0 } as CSSProperties}>
+                <div className="effort-dots" aria-hidden>{efforts.map((e) => <i key={e.value} />)}</div>
+                <input
+                  type="range"
+                  min={0}
+                  max={efforts.length - 1}
+                  step={1}
+                  value={position}
+                  aria-label="推理强度"
+                  aria-valuetext={effortLabel ?? "默认"}
+                  onChange={(event) => onEffort(efforts[Number(event.target.value)].value)}
+                  // 点在当前位置上也算选中，没设过强度时第一次点“中”要能生效。
+                  onPointerUp={(event) => { if (index < 0) onEffort(efforts[Number(event.currentTarget.value)].value); }}
+                />
+              </div>
+              <div className="effort-ticks">
+                {efforts.map((e, i) => (
+                  <button type="button" key={e.value} className={i === index ? `on${e.value === "max" ? " max" : ""}` : undefined} onClick={() => onEffort(e.value)}>{e.label}</button>
+                ))}
+              </div>
+              <p className="effort-hint">{index >= 0 ? efforts[index].description : "跟随模型的默认设置"}</p>
             </div>
           ) : null}
-          {efforts.length ? <p className="effort-hint">{index >= 0 ? efforts[index].description : "跟随模型的默认设置"}</p> : null}
         </div>
       ) : null}
     </div>
@@ -340,6 +384,52 @@ export function ConfirmDialog({ store, session }: { store: Store; session: Sessi
   );
 }
 
+const OS_LABEL: Record<string, string> = { windows: "Windows", macos: "macOS", mac: "macOS", darwin: "macOS", linux: "Linux" };
+
+/** 设备弹窗：在线状态、这台设备上用过的项目（可直接开新会话）、浏览目录挂载新项目。 */
+export function DeviceDialog({ store, name }: { store: Store; name: string }) {
+  const device = deviceList(store.devices, [...store.sessions.values()].filter((s) => !s.archived)).find((d) => d.name === name);
+  const close = () => store.closeDevice();
+  const state = device?.state ?? "unknown";
+  const os = device?.os ? OS_LABEL[device.os.toLowerCase()] ?? device.os : null;
+  const hint =
+    state === "offline" ? "设备不在线：确认它已开机并连上 Tailscale。这台设备上的会话读写文件会失败，发出的消息会排队。"
+    : state === "warn" ? "设备在线，但有项目目录读不到（挂载可能断了）。新会话启动前会自动重新挂载。"
+    : state === "unknown" ? "还没有拿到这台设备的状态。"
+    : null;
+  return (
+    <Modal title={name} onClose={close} className="device-modal">
+      <div className={`device-status dev ${state}`}>
+        <i />
+        <span>{DEVICE_STATE[state]}</span>
+        {os ? <small>· {os}</small> : null}
+        <button type="button" className="link-btn" disabled={store.devicesLoading} onClick={() => store.requestDevices()}>
+          {store.devicesLoading ? "正在检测…" : "重新检测"}
+        </button>
+      </div>
+      {hint ? <p className={`help${state === "offline" ? " bad" : ""}`}>{hint}</p> : null}
+      {store.devicesError ? <p className="help bad" role="alert">{store.devicesError}</p> : null}
+      <section className="picker">
+        <h3>项目</h3>
+        <div className="list short">
+          {device?.projects.length ? device.projects.map((p) => (
+            <button type="button" key={p.cwd} className="pick" title={`${p.cwd}\n在这个项目里开新会话`} onClick={() => store.newSessionIn(p.cwd)}>
+              <Icon name="folder" />
+              <span>{p.project}</span>
+              <small>{p.running ? `${p.running} 个运行中 · ` : ""}{p.sessions} 个会话</small>
+              <Icon name="plus" size={13} />
+            </button>
+          )) : <p className="empty">还没有在这台设备上开过会话。</p>}
+        </div>
+      </section>
+      <div className="actions end">
+        <button type="button" className="btn quiet" onClick={close}>关闭</button>
+        <button type="button" className="btn solid" disabled={state === "offline"} onClick={() => store.browseDevice(name)}>浏览目录…</button>
+      </div>
+    </Modal>
+  );
+}
+
 /** `/resume`：已关闭的会话，按标题或项目名搜索，选中后回到侧边栏并打开。 */
 export function ResumeDialog({ store }: { store: Store }) {
   const [query, setQuery] = useState("");
@@ -380,80 +470,6 @@ export function ResumeDialog({ store }: { store: Store }) {
         ))}
       </div>
       <p className="help">关闭超过 7 天没有更新的会话会被自动清理。</p>
-    </Modal>
-  );
-}
-
-const TASK_TYPES: Record<string, string> = { local_bash: "命令", local_agent: "子任务", remote_agent: "远程子任务" };
-const TASK_STATUS: Record<Task["status"], string> = { running: "运行中", completed: "已完成", failed: "失败", stopped: "已停止" };
-
-function taskDuration(task: Task): string {
-  if (!task.startedAt) return "";
-  const ms = (task.endedAt ?? Date.now()) - task.startedAt;
-  if (ms < 0) return "";
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-  return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds / 60) % 60}m`;
-}
-
-/** 后台任务：能看到做什么、跑了多久、状态、输出的最后一段，也能单独停掉。 */
-export function TasksDialog({ store, session }: { store: Store; session: Session }) {
-  const tasks = backgroundTasks(session.thread);
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [, setTick] = useState(0);
-  const open = tasks.find((task) => task.id === openId);
-  const path = open ? taskOutputPath(session.thread, open) : null;
-  const running = open?.status === "running";
-  const output = store.taskOutput?.path === path ? store.taskOutput : null;
-  const pre = useRef<HTMLDivElement & HTMLPreElement>(null);
-  const transcript = useMemo(
-    () => (output?.text && isTranscript(output.text) ? parseTranscript(output.text) : null),
-    [output?.text],
-  );
-  // 打开时刷新：用时每秒，输出在任务运行时每 3 秒。窗口看不见时不刷新（失去焦点照常刷新）。
-  useEffect(() => {
-    const timer = setInterval(() => { if (pageVisible()) setTick(Date.now()); }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-  useEffect(() => {
-    if (!path) return;
-    store.readTaskOutput(path);
-    if (!running) return;
-    const timer = setInterval(() => { if (pageVisible()) store.readTaskOutput(path); }, 3000);
-    return () => clearInterval(timer);
-  }, [store, path, running]);
-  useEffect(() => {
-    if (pre.current) pre.current.scrollTop = pre.current.scrollHeight;
-  }, [output?.text]);
-  return (
-    <Modal title="后台任务" className="tasks-modal" local onClose={() => store.closeTasks()}>
-      <div className="tasks">
-        {!tasks.length ? <p className="empty">没有后台任务</p> : null}
-        {tasks.map((task) => (
-          <div key={task.id} className={`task task-${task.status}`}>
-            <div className="task-head">
-              <button type="button" className="task-main" aria-expanded={task.id === openId} onClick={() => setOpenId(task.id === openId ? null : task.id)}>
-                <span className="task-title" title={task.description}>{task.description ?? task.id}</span>
-                <small>{TASK_TYPES[task.type ?? ""] ?? task.type ?? "任务"} · {TASK_STATUS[task.status]}{taskDuration(task) ? ` · ${taskDuration(task)}` : ""}</small>
-              </button>
-              {task.status === "running" ? <button type="button" className="btn quiet" onClick={() => store.stopTask(session, task.id)}>停止</button> : null}
-            </div>
-            {task.id === openId ? (
-              <div className="task-body">
-                {task.summary ? <p className="help first">{task.summary}</p> : null}
-                {!path ? <p className="empty">这个任务没有可查看的输出文件</p> : null}
-                {output?.error ? <p className="empty bad">{output.error}</p> : null}
-                {path && !output?.error && transcript ? (
-                  <div className="output transcript" ref={pre}><TranscriptView items={transcript} cwd={session.cwd} /></div>
-                ) : path && !output?.error ? (
-                  <pre className="output" ref={pre}>{output?.text == null ? "正在读取…" : output.text || "还没有输出"}</pre>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        ))}
-      </div>
     </Modal>
   );
 }

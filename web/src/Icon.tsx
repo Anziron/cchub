@@ -14,12 +14,26 @@ const PATHS: Record<string, string> = {
   check: "m3.500 8.500 3 3 6-7",
   reset: "M3 8a5 5 0 1 0 1.500-3.600M3 2.500V5h2.500",
   close: "m4 4 8 8M12 4l-8 8",
+  edit: "M10.500 3 13 5.500 6 12.500H3.500V10zM9 4.500 11.500 7",
   back: "M10 3.500 5.500 8l4.500 4.500",
   tasks: "M3 4.500h10M3 8h10M3 11.500h6",
+  chart: "M3 13.500V9M6.500 13.500V4.500M10 13.500V7.500M13.500 13.500V2.500",
   alert: "M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2ZM8 5v3.500M8 11v.01",
+  panel: "M2.500 3.500h11v9h-11zM9.500 3.500v9",
+  enter: "M12.500 3.500v4.500a1 1 0 0 1-1 1h-8M6.500 6 3.500 9l3 3",
+  copy: "M5.500 5.500h7v7h-7zM10.500 5.500v-2h-7v7h2",
+  server: "M3 3h10v4H3zM3 9h10v4H3zM5.500 5v.01M5.500 11v.01",
+  shield: "M8 2.300 3.200 4v3.600c0 3 2.100 5.200 4.800 6.100 2.700-.9 4.800-3.100 4.800-6.100V4z",
+  diff: "M5 2.500v7M1.500 6h7M8.500 12.500h6",
+  info: "M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2ZM8 7.300v3.700M8 5v.01",
+  plan: "M4 2.500h8v11H4zM6 5.500h4M6 8h4M6 10.500h2.500",
+  pin: "M5.500 2.500h5M6.500 2.500v3.500L4.500 9h7L9.500 6V2.500M8 9v4.500",
 };
 
 export function Icon({ name, size = 16, className }: { name: string; size?: number; className?: string }) {
+  if (name === "more") {
+    return <svg width={size} height={size} viewBox="0 0 16 16" className={className} aria-hidden="true"><circle cx="3.500" cy="8" r="1.200" fill="currentColor" /><circle cx="8" cy="8" r="1.200" fill="currentColor" /><circle cx="12.500" cy="8" r="1.200" fill="currentColor" /></svg>;
+  }
   if (name === "stop") {
     return <svg width={size} height={size} viewBox="0 0 16 16" className={className}><rect x="4" y="4" width="8" height="8" rx="1.600" fill="currentColor" /></svg>;
   }

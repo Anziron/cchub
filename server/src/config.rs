@@ -41,6 +41,8 @@ pub struct Config {
     pub title_cmd: String,
     /// systemd 模式下起标题进程的 scope 的 `MemoryMax`。
     pub title_memory_max_mb: u64,
+    /// 统计整体用量的命令，协议见 `usage.rs`；为空时关闭。
+    pub usage_cmd: String,
 }
 
 impl Config {
@@ -103,6 +105,7 @@ impl Config {
             workspace_cmd: var("HUBD_WORKSPACE_CMD", "cc-workspace"),
             title_cmd: var("HUBD_TITLE_CMD", DEFAULT_TITLE_CMD),
             title_memory_max_mb,
+            usage_cmd: var("HUBD_USAGE_CMD", "cchub-usage"),
             allowed_users,
             retention: Duration::from_secs(retention_days * 24 * 60 * 60),
             session_memory_max_mb,

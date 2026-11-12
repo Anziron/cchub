@@ -11,7 +11,10 @@ void loadHub().then((hub) => {
     return;
   }
   const store = new Store(hub);
-  if (import.meta.env.DEV) store.select(new URLSearchParams(location.search).get("s"));
+  if (import.meta.env.DEV) {
+    store.select(new URLSearchParams(location.search).get("s"));
+    void import("./demo").then((demo) => demo.setupDemo(store));
+  }
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
       <App store={store} />

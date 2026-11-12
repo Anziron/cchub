@@ -9,6 +9,7 @@ publish.workspace = true
 ts = ["dep:ts-rs"]
 
 [dependencies]
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 serde.workspace = true
 serde_json.workspace = true
 ts-rs = { version = "11", optional = true }

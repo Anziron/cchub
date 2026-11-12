@@ -66,7 +66,7 @@ class KeepAliveService : Service() {
     private fun handle(message: JSONObject) {
         val manager = getSystemService(NotificationManager::class.java)
         when (message.getString("cmd")) {
-            "status" -> {
+            "status" -> synchronized(statusLock) {
                 lastStatus = message.getString("text")
                 manager.notify(STATUS_ID, build(this, lastStatus))
             }
@@ -86,7 +86,7 @@ class KeepAliveService : Service() {
                     id,
                     builder
                         .setSmallIcon(R.drawable.ic_cchub_status)
-                        .setContentTitle("cchub")
+                        .setContentTitle("CcHub")
                         .setContentText(message.getString("body"))
                         .setAutoCancel(true)
                         .setContentIntent(openApp(this, session, id))
@@ -104,11 +104,15 @@ class KeepAliveService : Service() {
             return START_NOT_STICKY
         }
         // 服务启动是异步的，这时状态可能已经更新过，所以读最新值。
-        val notification = build(this, lastStatus)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(STATUS_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(STATUS_ID, notification)
+        // 读值、构建、发出要和 status 消息互斥：否则这里读到旧状态，构建期间新状态先发出去，
+        // startForeground 再用旧文字盖掉它，通知就一直停在“正在连接服务器”。
+        synchronized(statusLock) {
+            val notification = build(this, lastStatus)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(STATUS_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(STATUS_ID, notification)
+            }
         }
         return START_NOT_STICKY
     }
@@ -129,6 +133,9 @@ class KeepAliveService : Service() {
 
         @Volatile
         var lastStatus = "正在连接服务器"
+
+        /** 保护“改 lastStatus 并发出状态通知”这一步，见 onStartCommand。 */
+        private val statusLock = Any()
 
         fun createChannels(context: Context) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -168,7 +175,7 @@ class KeepAliveService : Service() {
             }
             return builder
                 .setSmallIcon(R.drawable.ic_cchub_status)
-                .setContentTitle("cchub")
+                .setContentTitle("CcHub")
                 .setContentText(text)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)

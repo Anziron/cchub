@@ -1,10 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 状态栏小图标：与应用图标同形（嵌套的两个 C 加一个点），单色。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
     <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.1"
+        android:strokeLineCap="round"
+        android:pathData="M17.016,7.372A7.2,7.2 0,1 0,17.016 16.628" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.1"
+        android:strokeLineCap="round"
+        android:pathData="M14.105,9.815A3.4,3.4 0,1 0,14.105 14.185" />
+    <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M12,3a9,9 0,1 0,0 18a9,9 0,1 0,0 -18zM12,8a4,4 0,1 1,0 8a4,4 0,1 1,0 -8z" />
+        android:pathData="M18.9,10.3a1.7,1.7 0,1 0,0 3.4a1.7,1.7 0,1 0,0 -3.4z" />
 </vector>

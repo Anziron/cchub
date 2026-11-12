@@ -1,7 +1,34 @@
 import { marked, type Token, type Tokens } from "marked";
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { isWebUrl, openUrl } from "./platform";
 
 // 渲染成 React 元素而不是 HTML 字符串，模型输出里的标签只会显示成文字。
+
+/** 网页链接：点击用系统浏览器打开，不在应用窗口里跳转。 */
+export function WebLink({ url, children }: { url: string; children?: ReactNode }) {
+  return (
+    <a className="link" href={url} title={url} onClick={(event) => { event.preventDefault(); openUrl(url); }}>
+      {children ?? url}
+    </a>
+  );
+}
+
+const URL_RE = /https?:\/\/[^\s<>"'`，。；）】]+/g;
+
+/** 纯文本里的网址变成可点的链接（工具输出等）。末尾的标点不算网址。 */
+export function linkify(text: string): ReactNode {
+  if (!text.includes("http")) return text;
+  const parts: ReactNode[] = [];
+  let last = 0;
+  for (const match of text.matchAll(URL_RE)) {
+    const url = match[0].replace(/[.,;:!?)\]}]+$/, "");
+    const at = match.index ?? 0;
+    parts.push(text.slice(last, at), <WebLink key={at} url={url} />);
+    last = at + url.length;
+  }
+  parts.push(text.slice(last));
+  return parts;
+}
 
 function inline(tokens: Token[] | undefined): ReactNode {
   return tokens?.map((token, i) => {
@@ -16,8 +43,12 @@ function inline(tokens: Token[] | undefined): ReactNode {
         return <code key={i}>{(token as Tokens.Codespan).text}</code>;
       case "br":
         return <br key={i} />;
-      case "link":
-        return <span key={i} className="link" title={(token as Tokens.Link).href}>{inline((token as Tokens.Link).tokens)}</span>;
+      case "link": {
+        const { href, tokens: children } = token as Tokens.Link;
+        return isWebUrl(href)
+          ? <WebLink key={i} url={href}>{inline(children)}</WebLink>
+          : <span key={i} className="link" title={href}>{inline(children)}</span>;
+      }
       case "text":
         return "tokens" in token && token.tokens ? inline(token.tokens) : decode(token.text);
       case "escape":
@@ -121,8 +152,18 @@ function useThrottled(value: string, ms: number, enabled: boolean): string {
   return enabled ? shown : value;
 }
 
+/** 一个块级元素。原文没变就不重画：流式输出时前面已完成的块不动，只有最后一块在变。 */
+const Block = memo(
+  function Block({ token, index }: { token: Token; index: number }) {
+    return <>{block(token, index)}</>;
+  },
+  (a, b) => a.token.raw === b.token.raw && a.token.type === b.token.type && a.index === b.index,
+);
+
 export const Markdown = memo(function Markdown({ text, live = false }: { text: string; live?: boolean }) {
   // 流式消息每个片段都重新解析整段很费 CPU，限到 80ms 一次；完整文本立即渲染。
+  // 解析结果按文本缓存：父组件因别的原因重渲染时不重新解析。
   const shown = useThrottled(text, LIVE_PARSE_MS, live);
-  return <div className="reply">{marked.lexer(shown).map(block)}</div>;
+  const tokens = useMemo(() => marked.lexer(shown), [shown]);
+  return <div className="reply">{tokens.map((token, i) => <Block key={i} token={token} index={i} />)}</div>;
 });

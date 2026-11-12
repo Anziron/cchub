@@ -64,3 +64,53 @@ test("排序按 active，缺失时退回 updated；updated 变化不影响顺序
   list[0]!.updated = 99999;
   assert.deepEqual(recentSessions(list).map((r) => r.session.id), ["y1", "x1", "x2"]);
 });
+
+test("按日期分组：今天 / 昨天 / 7 天内 / 更早，组内按时间倒序，空组不返回", async () => {
+  const { groupByDate } = await import("../src/sidebar.ts");
+  const noon = new Date(2026, 10, 11, 12, 0, 0).getTime() / 1000;
+  const groups = groupByDate([
+    { id: "a", updated: noon - 60 },
+    { id: "b", updated: noon - 3600 },
+    { id: "c", updated: noon - 86400 },
+    { id: "d", updated: noon - 3 * 86400 },
+    { id: "e", updated: noon - 30 * 86400 },
+    { id: "f", updated: noon - 30 * 86400, active: noon - 10 },
+  ], noon);
+  assert.deepEqual(groups.map((g) => [g.label, g.sessions.map((s) => s.id)]), [["今天", ["f", "a", "b"]], ["昨天", ["c"]], ["7 天内", ["d"]], ["更早", ["e"]]]);
+  assert.deepEqual(groupByDate([{ id: "x", updated: noon - 30 * 86400 }], noon).map((g) => g.label), ["更早"]);
+});
+
+const sess = (cwd: string | undefined, attached: boolean, deviceOnline: boolean, running = false) => ({ cwd, attached, deviceOnline, running });
+
+test("设备列表：登记的设备全部列出，状态以登记表为准；没登记表时退回会话探测", async () => {
+  const { deviceList } = await import("../src/sidebar.ts");
+  const sessions = [
+    sess("/mnt/office/d/a", true, true, true),
+    sess("/mnt/office/d/a", false, true),
+    sess("/mnt/office/d/b", true, false),
+    sess("/mnt/laptop/x", true, false),
+    sess("/mnt/nas/z", false, true),
+    sess("/root/work", true, true),
+    sess(undefined, true, true),
+  ];
+  const registry = [
+    { name: "office", os: "windows", online: true },
+    { name: "laptop", os: "macos", online: false },
+    { name: "spare", os: "linux", online: false },
+  ];
+  const list = deviceList(registry, sessions);
+  assert.deepEqual(list.map((d) => [d.name, d.state, d.os]), [
+    // 登记表说在线，但有项目目录读不到：提示挂载有问题。
+    ["office", "warn", "windows"],
+    ["laptop", "offline", "macos"],
+    // 没登记但有会话：按探测，没订阅就是未检测。
+    ["nas", "unknown", null],
+    ["spare", "offline", "linux"],
+  ]);
+  assert.deepEqual(list[0]!.projects, [
+    { cwd: "/mnt/office/d/a", project: "a", sessions: 2, running: 1 },
+    { cwd: "/mnt/office/d/b", project: "b", sessions: 1, running: 0 },
+  ]);
+  // 还没拿到登记表：只按会话探测。
+  assert.deepEqual(deviceList(null, sessions).map((d) => [d.name, d.state]), [["office", "online"], ["laptop", "offline"], ["nas", "unknown"]]);
+});

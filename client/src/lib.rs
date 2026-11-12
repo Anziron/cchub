@@ -6,8 +6,8 @@ use std::future::Future;
 use std::time::Duration;
 
 use cchub_protocol::{
-    is_user_message, ClientMsg, ConnectionState, EventClass, Frame, Inbound, InboundAction,
-    ServerMsg, SessionInfo, UiEvent,
+    is_user_message, with_deflate_query, ClientMsg, ConnectionState, EventClass, Frame,
+    FrameDecoder, Inbound, InboundAction, ServerMsg, SessionInfo, UiEvent,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -77,6 +77,8 @@ async fn run(
         ..State::default()
     };
     let mut backoff = initial_backoff;
+    // 要求压缩：长会话回放时传输量约为原来的四分之一。旧版 hubd 不认这个参数，照旧发文本。
+    let url = with_deflate_query(&url);
 
     loop {
         on_event(UiEvent::Connection {
@@ -148,6 +150,8 @@ where
     });
     // 按截止时间算，不能每轮重新计时：定时发送的消息会让断线一直检测不出来。
     let mut deadline = Instant::now() + IDLE_TIMEOUT;
+    // 压缩上下文跟着连接走，重连后必须换新的。
+    let mut decoder = FrameDecoder::new();
 
     loop {
         tokio::select! {
@@ -167,12 +171,22 @@ where
             incoming = tokio::time::timeout_at(deadline, socket.next()) => {
                 let Ok(Some(Ok(message))) = incoming else { return Ended::Lost };
                 deadline = Instant::now() + IDLE_TIMEOUT;
-                let Message::Text(text) = message else { continue };
-                let Ok(frame) = serde_json::from_str::<Frame>(text.as_str()) else { continue };
-                for msg in state.on_frame(frame, on_event, on_watched) {
-                    if send(&mut socket, &msg).await.is_err() {
-                        state.pending.push(msg);
-                        return Ended::Lost;
+                let texts = match message {
+                    Message::Text(text) => vec![text.to_string()],
+                    Message::Binary(bytes) => match decoder.decode(&bytes) {
+                        Ok(texts) => texts,
+                        // 解不开说明压缩上下文已经错位，后面的批次也解不对：断开重连，从已收到的位置续订。
+                        Err(_) => return Ended::Lost,
+                    },
+                    _ => continue,
+                };
+                for text in texts {
+                    let Ok(frame) = serde_json::from_str::<Frame>(&text) else { continue };
+                    for msg in state.on_frame(frame, on_event, on_watched) {
+                        if send(&mut socket, &msg).await.is_err() {
+                            state.pending.push(msg);
+                            return Ended::Lost;
+                        }
                     }
                 }
             }
@@ -292,6 +306,14 @@ impl State {
             }
             ServerMsg::TaskOutput { path, text, error } => {
                 on_event(UiEvent::TaskOutput { path, text, error });
+                Vec::new()
+            }
+            ServerMsg::Usage { stats, error } => {
+                on_event(UiEvent::Usage { stats, error });
+                Vec::new()
+            }
+            ServerMsg::Devices { devices, error } => {
+                on_event(UiEvent::Devices { devices, error });
                 Vec::new()
             }
             ServerMsg::Error { message } => {
@@ -458,6 +480,58 @@ mod tests {
         next_client_msg(&mut server).await;
         server.send(first).await.unwrap();
         assert_eq!(next_payload().await, "first");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::result_large_err)] // 握手回调的签名由 tungstenite 规定
+    async fn requests_deflate_and_decodes_binary_batches() {
+        use tokio_tungstenite::accept_hdr_async;
+        use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+        let (events_tx, mut events) = mpsc::unbounded_channel();
+        let (client, task) = HubClient::new(url, Duration::from_millis(10), move |event| {
+            let _ = events_tx.send(event);
+        });
+        tokio::spawn(task);
+        client
+            .send(ClientMsg::Attach {
+                session: "s1".into(),
+                after: 0,
+            })
+            .unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let (query_tx, query_rx) = std::sync::mpsc::channel();
+        let mut server = accept_hdr_async(stream, |request: &Request, response: Response| {
+            let _ = query_tx.send(request.uri().query().map(str::to_string));
+            Ok(response)
+        })
+        .await
+        .unwrap();
+        assert_eq!(query_rx.recv().unwrap().as_deref(), Some("z=deflate"));
+        next_client_msg(&mut server).await;
+
+        let mut encoder = cchub_protocol::FrameEncoder::new();
+        let batch = [event(0, 5, "first"), event(5, 9, "second")];
+        let message = Message::Binary(encoder.encode(&batch).into());
+        server.send(message).await.unwrap();
+        // 文本消息照样能收（旧版 hubd 不认参数，只发文本）。
+        server
+            .send(Message::Text(event(9, 14, "third").into()))
+            .await
+            .unwrap();
+        let message = Message::Binary(encoder.encode(&[event(14, 20, "fourth")]).into());
+        server.send(message).await.unwrap();
+
+        let mut payloads = Vec::new();
+        while payloads.len() < 4 {
+            let received = tokio::time::timeout(Duration::from_secs(5), events.recv());
+            if let UiEvent::Event { payload, .. } = received.await.unwrap().unwrap() {
+                payloads.push(payload);
+            }
+        }
+        assert_eq!(payloads, ["first", "second", "third", "fourth"]);
     }
 
     #[tokio::test]

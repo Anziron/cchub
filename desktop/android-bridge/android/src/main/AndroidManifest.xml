@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -7,6 +8,19 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application>
+        <!--
+            关掉 emoji2 的自动初始化（AppCompat 带进来的）：它启动后会向 GMS 的字体提供者要 emoji 字体，
+            期间 GMS 进程重启或更新，系统会把占用者一起杀掉，前台服务和通知就没了。界面是 WebView，用不到它。
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+                tools:node="remove" />
+        </provider>
         <!-- dataSync 类型在 Android 15 上每天最多运行 6 小时，长任务监督要一直在线。 -->
         <service
             android:name="dev.anziron.cchub.bridge.KeepAliveService"

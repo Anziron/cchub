@@ -783,6 +783,67 @@ async fn lists_started_sessions_with_title_and_memory() {
 }
 
 #[tokio::test]
+async fn devices_come_from_workspace_status_and_are_cached() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = Temp::new("devices");
+    let calls = temp.0.join("calls");
+    let script = temp.0.join("cc-workspace");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\necho \"$1\" >> {}\n[ \"$1\" = status ] || exit 1\nprintf 'pc\\tWindows\\tonline\\nmac\\t\\toffline\\n'\n",
+            calls.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let cmd = format!(
+        "{} {} 1",
+        env!("CARGO_BIN_EXE_fake-claude"),
+        recording_in("approval", "stream.jsonl").display()
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hubd"))
+        .env("HUBD_LISTEN", "127.0.0.1:0")
+        .env("HUBD_HOST", "direct")
+        .env("HUBD_STATE_DIR", &temp.0)
+        .env("HUBD_CLAUDE_CMD", cmd)
+        .env("HUBD_WORKSPACE_CMD", &script)
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let line = lines.next_line().await.unwrap().unwrap();
+    let addr = line.rsplit(' ').next().unwrap().to_string();
+
+    // 两条连接各请求一次，命令只该跑一次。
+    for _ in 0..2 {
+        let mut socket = connect(&addr).await;
+        send(&mut socket, ClientMsg::Devices).await;
+        let reply = tokio::time::timeout(TIMEOUT, async {
+            loop {
+                if let Message::Text(text) = socket.next().await.unwrap().unwrap() {
+                    let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
+                    if let ServerMsg::Devices { devices, error } = frame.msg {
+                        return (devices, error);
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(reply.1, None);
+        assert_eq!(reply.0.len(), 2);
+        assert_eq!(reply.0[0].name, "pc");
+        assert_eq!(reply.0[0].os.as_deref(), Some("Windows"));
+        assert!(reply.0[0].online);
+        assert_eq!(reply.0[1].os, None);
+        assert!(!reply.0[1].online);
+    }
+    assert_eq!(std::fs::read_to_string(&calls).unwrap(), "status\n");
+}
+
+#[tokio::test]
 async fn websocket_with_origin_is_rejected() {
     let temp = Temp::new("origin");
     let (_hubd, addr) = spawn_hubd(&temp.0).await;
@@ -831,4 +892,83 @@ async fn non_loopback_listen_is_refused() {
         .await
         .unwrap();
     assert!(!status.success());
+}
+
+/// 订阅到 `target`（订阅时 `out` 的长度）为止，返回收到的事件和跳过区间，以及二进制消息的条数。
+async fn collect_replay(socket: &mut Socket, target: u64) -> (Vec<(u64, u64, String)>, usize) {
+    let mut decoder = cchub_protocol::FrameDecoder::new();
+    let mut got = Vec::new();
+    let mut binary = 0;
+    let wait = async {
+        loop {
+            let texts = match socket.next().await.unwrap().unwrap() {
+                Message::Text(text) => vec![text.to_string()],
+                Message::Binary(bytes) => {
+                    binary += 1;
+                    decoder.decode(&bytes).unwrap()
+                }
+                _ => continue,
+            };
+            for text in texts {
+                let frame: Frame = serde_json::from_str(&text).unwrap();
+                let (seq, next, payload) = match frame.msg {
+                    ServerMsg::Event {
+                        seq, next, payload, ..
+                    } => (seq, next, payload),
+                    ServerMsg::Skipped { seq, next } => (seq, next, String::new()),
+                    ServerMsg::Error { message } => panic!("hubd 报错：{message}"),
+                    _ => continue,
+                };
+                got.push((seq, next, payload));
+                if next >= target {
+                    return;
+                }
+            }
+        }
+    };
+    tokio::time::timeout(TIMEOUT, wait)
+        .await
+        .expect("等待回放超时");
+    (got, binary)
+}
+
+#[tokio::test]
+async fn deflate_connection_replays_the_same_events_in_binary_batches() {
+    let temp = Temp::new("deflate");
+    // 不启动进程，直接放一份日志：录制重复几遍，再加一行带大块 base64 的（会被省略）。
+    let dir = temp.0.join("s1");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut out = std::fs::read_to_string(recording("stream.jsonl"))
+        .unwrap()
+        .repeat(20);
+    let blob = "QUJD".repeat(30_000);
+    out.push_str(&format!(
+        "{{\"type\":\"user\",\"message\":{{\"content\":[{{\"type\":\"image\",\"source\":{{\"data\":\"{blob}\"}}}}]}}}}\n"
+    ));
+    std::fs::write(dir.join("out"), &out).unwrap();
+    let target = out.len() as u64;
+
+    let (_hubd, addr) = spawn_hubd(&temp.0).await;
+    let attach = ClientMsg::Attach {
+        session: "s1".into(),
+        after: 0,
+    };
+    let mut plain = connect(&addr).await;
+    send(&mut plain, attach.clone()).await;
+    let (expected, binary) = collect_replay(&mut plain, target).await;
+    assert_eq!(binary, 0, "没要求压缩的连接不能收到二进制消息");
+
+    let mut socket = connect_async(format!("ws://{addr}/ws?z=deflate"))
+        .await
+        .unwrap()
+        .0;
+    send(&mut socket, attach).await;
+    let (got, binary) = collect_replay(&mut socket, target).await;
+    assert!(binary > 0, "要求压缩的连接应收到二进制批次");
+    assert!(
+        binary < got.len(),
+        "应该合批：{binary} 条消息 {} 个事件",
+        got.len()
+    );
+    assert_eq!(got, expected);
 }

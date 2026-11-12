@@ -8,11 +8,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, RawQuery, State, WebSocketUpgrade};
 use axum::http::{header::ORIGIN, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use cchub_protocol::{
-    is_user_message, ClientMsg, Frame, LineSplitter, Outbound, OutboundLimits, ServerMsg,
+    is_user_message, wants_deflate, ClientMsg, DeviceInfo, Frame, FrameEncoder, LineSplitter,
+    Outbound, OutboundLimits, ServerMsg,
 };
 use futures_util::{SinkExt, StreamExt};
 use inotify::{Inotify, WatchMask};
@@ -25,12 +26,15 @@ use crate::device::{self, Probes, Subscription};
 use crate::host::ProcessHost;
 use crate::session::{valid_id, Sessions};
 use crate::title;
+use crate::usage;
 use crate::workspace;
 
 const HEARTBEAT: Duration = Duration::from_secs(15);
 const STATUS_EVERY: Duration = Duration::from_secs(5);
 const READ_CHUNK: usize = 64 * 1024;
 const CHANNEL_FRAMES: usize = 16;
+/// 压缩连接一批最多合并这么多字节的帧原文。
+const BATCH_BYTES: usize = 256 * 1024;
 const TITLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct App {
@@ -40,14 +44,21 @@ pub struct App {
     pub min_available_mb: u64,
     pub workspace_cmd: String,
     pub title_cmd: String,
+    /// 标题和用量统计命令所在 scope 的 `MemoryMax`；0 表示不放进独立 scope。
     pub title_memory_mb: u64,
+    /// 用量统计命令，协议见 `usage.rs`；为空时关闭。
+    pub usage_cmd: String,
+    pub usage_lock: tokio::sync::Mutex<()>,
     /// 设备探测按项目目录共享，所有连接订阅同一个结果。
     pub probes: Probes,
+    /// `cc-workspace status` 的结果和取得时间。
+    pub devices_cache: tokio::sync::Mutex<Option<(std::time::Instant, Vec<DeviceInfo>)>>,
 }
 
 pub async fn upgrade(
     State(app): State<Arc<App>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    RawQuery(query): RawQuery,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -63,22 +74,51 @@ pub async fn upgrade(
     if !allowed {
         return StatusCode::FORBIDDEN.into_response();
     }
-    ws.on_upgrade(move |socket| serve(app, socket))
+    let deflate = wants_deflate(query.as_deref());
+    ws.on_upgrade(move |socket| serve(app, socket, deflate))
 }
 
-async fn serve(app: Arc<App>, socket: WebSocket) {
+/// `deflate`：客户端要求压缩（见 `cchub_protocol::codec`）。这时把已经就绪的帧合成一批，
+/// 压缩后作为一条二进制消息发出；回放长会话时消息数和字节数都大幅减少。
+async fn serve(app: Arc<App>, socket: WebSocket, deflate: bool) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<Frame>(CHANNEL_FRAMES);
 
     let writer = tokio::spawn(async move {
         let mut heartbeat = tokio::time::interval(HEARTBEAT);
+        let mut encoder = deflate.then(FrameEncoder::new);
         loop {
             let message = tokio::select! {
                 frame = rx.recv() => match frame {
-                    Some(frame) => match serde_json::to_string(&frame) {
-                        Ok(text) => Message::Text(text.into()),
-                        Err(_) => continue,
-                    },
+                    Some(frame) => {
+                        let Ok(text) = serde_json::to_string(&frame) else { continue };
+                        match encoder.take() {
+                            None => Message::Text(text.into()),
+                            Some(enc) => {
+                                let mut size = text.len();
+                                let mut batch = vec![text];
+                                while size < BATCH_BYTES {
+                                    let Ok(frame) = rx.try_recv() else { break };
+                                    if let Ok(text) = serde_json::to_string(&frame) {
+                                        size += text.len();
+                                        batch.push(text);
+                                    }
+                                }
+                                // 运行时是单线程的：压缩放到阻塞线程池，读日志的任务同时接着读。
+                                let Ok((enc, bytes)) = spawn_blocking(move || {
+                                    let mut enc = enc;
+                                    let bytes = enc.encode(&batch);
+                                    (enc, bytes)
+                                })
+                                .await
+                                else {
+                                    return;
+                                };
+                                encoder = Some(enc);
+                                Message::Binary(bytes.into())
+                            }
+                        }
+                    }
                     None => return,
                 },
                 _ = heartbeat.tick() => Message::Ping(Vec::new().into()),
@@ -122,6 +162,14 @@ async fn serve(app: Arc<App>, socket: WebSocket) {
             }
             ClientMsg::TaskOutput { path } => {
                 tokio::spawn(task_output(path.clone(), tx.clone()));
+                continue;
+            }
+            ClientMsg::Usage { tz_offset } => {
+                tokio::spawn(usage_stats(app.clone(), *tz_offset, tx.clone()));
+                continue;
+            }
+            ClientMsg::Devices => {
+                tokio::spawn(devices(app.clone(), tx.clone()));
                 continue;
             }
             ClientMsg::Start { session, .. }
@@ -262,6 +310,10 @@ async fn handle(
                 }
                 let workdir = match app.sessions.cwd(&id) {
                     Some(workdir) => {
+                        if workdir.starts_with("/mnt") {
+                            workspace::ensure(&app.workspace_cmd, &workdir)
+                                .map_err(std::io::Error::other)?;
+                        }
                         // 在断开的挂载里启动进程不会报错，只会一直没有输出，所以先探测。
                         if !device::probe(&workdir) {
                             return Err(std::io::Error::other("设备离线，无法启动会话"));
@@ -315,9 +367,45 @@ async fn handle(
         ClientMsg::List
         | ClientMsg::Browse { .. }
         | ClientMsg::Mount { .. }
-        | ClientMsg::TaskOutput { .. } => {}
+        | ClientMsg::TaskOutput { .. }
+        | ClientMsg::Usage { .. }
+        | ClientMsg::Devices => {}
     }
     Ok(())
+}
+
+/// 设备状态在 hubd 内缓存这么久：多个连接、频繁刷新只跑一次命令。
+const DEVICES_TTL: Duration = Duration::from_secs(15);
+
+async fn devices(app: Arc<App>, tx: mpsc::Sender<Frame>) {
+    // 持锁期间命令只跑一次，排队的请求拿到的是刚写好的缓存。失败不缓存。
+    let result = {
+        let mut cache = app.devices_cache.lock().await;
+        match &*cache {
+            Some((at, devices)) if at.elapsed() < DEVICES_TTL => Ok(devices.clone()),
+            _ => {
+                let from = app.clone();
+                let fresh = spawn_blocking(move || workspace::status(&from.workspace_cmd))
+                    .await
+                    .unwrap_or_else(|error| Err(error.to_string()));
+                if let Ok(devices) = &fresh {
+                    *cache = Some((std::time::Instant::now(), devices.clone()));
+                }
+                fresh
+            }
+        }
+    };
+    let msg = match result {
+        Ok(devices) => ServerMsg::Devices {
+            devices,
+            error: None,
+        },
+        Err(error) => ServerMsg::Devices {
+            devices: Vec::new(),
+            error: Some(error),
+        },
+    };
+    let _ = tx.send(Frame { session: None, msg }).await;
 }
 
 async fn browse(
@@ -384,6 +472,22 @@ async fn task_output(path: String, tx: mpsc::Sender<Frame>) {
         Err(error) => (None, Some(error)),
     };
     let msg = ServerMsg::TaskOutput { path, text, error };
+    let _ = tx.send(Frame { session: None, msg }).await;
+}
+
+async fn usage_stats(app: Arc<App>, tz_offset: i32, tx: mpsc::Sender<Frame>) {
+    // 同一时间只跑一个统计：命令自己也加了文件锁，排队的请求等前一个写好缓存后会很快。
+    let _running = app.usage_lock.lock().await;
+    let from = app.clone();
+    let result =
+        spawn_blocking(move || usage::stats(&from.usage_cmd, tz_offset, from.title_memory_mb))
+            .await
+            .unwrap_or_else(|error| Err(error.to_string()));
+    let (stats, error) = match result {
+        Ok(stats) => (Some(stats), None),
+        Err(error) => (None, Some(error)),
+    };
+    let msg = ServerMsg::Usage { stats, error };
     let _ = tx.send(Frame { session: None, msg }).await;
 }
 

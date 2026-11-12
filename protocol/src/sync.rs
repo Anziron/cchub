@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use crate::envelope::{classify, is_message_end, EventClass};
+use crate::envelope::{classify, elide_base64, is_message_end, EventClass};
 use crate::wire::ServerMsg;
 
 /// 把文件里读到的字节切成完整的行。最后没有换行的半行留到下次，进程崩溃时不会传出半条事件。
@@ -96,6 +96,7 @@ impl Outbound {
     }
 
     pub fn push(&mut self, seq: u64, next: u64, line: String) {
+        let line = elide_base64(&line).unwrap_or(line);
         let class = classify(&line);
         let replayed_message_end =
             class == EventClass::Durable && seq < self.replay_until && is_message_end(&line);
@@ -207,6 +208,8 @@ impl Inbound {
             | ServerMsg::Browse { .. }
             | ServerMsg::Mounted { .. }
             | ServerMsg::TaskOutput { .. }
+            | ServerMsg::Usage { .. }
+            | ServerMsg::Devices { .. }
             | ServerMsg::Error { .. } => None,
         }
     }

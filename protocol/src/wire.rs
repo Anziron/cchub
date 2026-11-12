@@ -60,6 +60,22 @@ pub enum ClientMsg {
     Mount { device: String, path: String },
     /// 读取后台任务输出文件的末尾。
     TaskOutput { path: String },
+    /// 统计整体用量。`tz_offset` 是客户端时区相对 UTC 往东的分钟数，按它切日期。
+    Usage {
+        #[serde(default)]
+        tz_offset: i32,
+    },
+    /// 列出所有登记的设备和在线状态。
+    Devices,
+}
+
+/// 登记的设备。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct DeviceInfo {
+    pub name: String,
+    pub os: Option<String>,
+    pub online: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +152,16 @@ pub enum ServerMsg {
         text: Option<String>,
         error: Option<String>,
     },
+    /// 回复 `Usage`。`stats` 是统计命令输出的 JSON 原文，`hubd` 不解析。
+    Usage {
+        stats: Option<String>,
+        error: Option<String>,
+    },
+    /// 回复 `Devices`。
+    Devices {
+        devices: Vec<DeviceInfo>,
+        error: Option<String>,
+    },
     Error {
         message: String,
     },
@@ -194,6 +220,14 @@ pub enum UiEvent {
     TaskOutput {
         path: String,
         text: Option<String>,
+        error: Option<String>,
+    },
+    Usage {
+        stats: Option<String>,
+        error: Option<String>,
+    },
+    Devices {
+        devices: Vec<DeviceInfo>,
         error: Option<String>,
     },
     Error {

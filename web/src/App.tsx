@@ -1,181 +1,15 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { AppearanceMenu, CommandMenu, ConfirmDialog, ConnectDialog, ModelMenu, ResumeDialog, TasksDialog, WorkspaceDialog } from "./Dialogs";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { Composer, Welcome } from "./Composer";
+import { ConfirmDialog, ConnectDialog, DeviceDialog, ResumeDialog, WorkspaceDialog } from "./Dialogs";
 import { loadAppearance, resolveTheme, saveAppearance, type Appearance } from "./appearance";
 import { Icon } from "./Icon";
-import { isAndroid, isTouch, pageVisible, takeOpenedSession } from "./platform";
-import { firstAsk, isSending, isWaiting, matchCommands, runningTasks, type Ask, type SlashCommand, type Todo } from "./model";
-import { formatAgo, groupProjects, recentSessions, type ProjectGroupData } from "./sidebar";
-import { describeCwd, isResumeCommand, NEW_DRAFT, type Session, type Store } from "./store";
-import { describeTool, ThreadView } from "./Thread";
-
-function askHint(ask?: Ask): string {
-  if (ask?.kind === "plan") return "方案等你确认";
-  if (ask?.kind === "question") return "有个问题要问你";
-  return ask?.toolName === "Bash" ? "要运行一条命令" : "要你批准一个操作";
-}
-
-type RowState = "wait" | "busy" | "open" | "";
-
-/** 等你决定 > 正在运行（转圈）> 没结束但空闲（绿点）> 已结束（只占位）。 */
-function rowState(session: Session): RowState {
-  if (isWaiting(session.thread)) return "wait";
-  if (!session.running) return "";
-  return session.thread.phase !== "idle" || isSending(session.thread) ? "busy" : "open";
-}
-
-const STATE_ORDER: RowState[] = ["wait", "busy", "open", ""];
-
-function StateIcon({ state }: { state: RowState }) {
-  // 已结束不显示图标，但保留占位，标题才能对齐。
-  return <span className={`state${state ? ` ${state}` : ""}`} aria-hidden="true" />;
-}
-
-/** 只含用时文本的小组件：每秒刷新只重渲染它自己，窗口看不见时不刷新（失去焦点照常刷新）。 */
-function Elapsed({ since }: { since: number }) {
-  const [, setNow] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => { if (pageVisible()) setNow(Date.now()); }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-  return <>{formatDuration(Date.now() - since)}</>;
-}
-
-/** 相对时间文本（“N 分钟”），自己每 30 秒刷新一次。 */
-function Ago({ time }: { time: number }) {
-  const [, setNow] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => { if (pageVisible()) setNow(Date.now()); }, 30000);
-    return () => clearInterval(timer);
-  }, []);
-  return <>{formatAgo(time, Math.floor(Date.now() / 1000))}</>;
-}
-
-/** `recent` 为真时是“最近”列表：标题后带项目名，右侧显示相对时间。 */
-function SessionRow({ store, session, project, recent }: { store: Store; session: Session; project?: string; recent?: boolean }) {
-  const waiting = isWaiting(session.thread);
-  const current = store.selected === session.id;
-  const status = waiting || !session.running ? "" : sessionStatus(session);
-  const started = session.thread.phase !== "idle" ? session.thread.turnStartedAt : undefined;
-  return (
-    <div className="row-wrap">
-      <button className={`row session${current ? " current" : ""}`} onClick={() => store.select(session.id)}>
-        <StateIcon state={rowState(session)} />
-        <span className="name">
-          <span className="title">{session.title}{project ? <em>{project}</em> : null}</span>
-          {waiting ? <small>{askHint(firstAsk(session.thread))}</small> : null}
-          {status ? <small className="status">{status}{started ? <> · <Elapsed since={started} /></> : null}</small> : null}
-        </span>
-        {recent ? <span className="ago"><Ago time={session.updated} /></span> : null}
-      </button>
-      {session.running ? (
-        <button className="row-stop" aria-label={`结束会话 ${session.title}`} title="结束会话（之后发消息可接着聊）" onClick={() => store.askStop(session)}><Icon name="stop" size={12} /></button>
-      ) : null}
-      <button className="row-close" aria-label={`关闭会话 ${session.title}`} title="关闭会话（/resume 找回）" onClick={() => store.askArchive(session)}><Icon name="close" size={12} /></button>
-    </div>
-  );
-}
-
-const VISIBLE_SESSIONS = 5;
-const COLLAPSED_KEY = "cchub.collapsedProjects";
-/** “最近”的收起状态和项目组存在一起，用不会是路径的键。 */
-const RECENT_KEY = "#recent";
-const RECENT_LIMIT = 5;
-
-function ProjectGroup({ store, group, collapsed, toggle }: {
-  store: Store;
-  group: ProjectGroupData<Session>;
-  collapsed: boolean;
-  toggle: () => void;
-}) {
-  const { sessions } = group;
-  const [showAll, setShowAll] = useState(false);
-  // 收起时整组都藏起来，组标题右侧显示组里最要紧的状态，等你决定的不会被漏掉。
-  const shown = collapsed ? [] : sessions.filter((s, i) => showAll || i < VISIBLE_SESSIONS || s.id === store.selected);
-  const hidden = collapsed ? 0 : sessions.length - shown.length;
-  const state = collapsed ? STATE_ORDER.find((value) => sessions.some((s) => rowState(s) === value)) ?? "" : "";
-  return (
-    <div className={`group${collapsed ? " closed" : ""}`}>
-      <button className="row project" title={group.key || undefined} aria-expanded={!collapsed} onClick={toggle}>
-        <Icon name="chev" size={11} />
-        <span className="name">{group.project}{group.device ? <em>{group.device}</em> : null}</span>
-        {state ? <StateIcon state={state} /> : null}
-      </button>
-      {shown.map((s) => <SessionRow key={s.id} store={store} session={s} />)}
-      {hidden > 0 ? <button className="row more" onClick={() => setShowAll(true)}>显示更多（{hidden}）</button> : null}
-      {showAll && !collapsed && sessions.length > VISIBLE_SESSIONS ? <button className="row more" onClick={() => setShowAll(false)}>收起</button> : null}
-    </div>
-  );
-}
-
-type QuotaWindow = { utilization: number; resetsAt: number };
-
-function Quota({ label, window }: { label: string; window?: QuotaWindow }) {
-  // 窗口已过期的旧数据不显示。
-  const at = window ? window.resetsAt * 1000 : 0;
-  const percent = window && at > Date.now() ? Math.round(window.utilization * 100) : null;
-  const minutes = Math.round((at - Date.now()) / 60000);
-  const reset = minutes < 60 ? `${minutes} 分钟后` : minutes < 2880 ? `${Math.round(minutes / 60)} 小时后` : `${Math.round(minutes / 1440)} 天后`;
-  return (
-    <div className="quota" title={percent != null ? `${reset}重置（${new Date(at).toLocaleString()}）` : "还没有数据，下一轮回复后更新"}>
-      <span>{label}</span>
-      <span className="quota-bar"><i className={percent != null && percent >= 80 ? "high" : ""} style={{ width: `${percent ?? 0}%` }} /></span>
-      <span className="num">{percent != null ? `${percent}%` : "—"}</span>
-    </div>
-  );
-}
-
-function Sidebar({ store }: { store: Store }) {
-  const sessions = [...store.sessions.values()].filter((s) => !s.archived);
-  const groups = groupProjects(sessions);
-  const recent = recentSessions(sessions, RECENT_LIMIT);
-  const [collapsed, setCollapsed] = useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
-    } catch {
-      return [];
-    }
-  });
-  const toggle = (key: string) => {
-    const next = collapsed.includes(key) ? collapsed.filter((k) => k !== key) : [...collapsed, key];
-    setCollapsed(next);
-    localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next));
-  };
-  return (
-    <aside className="side">
-      <button className="row new" onClick={() => store.select(null)}>
-        <i><Icon name="plus" size={13} /></i><span className="name">新建会话</span>
-      </button>
-      <div className="side-scroll">
-        {groups.length ? (
-          <section>
-            <h2>项目</h2>
-            {groups.map((g) => (
-              <ProjectGroup key={g.key} store={store} group={g} collapsed={collapsed.includes(g.key)} toggle={() => toggle(g.key)} />
-            ))}
-          </section>
-        ) : null}
-        {recent.length ? (
-          <section className={`group${collapsed.includes(RECENT_KEY) ? " closed" : ""}`}>
-            <h2>
-              <button className="fold" aria-expanded={!collapsed.includes(RECENT_KEY)} onClick={() => toggle(RECENT_KEY)}>
-                最近<Icon name="chev" size={10} />
-              </button>
-            </h2>
-            {collapsed.includes(RECENT_KEY) ? null : recent.map((r) => <SessionRow key={r.session.id} store={store} session={r.session} project={r.project} recent />)}
-          </section>
-        ) : null}
-      </div>
-      <div className="side-foot">
-        <Quota label="5 小时" window={store.limits.fiveHour} />
-        <Quota label="本周" window={store.limits.sevenDay} />
-        <div className="quota">
-          <span>服务器可用内存</span>
-          <span className="num mem">{store.memAvailableMb == null ? "—" : `${store.memAvailableMb} MB`}</span>
-        </div>
-      </div>
-    </aside>
-  );
-}
+import type { Todo } from "./model";
+import { PaneView } from "./Panes";
+import { isAndroid, pageVisible, takeOpenedSession } from "./platform";
+import { Sidebar } from "./SessionList";
+import type { Store } from "./store";
+import { ThreadView } from "./Thread";
+import { TopBar } from "./TopBar";
 
 function useAppearance() {
   const [look, setLook] = useState<Appearance>(() => loadAppearance(localStorage, matchMedia("(prefers-color-scheme: dark)").matches));
@@ -196,286 +30,17 @@ function useAppearance() {
   }] as const;
 }
 
-function TopBar({ store, session, look, onLook }: { store: Store; session?: Session; look: Appearance; onLook: (patch: Partial<Appearance>) => void }) {
-  const { project, device } = describeCwd(session?.cwd);
-  const conn = store.connection;
-  const connClass = conn === "connected" ? "" : conn === "disconnected" ? "bad" : "pending";
-  const connText = conn === "connected" ? "已连接" : conn === "disconnected" ? "已断开" : "重连中";
-  const offline = session && !session.deviceOnline;
-  return (
-    <header className="top">
-      <button className="icon drawer-open" aria-label="会话列表" onClick={() => store.openDrawer()}><Icon name="back" /></button>
-      <div className="crumb">
-        <b>{session?.title ?? "新会话"}</b>
-        {project ? <><span className="sep">/</span><span>{project}</span><span className="sep">/</span><span>{device}</span></> : null}
-      </div>
-      <div className="top-right">
-        <div className="health">
-          <button className={connClass} onClick={() => store.toggleSettings()}><i />{store.url ? connText : "未连接"}</button>
-          {session ? <span className={offline ? "bad" : ""}><i />{offline ? "设备离线" : "设备在线"}</span> : null}
-        </div>
-        {session?.running ? <button className="btn quiet end-session" onClick={() => store.askStop(session)}>结束会话</button> : null}
-        <AppearanceMenu look={look} onChange={onLook} />
-        <button className="icon" aria-label="连接服务器" onClick={() => store.toggleSettings()}><Icon name="gear" /></button>
-      </div>
-    </header>
-  );
-}
-
-function TodoBar({ todos }: { todos: Todo[] }) {
+/** 待办进度条：窄屏和没开待办窗格时显示在对话上方。 */
+function TodoBar({ todos, onOpen }: { todos: Todo[]; onOpen: () => void }) {
   if (!todos.length) return null;
   const done = todos.filter((t) => t.status === "completed").length;
   const doing = todos.find((t) => t.status === "in_progress");
   return (
-    <details className="todo">
-      <summary>
-        <span className="bar"><i style={{ width: `${(done / todos.length) * 100}%` }} /></span>
-        <span className="now">{doing?.activeForm ?? doing?.content ?? (done === todos.length ? "全部完成" : todos[done]?.content)}</span>
-        <span className="count">{done} / {todos.length}</span>
-      </summary>
-      <ul>
-        {todos.map((t) => (
-          <li key={t.content} className={t.status === "completed" ? "done" : t.status === "in_progress" ? "doing" : ""}>{t.content}</li>
-        ))}
-      </ul>
-    </details>
-  );
-}
-
-function formatDuration(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-}
-
-/** 这个会话现在在做什么，状态行和侧边栏共用。 */
-function sessionStatus(session: Session): string {
-  const thread = session.thread;
-  const ask = firstAsk(thread);
-  if (!ask && isSending(thread)) return session.deviceOnline ? (thread.claudeSessionId ? "正在发送" : "正在启动会话") : "设备离线，恢复后发送";
-  if (ask) return ask.kind === "plan" ? "等待你确认方案" : ask.kind === "question" ? "等待你回答" : "等待你批准";
-  if (thread.phase === "thinking") return "思考中";
-  if (thread.phase === "replying") return "正在回复";
-  if (thread.phase === "tool") {
-    const tool = thread.items.find((item) => item.kind === "tool" && item.id === thread.activeTool);
-    if (tool?.kind !== "tool") return "正在执行";
-    const { verb, target } = describeTool(tool, session.cwd);
-    return `正在${verb} ${target}`;
-  }
-  const background = runningTasks(thread).length;
-  if (background) return `后台还有 ${background} 个任务`;
-  return session.running ? "空闲" : "";
-}
-
-function formatTokens(tokens: number): string {
-  if (tokens < 1000) return String(tokens);
-  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
-  return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-}
-
-function ContextMeter({ session }: { session: Session }) {
-  const context = session.thread.context;
-  if (!context) return null;
-  const percent = context.max ? Math.round((context.used / context.max) * 100) : null;
-  return (
-    <span className={`context${percent != null && percent >= 80 ? " high" : ""}`} title="这个会话已占用的上下文。接近上限时可以发 /compact 压缩。">
-      上下文 {formatTokens(context.used)}{context.max ? ` / ${formatTokens(context.max)}` : ""}{percent != null ? ` · ${percent}%` : ""}
-    </span>
-  );
-}
-
-const INTERRUPT_TIMEOUT_MS = 5000;
-
-function Activity({ store, session }: { store: Store; session: Session }) {
-  const thread = session.thread;
-  const ask = firstAsk(thread);
-  const busy = !ask && thread.phase !== "idle";
-  const background = runningTasks(thread).length;
-  // 用时由 Elapsed 自己刷新；这里只在中断等待时每秒检查是否超时。
-  const waitingStop = busy && thread.interruptAt != null;
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (!waitingStop) return;
-    const timer = setInterval(() => pageVisible() && setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [waitingStop]);
-
-  let text = busy || ask ? sessionStatus(session) : "";
-  if (!text && background) text = `这一轮已结束，后台还有 ${background} 个任务在运行`;
-  else if (!text && thread.lastTurn?.durationMs != null) {
-    const tokens = thread.lastTurn.outputTokens;
-    text = `上一轮用时 ${formatDuration(thread.lastTurn.durationMs)}${tokens ? ` · ${tokens} tokens` : ""}`;
-  } else if (!text && !session.running) text = "进程已结束，发消息时自动恢复";
-
-  const interruptAt = busy ? thread.interruptAt : undefined;
-  const unresponsive = interruptAt != null && now - interruptAt >= INTERRUPT_TIMEOUT_MS;
-  if (interruptAt != null) text = unresponsive ? "进程没有响应，可以结束会话" : "正在中断…";
-
-  const live = busy || background > 0;
-  const hasTasks = [...thread.tasks.values()].some((task) => task.backgrounded);
-  return (
-    <div className="activity">
-      {ask || live ? <span className="pulse" style={ask ? { animation: "none" } : undefined} /> : null}
-      <span className="activity-text">{text}</span>
-      {busy && thread.turnStartedAt ? <time>· <Elapsed since={thread.turnStartedAt} /></time> : null}
-      <span className="activity-right">
-        {hasTasks ? <button onClick={() => store.openTasks()}><Icon name="tasks" size={13} />后台任务{background ? ` ${background}` : ""}</button> : null}
-        {unresponsive ? <button onClick={() => store.askStop(session)}>结束会话</button> : null}
-        {busy && interruptAt == null && isTouch ? <span className="esc" role="button" onClick={() => store.interrupt(session)}>中断</span> : null}
-      </span>
-    </div>
-  );
-}
-
-/** 输入框的 `/` 菜单：和 CLI 一样，输入 `/` 就列命令，列表直接来自 CLI。 */
-function useCommandMenu(commands: SlashCommand[], text: string, setText: (text: string) => void, submit: (text: string) => void) {
-  const [index, setIndex] = useState(0);
-  const [closedFor, setClosedFor] = useState<string | null>(null);
-  const matches = closedFor === text ? [] : matchCommands(commands, text);
-  const selected = Math.min(index, Math.max(0, matches.length - 1));
-  useEffect(() => setIndex(0), [text]);
-  const choose = (command: SlashCommand, run: boolean) => {
-    // 需要参数的命令先填进去，等用户写完。
-    if (run && !command.argumentHint) submit(`/${command.name}`);
-    else setText(`/${command.name} `);
-  };
-  const onKeyDown = (event: ReactKeyboardEvent): boolean => {
-    if (!matches.length) return false;
-    if (event.key === "ArrowDown") setIndex((selected + 1) % matches.length);
-    else if (event.key === "ArrowUp") setIndex((selected - 1 + matches.length) % matches.length);
-    else if (event.key === "Tab") choose(matches[selected], false);
-    else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) choose(matches[selected], true);
-    else if (event.key === "Escape") { event.stopPropagation(); setClosedFor(text); }
-    else return false;
-    event.preventDefault();
-    return true;
-  };
-  const menu = matches.length ? <CommandMenu commands={matches} selected={selected} onChoose={(command) => choose(command, true)} /> : null;
-  return { menu, onKeyDown };
-}
-
-function Composer({ store, session }: { store: Store; session: Session }) {
-  const [text, setTextState] = useState(() => store.draft(session.id));
-  const ref = useRef<HTMLTextAreaElement>(null);
-  const thread = session.thread;
-  const busy = thread.phase !== "idle" && !firstAsk(thread);
-  const setText = (next: string) => {
-    setTextState(next);
-    store.setDraft(session.id, next);
-  };
-  const submit = (message: string) => {
-    if (!message.trim()) return;
-    store.sendText(session, message);
-    setText("");
-  };
-  const send = () => submit(text);
-  const commands = useCommandMenu(store.commandsFor(session), text, setText, submit);
-  // 有卡片等决定时不抢焦点，回车和 Esc 留给卡片。
-  useEffect(() => {
-    // 触屏上聚焦会弹出键盘，挡住内容。
-    if (!isTouch && !firstAsk(session.thread)) ref.current?.focus();
-  }, [session]);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "26px";
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }, [text]);
-  useEffect(() => {
-    if (!busy) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") store.interrupt(session);
-    };
-    addEventListener("keydown", onKey);
-    return () => removeEventListener("keydown", onKey);
-  }, [busy, store, session]);
-  return (
-    <form className="composer" onSubmit={(event) => { event.preventDefault(); send(); }}>
-      {commands.menu}
-      <textarea
-        ref={ref}
-        rows={1}
-        aria-label="输入消息"
-        placeholder={busy ? "继续补充，这一轮结束后会处理" : "继续补充"}
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={(event) => {
-          if (commands.onKeyDown(event)) return;
-          if (!isTouch && event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-            event.preventDefault();
-            send();
-          }
-        }}
-      />
-      <div className="tools">
-        <ContextMeter session={session} />
-        <ModelMenu models={store.models} model={thread.model} effort={thread.effort} onChange={(value) => store.setModel(session, value)} onEffort={(value) => store.setEffort(session, value)} />
-        {busy && !text ? (
-          <button type="button" className="send stop" aria-label="中断" onClick={() => store.interrupt(session)}><Icon name="stop" /></button>
-        ) : (
-          <button className="send" aria-label="发送"><Icon name="up" /></button>
-        )}
-      </div>
-    </form>
-  );
-}
-
-function Welcome({ store }: { store: Store }) {
-  const [text, setTextState] = useState(() => store.draft(NEW_DRAFT));
-  const [model, setModel] = useState("");
-  const [effort, setEffort] = useState<string>();
-  const setText = (next: string) => {
-    setTextState(next);
-    store.setDraft(NEW_DRAFT, next);
-  };
-  const submit = (message: string) => {
-    if (!message.trim()) return;
-    if (isResumeCommand(message)) {
-      setText("");
-      store.openResume();
-      return;
-    }
-    // 还没选工作区时先选，文字留在输入框里。
-    if (!store.cwd) {
-      setText(message);
-      store.openWorkspace();
-      return;
-    }
-    setText("");
-    store.newSession(message, store.cwd, model, effort);
-  };
-  const send = () => submit(text);
-  const commands = useCommandMenu(store.commandsFor(), text, setText, submit);
-  const { project, device } = describeCwd(store.cwd);
-  return (
-    <section className="welcome">
-      <h1>今天想让它做点什么？</h1>
-      <form className="composer" onSubmit={(event) => { event.preventDefault(); send(); }}>
-        {commands.menu}
-        <textarea
-          autoFocus={!isTouch}
-          aria-label="输入任务"
-          placeholder="描述任务，它会在后台持续运行，需要你时再叫你"
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (commands.onKeyDown(event)) return;
-            if (!isTouch && event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-              event.preventDefault();
-              send();
-            }
-          }}
-        />
-        <div className="tools">
-          <button type="button" className="workspace" title={store.cwd || undefined} onClick={() => store.openWorkspace()}>
-            <Icon name="folder" size={14} />
-            <span>{project || "选择工作区"}</span>
-            {device ? <small>{device}</small> : null}
-          </button>
-          <ModelMenu models={store.models} model={model || "default"} effort={effort} onChange={setModel} onEffort={setEffort} />
-          <button className="send" aria-label="发送" disabled={!text.trim()}><Icon name="up" /></button>
-        </div>
-      </form>
-    </section>
+    <button type="button" className="todo" onClick={onOpen} title="查看待办">
+      <span className="bar"><i style={{ width: `${(done / todos.length) * 100}%` }} /></span>
+      <span className="now">{doing?.activeForm ?? doing?.content ?? (done === todos.length ? "全部完成" : todos[done]?.content)}</span>
+      <span className="count">{done} / {todos.length}</span>
+    </button>
   );
 }
 
@@ -511,12 +76,24 @@ export function App({ store }: { store: Store }) {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [store]);
 
+  // Ctrl+O：普通档（工具合并）和详细档（逐条显示）切换，和官方一致。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "o") {
+        event.preventDefault();
+        store.toggleVerbose();
+      }
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [store]);
+
   const conn = store.connection;
   return (
     <div className={`app${store.showDrawer ? " drawer" : ""}`}>
-      <Sidebar store={store} />
+      <Sidebar store={store} look={look} onLook={setLook} />
       <main className="main">
-        <TopBar store={store} session={session} look={look} onLook={setLook} />
+        <TopBar store={store} session={session} />
         {conn === "disconnected" || (conn === "connecting" && store.url) ? (
           <div className="notice on"><Icon name="alert" /><span>与服务器的连接已断开，任务仍在服务器上运行。正在重连…</span></div>
         ) : null}
@@ -527,23 +104,26 @@ export function App({ store }: { store: Store }) {
           <div className="notice on"><Icon name="alert" /><span>{store.error}</span><button onClick={() => store.dismissError()}>知道了</button></div>
         ) : null}
         {session ? (
-          <>
-            <TodoBar todos={session.thread.todos} />
-            <ThreadView key={session.id} store={store} session={session} />
-            <footer className="dock">
-              <Activity store={store} session={session} />
-              <Composer key={session.id} store={store} session={session} />
-            </footer>
-          </>
+          <div className="body">
+            <div className="chat">
+              {store.pane !== "todos" ? <TodoBar todos={session.thread.todos} onOpen={() => store.openPane("todos")} /> : null}
+              <ThreadView key={session.id} store={store} session={session} />
+              <Composer key={`composer:${session.id}`} store={store} session={session} />
+            </div>
+            <PaneView store={store} session={session} />
+          </div>
         ) : (
-          <Welcome store={store} />
+          <div className="body">
+            <div className="chat"><Welcome store={store} /></div>
+            <PaneView store={store} />
+          </div>
         )}
-        {store.showTasks && session ? <TasksDialog store={store} session={session} /> : null}
       </main>
       {store.showSettings ? <ConnectDialog store={store} /> : null}
       {store.showWorkspace ? <WorkspaceDialog store={store} /> : null}
       {store.stopping ? <ConfirmDialog store={store} session={store.stopping} /> : null}
       {store.showResume ? <ResumeDialog store={store} /> : null}
+      {store.deviceDialog ? <DeviceDialog store={store} name={store.deviceDialog} /> : null}
     </div>
   );
 }

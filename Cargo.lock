@@ -550,6 +550,7 @@ dependencies = [
 name = "cchub-protocol"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "proptest",
  "serde",
  "serde_json",

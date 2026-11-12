@@ -4,6 +4,10 @@ import type { UiEvent } from "./generated/UiEvent";
 import type { Hub } from "./hub";
 import { isNarrow } from "./platform";
 import { sortKey } from "./sidebar";
+import { parseUsage, type UsageStats } from "./usage";
+import { afterTurn, confirmInserted, joinQueued, type Queued } from "./queue";
+import { dropRef, mountTarget, type DropRef } from "./paths";
+import type { DeviceInfo } from "./generated/DeviceInfo";
 import {
   addSending,
   allowLine,
@@ -52,6 +56,8 @@ export interface Session {
   pendingModel?: string;
   /** 已关闭：不在侧边栏显示，用 `/resume` 找回。 */
   archived: boolean;
+  /** 一轮进行中发的消息，见 `queue.ts`。 */
+  queue: Queued[];
 }
 
 const URL_KEY = "cchub.url";
@@ -66,6 +72,14 @@ const MAX_TASK_TIMES = 200;
 const TITLE_REFRESH_MS = [7000, 20000];
 /** 新会话页的草稿。 */
 export const NEW_DRAFT = "";
+
+export type PaneId = "changes" | "tasks" | "todos" | "plan" | "info" | "usage";
+const PANES: PaneId[] = ["changes", "tasks", "todos", "plan", "info", "usage"];
+/** 不依赖会话的窗格，新会话页也能打开。 */
+export const GLOBAL_PANES: PaneId[] = ["usage"];
+const PANE_KEY = "cchub.pane";
+const storedPane = (): PaneId | null => PANES.find((p) => p === localStorage.getItem(PANE_KEY)) ?? null;
+const VERBOSE_KEY = "cchub.verbose";
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
@@ -108,7 +122,10 @@ export class Store {
   models = loadModels();
   commands = loadJson<SlashCommand[]>(COMMANDS_KEY, []);
   limits = loadJson<RateLimits>(LIMITS_KEY, {});
-  showTasks = false;
+  /** 右侧窗格：改动、后台任务、待办、方案、会话信息。记在本地，切换会话时保留。 */
+  pane: PaneId | null = isNarrow() ? null : storedPane();
+  /** 详细档：工具调用逐条展开显示，不合并（Ctrl+O 切换）。 */
+  verbose = localStorage.getItem(VERBOSE_KEY) === "1";
   /** 窄屏下会话列表是否展开，手机上打开 App 先看列表。 */
   showDrawer = isNarrow();
   /** 等确认结束的会话。 */
@@ -118,12 +135,22 @@ export class Store {
   /** `/resume` 弹窗。 */
   showResume = false;
   taskOutput: { path: string; text: string | null; error: string | null } | null = null;
+  /** 整体用量（使用情况窗格），打开窗格或点刷新时向服务器要一次。 */
+  usage: { stats: UsageStats | null; error: string | null; loading: boolean } = { stats: null, error: null, loading: false };
   /** 新会话要用的工作区，服务器上的路径。 */
   cwd = localStorage.getItem(CWD_KEY) ?? "";
   showWorkspace = false;
   browse: BrowseState = { device: null, path: null, parent: null, entries: [], error: null, loading: false };
   mounting = false;
   mountError: string | null = null;
+  /** 登记的设备和在线状态（hubd 查 Tailscale），没拿到时为 null。 */
+  devices: DeviceInfo[] | null = null;
+  devicesError: string | null = null;
+  devicesLoading = false;
+  /** 打开设备弹窗的设备名。 */
+  deviceDialog: string | null = null;
+  /** 草稿被界面以外的逻辑改写（排队消息放回输入框）时加一，输入框据此重读。 */
+  draftRev = 0;
   version = 0;
 
   private listeners = new Set<() => void>();
@@ -133,12 +160,18 @@ export class Store {
   private initRequests = new Map<string, Session>();
   private initialized = new Set<string>();
   private drafts = loadJson<Record<string, string>>(DRAFTS_KEY, {});
+  private attached: Record<string, DropRef[]> = {};
+  /** 为拖入的文件挂载目录，等结果的标签；键是 `设备\n目录`。 */
+  private fileMounts = new Map<string, { key: string; path: string; name: string }[]>();
   private taskTimes = loadJson<Record<string, number>>(TASK_TIMES_KEY, {});
+  private limitsSave: ReturnType<typeof setTimeout> | 0 = 0;
 
   constructor(private hub: Hub) {
     void hub.onEvent((events) => {
-      for (const event of events) this.onEvent(event);
-      this.changed();
+      // 整批都是不影响界面的事件（如内容没变的任务输出轮询）时不刷新。
+      let dirty = false;
+      for (const event of events) if (this.onEvent(event) !== false) dirty = true;
+      if (dirty) this.changed();
     });
     if (this.url) void this.connect(this.url);
   }
@@ -178,6 +211,7 @@ export class Store {
     if (state === "connected") {
       this.showSettings = false;
       this.refresh();
+      this.requestDevices();
     }
   }
 
@@ -206,13 +240,15 @@ export class Store {
         deviceOnline: true,
         attached: false,
         thread: newThread(),
+        queue: [],
       };
       this.sessions.set(info.id, session);
     }
     return session;
   }
 
-  private onEvent(event: UiEvent): void {
+  /** 返回 `false` 表示这条事件没有改变界面要显示的东西。 */
+  private onEvent(event: UiEvent): boolean | void {
     switch (event.type) {
       case "connection":
         this.setConnection(event.state);
@@ -243,10 +279,12 @@ export class Store {
         if (session) {
           this.takeInit(event.payload);
           this.takeLimits(session, event.seq, event.payload);
+          const interrupting = session.thread.interruptAt != null;
           apply(session.thread, event.payload);
           this.stampTasks(session, event.payload);
           // 不改 active：事件到达不能影响侧边栏顺序。
           session.updated = Math.floor(Date.now() / 1000);
+          if (session.queue.length) this.settleQueue(session, interrupting);
         }
         break;
       }
@@ -254,7 +292,10 @@ export class Store {
         const session = this.sessions.get(event.session);
         if (session) {
           session.running = event.running;
-          if (!event.running) onProcessExit(session.thread);
+          if (!event.running) {
+            onProcessExit(session.thread);
+            this.restoreQueue(session);
+          }
         }
         break;
       }
@@ -269,12 +310,29 @@ export class Store {
         if (!this.browsesInFlight) this.browse = { ...event, loading: false };
         break;
       case "mounted":
+        // 为拖入文件挂的目录不是选工作区，不能切换工作区。
+        if (this.takeFileMount(event.device, event.path, event.cwd, event.error)) break;
         this.mounting = false;
         if (event.cwd) this.chooseWorkspace(event.cwd);
         else this.mountError = event.error ?? "挂载失败";
         break;
       case "task_output":
-        if (this.taskOutput?.path === event.path) this.taskOutput = { path: event.path, text: event.text, error: event.error };
+        // 内容没变就保留原对象，输出区按引用和文本判断，不用重画。
+        if (this.taskOutput?.path !== event.path || (this.taskOutput.text === event.text && this.taskOutput.error === event.error)) return false;
+        this.taskOutput = { path: event.path, text: event.text, error: event.error };
+        break;
+      case "usage": {
+        const stats = event.stats ? parseUsage(event.stats) : null;
+        const error = event.error ?? (stats ? null : "统计结果的格式不对，服务器上的统计命令可能和桌面端版本不匹配");
+        // 失败时保留上一次的结果，界面同时提示错误。
+        this.usage = { stats: stats ?? this.usage.stats, error, loading: false };
+        break;
+      }
+      case "devices":
+        this.devicesLoading = false;
+        this.devicesError = event.error;
+        // 失败时保留上一次的列表。
+        if (!event.error) this.devices = event.devices;
         break;
       case "error":
         this.error = event.message;
@@ -314,7 +372,12 @@ export class Store {
     const next = parseRateLimits(line, { session: session.id, seq, rank });
     if (!next) return;
     this.limits = mergeRateLimits(this.limits, next);
-    localStorage.setItem(LIMITS_KEY, JSON.stringify(this.limits));
+    // 重放时每条额度事件都会进来，localStorage 是同步写盘：合并到 1 秒后写一次。
+    if (this.limitsSave) return;
+    this.limitsSave = setTimeout(() => {
+      this.limitsSave = 0;
+      localStorage.setItem(LIMITS_KEY, JSON.stringify(this.limits));
+    }, 1000);
   }
 
   /** 任务事件没有时间戳，首次看到时记下来，窗口重建后重放还能用。 */
@@ -348,6 +411,71 @@ export class Store {
 
   draft(key: string): string {
     return this.drafts[key] ?? "";
+  }
+
+  /** 拖进输入框、还没发出的文件引用，按草稿分开；只在内存里。 */
+  files(key: string): DropRef[] {
+    return this.attached[key] ?? [];
+  }
+
+  addFiles(key: string, refs: DropRef[]): void {
+    const have = this.files(key);
+    const fresh = refs.filter((ref) => !have.some((h) => h.path === ref.path));
+    if (!fresh.length) return;
+    this.attached[key] = [...have, ...fresh];
+    this.changed();
+  }
+
+  /**
+   * 从系统拖进来的文件。项目外、同一台设备上的文件先挂载它所在的目录（hubd 的 `mount`，
+   * 和选工作区一样），挂上后换成服务器上的绝对路径；挂不上才标成读不到。
+   */
+  dropFiles(key: string, paths: string[], cwd: string | undefined): void {
+    const mounts: { device: string; dir: string }[] = [];
+    const refs = paths.map((path): DropRef => {
+      const ref = dropRef(path, cwd);
+      const target = ref.reachable ? null : mountTarget(path, cwd);
+      if (!target) return ref;
+      const id = `${target.device}\n${target.dir}`;
+      const waiting = this.fileMounts.get(id);
+      if (waiting) waiting.push({ key, path, name: target.name });
+      else {
+        this.fileMounts.set(id, [{ key, path, name: target.name }]);
+        mounts.push(target);
+      }
+      return { path, reachable: false, pending: true };
+    });
+    // 先放标签再发请求：回复可能马上到，到时要能找到等它的标签。
+    this.addFiles(key, refs);
+    for (const m of mounts) void this.send({ type: "mount", device: m.device, path: m.dir });
+  }
+
+  /** 文件所在目录挂载完成：等它的标签换成服务器路径，失败时标出原因。 */
+  private takeFileMount(device: string, dir: string, cwd: string | null, error: string | null): boolean {
+    const id = `${device}\n${dir}`;
+    const waiting = this.fileMounts.get(id);
+    if (!waiting) return false;
+    this.fileMounts.delete(id);
+    for (const w of waiting) {
+      this.attached[w.key] = this.files(w.key).map((ref) =>
+        ref.path !== w.path ? ref
+        : cwd ? { path: `${cwd.replace(/\/+$/, "")}/${w.name}`, reachable: true }
+        : { path: w.path, reachable: false, error: error ?? "挂载失败" },
+      );
+    }
+    return true;
+  }
+
+  removeFile(key: string, path: string): void {
+    this.attached[key] = this.files(key).filter((ref) => ref.path !== path);
+    this.changed();
+  }
+
+  /** 发送时取走文件引用。 */
+  takeFiles(key: string): DropRef[] {
+    const refs = this.files(key);
+    delete this.attached[key];
+    return refs;
   }
 
   /** 草稿存在本地：切换会话和关窗（WebView 会销毁）都不能丢。 */
@@ -389,7 +517,8 @@ export class Store {
   back(): boolean {
     if (this.stopping) this.cancelStop();
     else if (this.showResume) this.closeResume();
-    else if (this.showTasks) this.closeTasks();
+    else if (this.deviceDialog) this.closeDevice();
+    else if (this.pane) this.closePane();
     else if (this.showWorkspace) this.closeWorkspace();
     else if (this.showSettings && this.url) this.toggleSettings();
     else if (!this.showDrawer) this.openDrawer();
@@ -400,6 +529,39 @@ export class Store {
   dismissError(): void {
     this.error = null;
     this.changed();
+  }
+
+  /** 问 hubd 登记了哪些设备、是否在线。hubd 缓存 15 秒，侧栏每分钟问一次。 */
+  requestDevices(): void {
+    if (this.connection !== "connected") return;
+    this.devicesLoading = true;
+    void this.send({ type: "devices" });
+    this.changed();
+  }
+
+  openDevice(name: string): void {
+    this.deviceDialog = name;
+    this.requestDevices();
+  }
+
+  closeDevice(): void {
+    this.deviceDialog = null;
+    this.changed();
+  }
+
+  /** 在设备上浏览目录选工作区：打开工作区弹窗并直接进入这台设备。 */
+  browseDevice(name: string): void {
+    this.deviceDialog = null;
+    this.showWorkspace = true;
+    this.mountError = null;
+    this.browseTo(name, null);
+  }
+
+  /** 在某个项目里开新会话：切到新会话页并选好工作区。 */
+  newSessionIn(cwd: string): void {
+    this.deviceDialog = null;
+    this.chooseWorkspace(cwd);
+    this.select(null);
   }
 
   openWorkspace(): void {
@@ -513,6 +675,59 @@ export class Store {
     this.changed();
   }
 
+  /**
+   * 一轮进行中再发消息。插入：马上写给 CLI，它在下一个工具结果之后插进这一轮，回传同一 uuid 后移出队列。
+   * 等结束：留在本地，这一轮正常结束后合成一条发出。`/` 命令只能等结束。
+   */
+  enqueue(session: Session, text: string, mode: Queued["mode"]): void {
+    const id = crypto.randomUUID();
+    if (mode === "insert" && !text.trimStart().startsWith("/")) {
+      session.queue = [...session.queue, { id, text, mode }];
+      session.updated = session.active = Math.floor(Date.now() / 1000);
+      void this.hub.send({ type: "input", session: session.id, line: userLine(text, id) }).catch((error) => {
+        // 没写进去：转成等结束，留着让用户改或删。
+        session.queue = session.queue.map((q) => (q.id === id ? { ...q, mode: "wait" } : q));
+        this.error = String(error);
+        this.changed();
+      });
+    } else {
+      session.queue = [...session.queue, { id, text, mode: "wait" }];
+    }
+    this.changed();
+  }
+
+  /** 从队列里取回一条等结束的消息（编辑时放回输入框）。 */
+  unqueue(session: Session, id: string): string {
+    const item = session.queue.find((q) => q.id === id && q.mode === "wait");
+    if (!item) return "";
+    session.queue = session.queue.filter((q) => q !== item);
+    this.changed();
+    return item.text;
+  }
+
+  private settleQueue(session: Session, interrupted: boolean): void {
+    session.queue = confirmInserted(session.queue, session.thread);
+    const action = afterTurn(session.queue, session.thread, interrupted);
+    if (action === "flush") {
+      const text = joinQueued(session.queue);
+      session.queue = [];
+      if (text) this.sendText(session, text);
+    } else if (action === "restore") {
+      this.restoreQueue(session);
+    }
+  }
+
+  /** 被中断或进程结束：没发出的消息放回输入框，不自作主张发出去。没回传的插入消息也一起放回。 */
+  private restoreQueue(session: Session): void {
+    if (!session.queue.length) return;
+    const text = joinQueued(session.queue);
+    session.queue = [];
+    const draft = this.draft(session.id);
+    this.setDraft(session.id, draft.trim() ? `${draft.trimEnd()}\n\n${text}` : text);
+    this.draftRev++;
+    this.changed();
+  }
+
   retry(session: Session, id: string, text: string): void {
     removeItem(session.thread, id);
     this.sendText(session, text);
@@ -562,6 +777,7 @@ export class Store {
     onProcessExit(session.thread);
     // 进程没回传的消息不算送达，留下重试入口。
     failSending(session.thread);
+    this.restoreQueue(session);
     this.initialized.delete(session.id);
     // 不刷新列表：`stop` 可能还没执行完，会把会话又标回运行中。状态由 hubd 推送。
     this.changed();
@@ -615,14 +831,32 @@ export class Store {
     return [...this.sessions.values()].filter((s) => s.archived).sort((a, b) => sortKey(b) - sortKey(a));
   }
 
-  openTasks(): void {
-    this.showTasks = true;
+  openPane(pane: PaneId): void {
+    this.pane = pane;
+    localStorage.setItem(PANE_KEY, pane);
     this.changed();
   }
 
-  closeTasks(): void {
-    this.showTasks = false;
+  /** 同一个窗格再点一次就关上。 */
+  togglePane(pane: PaneId): void {
+    if (this.pane === pane) this.closePane();
+    else this.openPane(pane);
+  }
+
+  closePane(): void {
+    this.pane = null;
     this.taskOutput = null;
+    localStorage.removeItem(PANE_KEY);
+    this.changed();
+  }
+
+  openTasks(): void {
+    this.openPane("tasks");
+  }
+
+  toggleVerbose(): void {
+    this.verbose = !this.verbose;
+    localStorage.setItem(VERBOSE_KEY, this.verbose ? "1" : "0");
     this.changed();
   }
 
@@ -630,9 +864,22 @@ export class Store {
     void this.send({ type: "input", session: session.id, line: stopTaskLine(taskId) });
   }
 
+  requestUsage(): void {
+    if (this.usage.loading) return;
+    this.usage = { ...this.usage, loading: true, error: null };
+    // 按客户端时区切日期：东八区传 480。
+    void this.hub.send({ type: "usage", tz_offset: -new Date().getTimezoneOffset() }).catch((error) => {
+      this.usage = { ...this.usage, loading: false, error: String(error) };
+      this.changed();
+    });
+    this.changed();
+  }
+
   readTaskOutput(path: string): void {
-    if (this.taskOutput?.path !== path) this.taskOutput = { path, text: null, error: null };
     void this.send({ type: "task_output", path });
+    // 轮询同一个任务时不刷新界面，等结果回来、内容变了再刷新。
+    if (this.taskOutput?.path === path) return;
+    this.taskOutput = { path, text: null, error: null };
     this.changed();
   }
 

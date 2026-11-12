@@ -25,9 +25,14 @@ pub(crate) fn notify(app: &AppHandle, class: EventClass) {
     let _ = app
         .notification()
         .builder()
-        .title("cchub")
+        .title("CcHub")
         .body(notification_body(class))
         .show();
+}
+
+/// 主窗口（连同 WebView）是否还在。关到托盘时窗口被销毁，这时不必再给界面发事件。
+pub(crate) fn ui_alive(app: &AppHandle) -> bool {
+    app.get_webview_window(MAIN).is_some()
 }
 
 /// 窗口关掉时 WebView 已销毁，要重新创建。
@@ -39,10 +44,52 @@ fn show_main(app: &AppHandle) {
         return;
     }
     let _ = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::default())
-        .title("cchub")
+        .title("CcHub")
         .inner_size(1100.0, 720.0)
         .min_inner_size(720.0, 480.0)
         .build();
+}
+
+/// 只放行 http(s)，其他协议（file:、自定义协议）可能被拿来启动本机程序。
+fn is_web_url(url: &str) -> bool {
+    let lower = url.trim_start().to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://"))
+        && !url.chars().any(|c| c.is_control())
+}
+
+/// 用系统默认浏览器打开网页链接。不用插件：只需要这一个功能。
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !is_web_url(&url) {
+        return Err("只能打开 http / https 链接".into());
+    }
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        // 不经过 cmd：`start` 会把网址里的 & 当成命令分隔符。
+        let mut command = std::process::Command::new("rundll32");
+        command.args(["url.dll,FileProtocolHandler", &url]);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = std::process::Command::new("open");
+        command.arg(&url);
+        command
+    };
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let mut command = {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(&url);
+        command
+    };
+    command.spawn().map(drop).map_err(|e| e.to_string())
+}
+
+/// 窗口置顶。窗口关到托盘再打开是新窗口，由界面启动时按保存的选择再设一次。
+#[tauri::command]
+fn set_on_top(app: AppHandle, on: bool) -> Result<(), String> {
+    let window = app.get_webview_window(MAIN).ok_or("窗口不存在")?;
+    window.set_always_on_top(on).map_err(|e| e.to_string())
 }
 
 /// 第二个实例会多一条连接和一份通知，所以只唤起已有实例的窗口后退出。
@@ -73,17 +120,19 @@ pub(crate) fn run() {
         .manage(Hub::default())
         .invoke_handler(tauri::generate_handler![
             crate::hub_connect,
-            crate::hub_send
+            crate::hub_send,
+            open_url,
+            set_on_top
         ])
         .setup(move |app| {
             if let Some(listener) = instance {
                 listen_for_reopen(app.handle(), listener);
             }
-            let open = MenuItem::with_id(app, "open", "打开 cchub", true, None::<&str>)?;
+            let open = MenuItem::with_id(app, "open", "打开 CcHub", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;
             let mut tray = TrayIconBuilder::new()
-                .tooltip("cchub")
+                .tooltip("CcHub")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
@@ -118,4 +167,19 @@ pub(crate) fn run() {
                 api.prevent_exit();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_web_url;
+
+    #[test]
+    fn only_http_links_can_be_opened() {
+        assert!(is_web_url("https://example.com/a?b=1&c=2"));
+        assert!(is_web_url("HTTP://example.com"));
+        assert!(!is_web_url("file:///C:/Windows/System32/calc.exe"));
+        assert!(!is_web_url("javascript:alert(1)"));
+        assert!(!is_web_url("ms-settings:"));
+        assert!(!is_web_url("https://example.com/\nx"));
+    }
 }
