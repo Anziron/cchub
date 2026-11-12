@@ -324,28 +324,25 @@ export function Composer({ store, session }: { store: Store; session: Session })
   );
 }
 
-/** 新会话页的问候语，按当地时间变化。 */
+/** 新会话页的问候语，一行，按当地时间变化。 */
 function greeting(hour: number): string {
-  if (hour >= 5 && hour < 12) return "Good morning!";
-  if (hour >= 12 && hour < 18) return "Good afternoon!";
-  if (hour >= 18 && hour < 23) return "Good evening!";
-  return "Burning the midnight oil!";
+  const hello = hour >= 5 && hour < 12 ? "早上好" : hour >= 12 && hour < 18 ? "下午好" : hour >= 18 && hour < 23 ? "晚上好" : "夜深了";
+  return `${hello}！开启今天的任务吧`;
 }
 
-const TAGLINES = [
-  "What shall we build today?",
-  "Ready when you are.",
-  "Let's ship something great.",
-  "Pick up where you left off, or start something new.",
-  "Big idea or small fix — let's get to it.",
-  "Describe it, and let it run.",
-  "Your next commit starts here.",
-];
-
-/** 问候语下的一句话，每天换一句（同一天不变，不会每次重画都跳）。 */
-function tagline(now: Date): string {
-  const day = Math.floor((now.getTime() - now.getTimezoneOffset() * 60000) / 86400000);
-  return TAGLINES[day % TAGLINES.length];
+/** 应用图标（同 `desktop/icons/source.svg`）：两个 C 用强调色，圆点用正文色，深色主题下也看得见。 */
+function AppMark() {
+  return (
+    <svg className="app-mark" viewBox="0 0 512 512" aria-hidden="true">
+      <g transform="translate(256 256) scale(1.26) translate(-264 -256)">
+        <g fill="none" stroke="var(--accent)" strokeWidth="44" strokeLinecap="round">
+          <path d="M 370.9 159.6 A 150 150 0 1 0 370.9 352.4" />
+          <path d="M 309.6 211 A 70 70 0 1 0 309.6 301" />
+        </g>
+        <circle cx="406" cy="256" r="34" fill="currentColor" />
+      </g>
+    </svg>
+  );
 }
 
 export function Welcome({ store }: { store: Store }) {
@@ -378,8 +375,7 @@ export function Welcome({ store }: { store: Store }) {
   const now = new Date();
   return (
     <section className="welcome">
-      <h1 className="greeting">{greeting(now.getHours())}</h1>
-      <p className="tagline">{tagline(now)}</p>
+      <h1 className="greeting"><AppMark />{greeting(now.getHours())}</h1>
       {running || waiting ? (
         <p className="welcome-status">
           {waiting ? <span className="wait"><i />{waiting} 个会话等你决定</span> : null}
