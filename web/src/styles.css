@@ -207,8 +207,10 @@ svg { display: block; flex: none; }
    整块区域每帧都要重新合成遮罩，GPU 一直忙。渐变层是静态的，动画只在自己的小图层里跑。 */
 .side-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .side-scroll::before, .side-scroll::after, .stream::before, .stream::after { content: ""; position: sticky; z-index: 2; display: block; pointer-events: none; }
-.side-scroll::before { top: 0; height: 10px; margin-bottom: -10px; background: linear-gradient(var(--side), transparent); }
-.side-scroll::after { bottom: 0; height: 22px; margin-top: -22px; background: linear-gradient(transparent, var(--side)); }
+/* 侧栏的渐变层占自己的位置、不用负外边距叠在内容上：滚动中照样渐隐，滚到头时只盖住空白。
+   曾经叠在内容上，第一项和最后一项总是发虚（用户反馈）。 */
+.side-scroll::before { top: 0; height: 10px; background: linear-gradient(var(--side), transparent); }
+.side-scroll::after { bottom: 0; height: 22px; background: linear-gradient(transparent, var(--side)); }
 
 
 
@@ -393,8 +395,9 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 13.5px/1.5 va
 .side-head .dd-btn:hover, .side-head .open .dd-btn { background: var(--hover); color: var(--text-2); }
 .side-empty { margin: 8px 10px; color: var(--faint); font-size: 12px; line-height: 1.6; }
 .group { margin-bottom: 4px; }
-.group-head { display: flex; align-items: center; gap: 6px; width: 100%; height: 26px; margin-top: 6px; padding: 0 10px; border-radius: var(--r-sm); color: var(--muted); font-size: 12px; text-align: left; }
-.group-head:hover { color: var(--text-2); }
+/* 项目名：比会话标题小一点但看得清（用户反馈原来 12px 灰色太浅） */
+.group-head { display: flex; align-items: center; gap: 6px; width: 100%; height: 28px; margin-top: 6px; padding: 0 10px; border-radius: var(--r-sm); color: var(--text-2); font-size: 13px; font-weight: 500; text-align: left; }
+.group-head:hover { color: var(--text); }
 .group-head .name { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .group-head em, .row em { flex: none; color: var(--faint); font-size: 11px; font-style: normal; }
 .group-head .fold { opacity: 0; transform: rotate(90deg); transition: transform .15s var(--ease), opacity .15s var(--ease); }
