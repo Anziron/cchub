@@ -115,6 +115,15 @@ const SESSIONS: { id: string; title: string; running: boolean; lines: string[] }
     user(`第 ${i + 1} 轮：${["看一下这个函数", "再加个测试", "改成异步", "补上错误处理"][i % 4]}`),
     assistant(`n${i}`, [{ type: "text", text: Array.from({ length: 3 + (i % 3) }, (_, k) => `第 ${i + 1} 轮回复第 ${k + 1} 段。这里是一段足够长的说明文字，用来把消息流撑高，方便检查滚动时当前轮的高亮是否跟着变化。`).join("\n\n") }]),
   ]).flat() },
+  // `?s=long`：超过 20 轮、夹着工具行和长回复的会话，检查打开和切回时是否贴底。
+  ...(params.get("s") === "long" ? [{ id: "long", title: "长会话", running: false, lines: Array.from({ length: 60 }, (_, i) => [
+    user(`长会话第 ${i + 1} 轮`),
+    ...Array.from({ length: i % 4 }, (_, k) => [
+      assistant(`l${i}`, [{ type: "tool_use", id: `l${i}t${k}`, name: "Read", input: { file_path: `/work/src/f${k}.py` } }]),
+      result(`l${i}t${k}`, "ok"),
+    ]).flat(),
+    assistant(`l${i}`, [{ type: "text", text: Array.from({ length: 1 + (i % 7) * 3 }, (_, k) => `第 ${i + 1} 轮第 ${k + 1} 段，足够长的说明文字，用来把消息流撑高。`).join("\n\n") }]),
+  ]).flat() }] : []),
   ...["补充单元测试", "smoke test", "smoke test", "smoke test", "smoke test", "smoke test"].map((title, i) => ({ id: `old${i}`, title, running: false, lines: [user(title)] })),
 ];
 
@@ -231,7 +240,15 @@ export const demoHub: Hub = {
       });
     } else if (msg.type === "attach") {
       const session = SESSIONS.find((s) => s.id === msg.session);
-      session?.lines.forEach((payload, i) => emit({ type: "event", session: msg.session, class: "durable", seq: i, payload }));
+      // 长会话分批到达，和真实连接一样边收边画。
+      if (msg.session === "long") {
+        const lines = session?.lines ?? [];
+        const batch = (from: number) => {
+          lines.slice(from, from + 15).forEach((payload, i) => emit({ type: "event", session: msg.session, class: "durable", seq: from + i, payload }));
+          if (from + 15 < lines.length) setTimeout(() => batch(from + 15), 16);
+        };
+        batch(0);
+      } else session?.lines.forEach((payload, i) => emit({ type: "event", session: msg.session, class: "durable", seq: i, payload }));
       const event = (o: unknown) => emit({ type: "event", session: msg.session, class: "durable", seq: 0, payload: JSON.stringify(o) });
       const hours = Math.floor(Date.now() / 1000) + 7200;
       event({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.34, resetsAt: hours }, seven_day: { utilization: 0.86, resetsAt: hours + 400000 } } } });

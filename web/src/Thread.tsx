@@ -294,6 +294,10 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
   // 每个会话一个实例（App 里按会话 ID 设 key），回到会话时从底部开始。
   const pinned = useRef(true);
   const lastTop = useRef(0);
+  // 最近一次用户滚动操作的时间，和是否正按住滚动条。只有用户在滚时，往上才算离开底部。
+  const intent = useRef(0);
+  const dragging = useRef(false);
+  const markIntent = () => { intent.current = performance.now(); };
   const frame = useRef(0);
   // 渲染和尺寸变化都只登记一次 rAF，在帧内统一先读后写，避免布局抖动。
   const toBottom = useRef(() => {
@@ -400,11 +404,25 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
         className="stream"
         aria-label="消息流"
         ref={ref}
+        onWheel={markIntent}
+        onTouchStart={markIntent}
+        onTouchMove={markIntent}
+        onKeyDown={markIntent}
+        onPointerDown={(event) => {
+          markIntent();
+          // 拖滚动条时不再有指针事件传进来，按住期间都算用户在滚。
+          if (event.target !== event.currentTarget) return;
+          dragging.current = true;
+          addEventListener("pointerup", () => { dragging.current = false; }, { once: true });
+        }}
         onScroll={(event) => {
           const el = event.currentTarget;
           // 只有真的往上滚才算离开底部。内容变高也会让“离底距离”变大，不能据此判断。
+          // 排版也会让 scrollTop 变小（滚动锚定、裁掉最上面一轮、新消息先按 40px 占位时区域临时变矮被压回），
+          // 所以还要求刚有用户操作。
+          const byUser = dragging.current || performance.now() - intent.current < 300;
           if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) pinned.current = true;
-          else if (el.scrollTop < lastTop.current - 1) pinned.current = false;
+          else if (byUser && el.scrollTop < lastTop.current - 1) pinned.current = false;
           lastTop.current = el.scrollTop;
           syncAnchor();
           if (el.scrollTop < 300 && !pinned.current) showMore();
