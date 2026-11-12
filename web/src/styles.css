@@ -818,9 +818,10 @@ a.link:hover { text-decoration-thickness: 2px; }
 .change-group > summary .chev { flex: none; color: var(--faint); transition: transform .15s var(--ease); }
 .change-group[open] > summary .chev { transform: rotate(90deg); }
 .change-group > summary svg { flex: none; }
-/* 文件夹和文件一眼分开：文件夹图标和目录名用暖黄色，文件前面是灰色的文件图标 */
-:root { --folder: #b98a2e; }
-[data-tone="dark"] { --folder: #d9ad55; }
+/* 文件夹和文件一眼分开：文件夹图标和目录名用蓝色，文件前面是灰色的文件图标。
+   不用暖黄 / 橙色：和米色背景、橙色强调色是同一色系，看不出来（用户反馈）；也避开增删的红绿。 */
+:root { --folder: #3569ad; }
+[data-tone="dark"] { --folder: #72a3e3; }
 .change-group > summary .folder-icon { color: var(--folder); }
 .change-group > summary .group-dir { color: color-mix(in srgb, var(--folder) 75%, var(--text)); }
 .change-group > summary:hover .group-dir { color: var(--folder); }
