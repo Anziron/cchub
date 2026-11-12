@@ -324,10 +324,35 @@ export function Composer({ store, session }: { store: Store; session: Session })
   );
 }
 
-/** 新会话页的问候语，一行，按当地时间变化。 */
-function greeting(hour: number): string {
-  const hello = hour >= 5 && hour < 12 ? "早上好" : hour >= 12 && hour < 18 ? "下午好" : hour >= 18 && hour < 23 ? "晚上好" : "夜深了";
-  return `${hello}！开启今天的任务吧`;
+/**
+ * 新会话页的问候语：按时间段的问候 + 随机一句，每次打开新会话页换一句，不和上一次重复。
+ * 改了这里的字要重新生成问候语字体子集（见 AGENTS.md），不然新字会退回系统宋体。
+ */
+const HELLOS: [from: number, to: number, words: string[]][] = [
+  [5, 12, ["早上好！", "早安！"]],
+  [12, 18, ["下午好！", "午安！"]],
+  [18, 23, ["晚上好！", "晚上好呀，"]],
+];
+const NIGHT = ["夜深了，", "还没睡呀，"];
+const LINES = [
+  "开启今天的任务吧",
+  "今天想做点什么？",
+  "有什么要交给我的？",
+  "说说你的想法吧",
+  "从哪里开始呢？",
+  "一起把它做出来",
+  "准备好了，随时开始",
+  "接着上次的继续吧",
+];
+const LAST_LINE_KEY = "cchub.greetingLine";
+
+function greeting(hour: number, random = Math.random): string {
+  const hellos = HELLOS.find(([from, to]) => hour >= from && hour < to)?.[2] ?? NIGHT;
+  const last = Number(localStorage.getItem(LAST_LINE_KEY));
+  let line = Math.floor(random() * LINES.length);
+  if (line === last) line = (line + 1) % LINES.length;
+  localStorage.setItem(LAST_LINE_KEY, String(line));
+  return hellos[Math.floor(random() * hellos.length)] + LINES[line];
 }
 
 /** 应用图标（同 `desktop/icons/source.svg`）：两个 C 用强调色，圆点用正文色，深色主题下也看得见。 */
@@ -372,10 +397,11 @@ export function Welcome({ store }: { store: Store }) {
   const running = live.filter((s) => s.running && s.thread.phase !== "idle").length;
   const waiting = live.filter((s) => firstAsk(s.thread)).length;
   const recent = store.recentWorkspaces().slice(0, 4);
-  const now = new Date();
+  // 打开新会话页时选一次，之后重画不变。
+  const [hello] = useState(() => greeting(new Date().getHours()));
   return (
     <section className="welcome">
-      <h1 className="greeting"><AppMark />{greeting(now.getHours())}</h1>
+      <h1 className="greeting"><AppMark />{hello}</h1>
       {running || waiting ? (
         <p className="welcome-status">
           {waiting ? <span className="wait"><i />{waiting} 个会话等你决定</span> : null}
