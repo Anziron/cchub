@@ -304,13 +304,21 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
       if (element && pinned.current) element.scrollTop = element.scrollHeight;
     });
   }).current;
+  // 自己刚发出的消息（新出现的“发送中”）总是回到底部，不管之前翻到了哪里。
+  const sent = useRef<string | undefined>(undefined);
+  let lastSending: string | undefined;
+  for (const item of session.thread.items) if (item.kind === "user" && item.state === "sending") lastSending = item.id;
+  if (lastSending && lastSending !== sent.current) pinned.current = true;
+  sent.current = lastSending ?? sent.current;
   // 用户往上翻时不打扰，在底部时跟随新内容。
   useLayoutEffect(toBottom);
-  // 长消息用了 content-visibility，渲染后高度才准，高度变了要再贴一次底。
+  // 长消息用了 content-visibility，渲染后高度才准，高度变了要再贴一次底；
+  // 输入框变高、排队消息出现时消息区变矮，也要再贴一次。
   useEffect(() => {
-    if (!column.current) return;
+    if (!column.current || !ref.current) return;
     const observer = new ResizeObserver(toBottom);
     observer.observe(column.current);
+    observer.observe(ref.current);
     return () => {
       observer.disconnect();
       cancelAnimationFrame(frame.current);
