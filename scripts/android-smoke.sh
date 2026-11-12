@@ -62,12 +62,6 @@ body = image.crop((0, height // 10, width, height))
 sys.exit(0 if len(set(body.getdata())) > 20 else 1)
 EOF
 }
-# [DEBUG-fp] 临时诊断：谁占用着 GMS 的字体提供者（它的进程死掉时，稳定引用的占用者会被系统一起杀掉）。
-debug_fp() {
-  echo "[DEBUG-fp] $1" >&2
-  adb shell dumpsys activity providers 2>/dev/null | grep -A30 'fonts.provider.FontsProvider}' \
-    | grep -E -- '->|ContentProviderRecord' | sed 's/^/[DEBUG-fp] /' >&2 || true
-}
 notify_count() { adb logcat -d | grep -c "cchub-bridge: notify foreground=false" || true; }
 wait_more_notifies() {
   for _ in $(seq 1 40); do
@@ -88,10 +82,7 @@ adb reverse tcp:$port tcp:$port
 adb shell pm grant "$pkg" android.permission.POST_NOTIFICATIONS
 adb logcat -c
 adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 >/dev/null
-for second in 1 2 3 4 5 6 7 8; do
-  sleep 1
-  debug_fp "启动后约 $second 秒"
-done
+sleep 8
 shot 1-connect
 # 先点输入框：没有焦点时回车会落到列表的第一个按钮上。坐标按默认模拟器的屏幕换算。
 read -r width height < <(adb shell wm size | sed -E 's/.*: ([0-9]+)x([0-9]+).*/\1 \2/' | tr -d '\r')
@@ -102,7 +93,6 @@ shot 1b-typed
 adb shell input keyevent 66
 wait_notification "已连接"
 shot 2-list
-debug_fp "连接后"
 alive "连接后"
 not_blank 2b-list
 
@@ -124,7 +114,6 @@ task=$(adb shell am stack list | grep -F "$pkg" | head -1 | sed -E 's/.*taskId=(
 [ -n "$task" ] || fail "找不到任务"
 adb shell am stack remove "$task"
 sleep 5
-debug_fp "划掉任务后"
 alive "划掉任务后"
 wait_notification "已连接" 5
 

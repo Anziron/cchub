@@ -149,7 +149,9 @@ jobs:
         with:
           api-level: 34
           arch: x86_64
-          target: google_apis
+          # 不用 google_apis：模拟器开机后 GMS 常驻进程会重启，WebView 连着它的字体提供者，
+          # 系统会把 cchub 一起杀掉（“重开后：进程不在了”的偶发失败）。cchub 不依赖 GMS。
+          target: default
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           script: bash scripts/android-smoke.sh cchub.apk target/debug/hubd target/debug/fake-claude testdata/recordings/approval/stream.jsonl android-shots
