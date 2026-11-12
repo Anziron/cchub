@@ -298,6 +298,16 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
   const intent = useRef(0);
   const dragging = useRef(false);
   const markIntent = () => { intent.current = performance.now(); };
+  // 离开底部时显示“回到底部”按钮。只在 onScroll 里更新，值不变时 React 不重画。
+  const [away, setAway] = useState(false);
+  const backToBottom = () => {
+    const el = ref.current;
+    if (!el) return;
+    pinned.current = true;
+    syncAnchor();
+    setAway(false);
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  };
   const frame = useRef(0);
   // 渲染和尺寸变化都只登记一次 rAF，在帧内统一先读后写，避免布局抖动。
   const toBottom = useRef(() => {
@@ -425,6 +435,7 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
           else if (byUser && el.scrollTop < lastTop.current - 1) pinned.current = false;
           lastTop.current = el.scrollTop;
           syncAnchor();
+          setAway(!pinned.current);
           if (el.scrollTop < 300 && !pinned.current) showMore();
           syncCurrent();
         }}
@@ -444,6 +455,11 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
           ))}
         </div>
       </section>
+      {away ? (
+        <button type="button" className="to-bottom" aria-label="回到底部" title="回到底部" onClick={backToBottom}>
+          <Icon name="arrowDown" size={16} />
+        </button>
+      ) : null}
     </div>
   );
 }

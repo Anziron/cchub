@@ -37,4 +37,18 @@ for (let n = 0; n < rounds; n++) {
 const box = await run(`const r = document.querySelector('.stream').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2];`);
 for (let k = 0; k < 3; k++) await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: box[0], y: box[1], deltaX: 0, deltaY: -400 });
 console.log("滚轮往上后:", await run(`${helpers} return await watch();`));
+// “回到底部”按钮：往上翻后出现，截图留档，点击后回到底部并消失。
+console.log("按钮:", await run(`return document.querySelector('.to-bottom') ? '出现' : '没有';`));
+const shot = await send("Page.captureScreenshot", { format: "jpeg", quality: 80 });
+if (shot.result?.data) {
+  const { writeFileSync, mkdirSync } = await import("node:fs");
+  mkdirSync(".cc/shots", { recursive: true });
+  const file = `.cc/shots/to-bottom-${process.argv[4] ?? "light"}-${Date.now()}.jpg`;
+  writeFileSync(file, Buffer.from(shot.result.data, "base64"));
+  console.log("截图:", file);
+}
+console.log("点击按钮后:", await run(`${helpers}
+  document.querySelector('.to-bottom')?.click();
+  const g = await watch();
+  return g + (document.querySelector('.to-bottom') ? ' 按钮仍在' : ' 按钮已消失');`));
 ws.close();
