@@ -824,10 +824,10 @@ a.link:hover { text-decoration-thickness: 2px; }
 .change-group > summary svg { flex: none; }
 /* 文件夹和文件一眼分开：文件夹图标填充、目录名加粗，都用亮橙色（用户选定）；文件前面是灰色的文件图标。
    之前的暗暖黄细线框和背景糊在一起；要饱和、要填充和加粗才显眼。 */
-:root { --folder: #f06a0f; }
-[data-tone="dark"] { --folder: #ff9640; }
-.change-group > summary .folder-icon { color: var(--folder); fill: color-mix(in srgb, var(--folder) 28%, transparent); }
-.change-group > summary .group-dir { color: var(--folder); font-weight: 600; }
+:root { --folder: #d4651c; }
+[data-tone="dark"] { --folder: #e8893f; }
+.change-group > summary .folder-icon { color: var(--folder); fill: color-mix(in srgb, var(--folder) 22%, transparent); }
+.change-group > summary .group-dir { color: var(--folder); font-weight: 500; }
 .change .file-icon { flex: none; margin-left: -4px; color: var(--faint); }
 .group-dir { flex: 1; min-width: 0; overflow: hidden; font-family: var(--mono); letter-spacing: 0; white-space: nowrap; text-overflow: ellipsis; }
 /* 项目外的目录很长：省略号放在开头，保留最后几级 */
