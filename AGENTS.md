@@ -36,7 +36,7 @@
 - 录制 `plan` 场景会在 `~/.claude/plans/` 留下方案文件，录完要删。
 - 前端的 `demo.ts` 只在开发时用录制驱动界面：`npm run dev:web` 后打开 `/?s=rich&theme=dark`，`?s=turns` 是多轮对话（看轮次导航），`?scene=queue` 是排队消息和拖入的文件、`?draft=long` 是长输入（`setupDemo` 在输入框挂载前写草稿，挂载后再改赶不上无头截图），`?pane=changes` 打开窗格，`?click=<选择器>` 元素出现后点击（检查弹出菜单；`?scene=queue&click=.queue li.insert button[aria-label="撤回"]` 看撤回，`?cancel=late|pending` 让 demo 回复来不及或不回复），`?hover=<选择器>` 元素出现后模拟悬停（检查图表浮层），`?range=today|7d|30d|all` 指定使用情况范围、`?metric=tokens|requests` 指定柱状图内容、`?models=tokens|cost` 指定常用模型显示 token 还是费用（都会记住，每张截图都要写明）。经 `pcrun` 启动的开发服务器随 SSH 会话退出，要和截图放在同一条命令里 → 用 `scripts/ui-shots.ps1`（无头 Edge，图片在 `.cc/shots/`）。
 - 弹窗高于容器时会被 `.main` 的 `overflow: hidden` 裁掉标题和关闭按钮，看起来像“弹不出来” → 遮罩用 flex 居中（grid 自动轨道会被内容撑大），弹窗用 `min(固定值, 100%)` 限宽高；改弹窗或窗格后用 `/?scene=tasks&pane=tasks`（40 个后台任务、长输出）在几种窗口尺寸下检查。
-- 设备没有 Rust，桌面端由 CI 编译，可执行文件在 Actions 的 `cchub-windows` 产物里。
+- 设备没有 Rust，桌面端由 CI 编译。CI 只在推 `v*` 标签和手动运行时跑（普通推送、PR 不触发，用户要求）→ 发版前要试 exe / APK 就手动运行：`gh workflow run CI -R Anziron/cchub --ref main`，产物 `cchub-windows` / `cchub-android` / `hubd-linux-musl`；改了 Rust 先在服务器编译副本里跑 fmt、clippy、测试，因为推送后没有 CI 兜底。
 - 服务器上的 `claude` 受用户配置影响可能不发审批请求，要测审批时加 `--setting-sources project,local`。
 - CLI 会拦截 `sleep 60; ...` 这类命令，实验里要用脚本文件代替。
 - `hubd` 不认任何参数，`hubd --version` 会真的启动并用默认状态目录 → 手动运行时必须设临时 `HUBD_STATE_DIR` 和回环端口。

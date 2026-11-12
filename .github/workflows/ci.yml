@@ -1,11 +1,12 @@
 name: CI
 
+# 只在发布时跑（用户要求：小改动不要每次都触发）：
+# - 推 v* 标签：全部任务通过后发布 Release（见最后的 release 任务）；
+# - 手动运行（Actions 页面的 Run workflow）：只构建测试、出产物，不发布，用来发版前先试 exe / APK。
 on:
   push:
-    branches: [main]
-    # 推 v* 标签时全部任务通过后发布 Release（见最后的 release 任务）。
     tags: ["v*"]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   server:

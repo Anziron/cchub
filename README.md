@@ -72,7 +72,7 @@ HUBD_STATE_DIR=/tmp/hubd cargo run -p hubd --bin hubd
 curl http://127.0.0.1:7878/health
 ```
 
-CI 会构建 `hubd` 静态二进制、Windows 桌面端和 Android APK，每次提交的产物在 Actions 页面下载（需要登录 GitHub），正式版本在 Releases。
+CI 只在推 `v*` 标签（发布）或在 Actions 页面手动运行时构建 `hubd` 静态二进制、Windows 桌面端和 Android APK。正式版本在 Releases；手动运行的产物在 Actions 页面下载（需要登录 GitHub）。
 
 ## 部署
 
