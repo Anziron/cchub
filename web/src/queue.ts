@@ -1,6 +1,7 @@
 /**
  * 一轮进行中发的消息，挂在输入框上方。
- * - 插入：马上写给 CLI，CLI 在下一个工具结果之后把它插进这一轮，回传同一个 `uuid`；发出后不能改删。
+ * - 插入：马上写给 CLI，CLI 在下一个工具结果之后把它插进这一轮，回传同一个 `uuid`。回传之前可以撤回
+ *   （`cancel_async_message`），CLI 已经接进去时回复来不及，只能等回传。
  * - 等结束：留在桌面端，可以改（放回输入框）或删，这一轮正常结束后合成一条发出；被中断时放回输入框。
  * 只存在内存里：关掉窗口后不会在别的时机突然发出去。
  */
@@ -14,6 +15,16 @@ export interface Queued {
   id: string;
   text: string;
   mode: "insert" | "wait";
+  /** 插入的消息：已发出撤回请求，等 CLI 回复。 */
+  cancelling?: boolean;
+  /** 插入的消息：撤回时 CLI 说已经交给模型了，等回传后移出。 */
+  late?: boolean;
+}
+
+/** 撤回请求有了回复：撤回成功就移出队列，来不及就标成 `late`。 */
+export function settleCancel(queue: Queued[], id: string, cancelled: boolean): Queued[] {
+  if (cancelled) return queue.filter((q) => q.id !== id);
+  return queue.map((q) => (q.id === id ? { id: q.id, text: q.text, mode: q.mode, late: true } : q));
 }
 
 /** 回传已到的插入消息移出队列；没有变化时返回原数组。 */

@@ -5,7 +5,7 @@ import type { Hub } from "./hub";
 import { isNarrow } from "./platform";
 import { sortKey } from "./sidebar";
 import { parseUsage, type UsageStats } from "./usage";
-import { afterTurn, confirmInserted, joinQueued, type Queued } from "./queue";
+import { afterTurn, confirmInserted, joinQueued, settleCancel, type Queued } from "./queue";
 import { dropRef, mountTarget, type DropRef } from "./paths";
 import type { DeviceInfo } from "./generated/DeviceInfo";
 import {
@@ -13,6 +13,7 @@ import {
   allowLine,
   answerLine,
   apply,
+  cancelInsertLine,
   denyLine,
   failSending,
   mergeRateLimits,
@@ -21,6 +22,7 @@ import {
   markInterrupting,
   newThread,
   onProcessExit,
+  parseCancelled,
   parseCommands,
   parseModels,
   parseRateLimits,
@@ -158,6 +160,8 @@ export class Store {
   private browsesInFlight = 0;
   /** 等 `initialize` 回复的请求，只认当次的，重放旧日志不算。 */
   private initRequests = new Map<string, Session>();
+  /** 撤回插入消息的请求：request_id → 会话、消息 uuid、撤回后是否放回输入框。 */
+  private cancelRequests = new Map<string, { session: Session; id: string; edit: boolean }>();
   private initialized = new Set<string>();
   private drafts = loadJson<Record<string, string>>(DRAFTS_KEY, {});
   private attached: Record<string, DropRef[]> = {};
@@ -278,6 +282,7 @@ export class Store {
         const session = this.sessions.get(event.session);
         if (session) {
           this.takeInit(event.payload);
+          this.takeCancel(event.payload);
           this.takeLimits(session, event.seq, event.payload);
           const interrupting = session.thread.interruptAt != null;
           apply(session.thread, event.payload);
@@ -363,6 +368,19 @@ export class Store {
         this.commands = commands;
         localStorage.setItem(COMMANDS_KEY, JSON.stringify(commands));
       }
+      return;
+    }
+  }
+
+  private takeCancel(line: string): void {
+    if (!this.cancelRequests.size || !line.includes("control_response")) return;
+    for (const [requestId, { session, id, edit }] of this.cancelRequests) {
+      const cancelled = parseCancelled(line, requestId);
+      if (cancelled === null) continue;
+      this.cancelRequests.delete(requestId);
+      const item = session.queue.find((q) => q.id === id);
+      session.queue = settleCancel(session.queue, id, cancelled);
+      if (cancelled && edit && item) this.appendDraft(session.id, item.text);
       return;
     }
   }
@@ -717,14 +735,38 @@ export class Store {
     }
   }
 
+  /**
+   * 撤回一条还没回传的插入消息。CLI 的回复到了才知道结果（`takeCancel`）：撤回成功就移出队列，
+   * `edit` 时放回输入框；来不及（已交给模型）就标成 late，等回传。
+   */
+  cancelInsert(session: Session, id: string, edit: boolean): void {
+    const item = session.queue.find((q) => q.id === id && q.mode === "insert" && !q.cancelling && !q.late);
+    if (!item) return;
+    const requestId = `cchub-cancel-${crypto.randomUUID()}`;
+    this.cancelRequests.set(requestId, { session, id, edit });
+    session.queue = session.queue.map((q) => (q === item ? { ...q, cancelling: true } : q));
+    void this.hub.send({ type: "input", session: session.id, line: cancelInsertLine(requestId, id) }).catch((error) => {
+      this.cancelRequests.delete(requestId);
+      session.queue = session.queue.map((q) => (q.id === id ? { ...q, cancelling: false } : q));
+      this.error = String(error);
+      this.changed();
+    });
+    this.changed();
+  }
+
+  private appendDraft(key: string, text: string): void {
+    const draft = this.draft(key);
+    this.setDraft(key, draft.trim() ? `${draft.trimEnd()}\n\n${text}` : text);
+    this.draftRev++;
+  }
+
   /** 被中断或进程结束：没发出的消息放回输入框，不自作主张发出去。没回传的插入消息也一起放回。 */
   private restoreQueue(session: Session): void {
     if (!session.queue.length) return;
     const text = joinQueued(session.queue);
     session.queue = [];
-    const draft = this.draft(session.id);
-    this.setDraft(session.id, draft.trim() ? `${draft.trimEnd()}\n\n${text}` : text);
-    this.draftRev++;
+    for (const [requestId, request] of this.cancelRequests) if (request.session === session) this.cancelRequests.delete(requestId);
+    this.appendDraft(session.id, text);
     this.changed();
   }
 

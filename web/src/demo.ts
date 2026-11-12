@@ -14,8 +14,9 @@ localStorage.setItem("cchub.url", "ws://demo");
 if (params.get("theme")) localStorage.setItem("cchub.theme", params.get("theme")!);
 // `?pane=changes` 等：打开指定窗格，`?pane=` 关闭。
 if (params.has("pane")) localStorage.setItem("cchub.pane", params.get("pane")!);
-// `?click=<选择器>`：加载后点一下，用来截图检查弹出菜单。
-if (params.get("click")) setTimeout(() => document.querySelector<HTMLElement>(params.get("click")!)?.click(), 1200);
+// `?click=<选择器>`：元素出现后点一下，用来截图检查弹出菜单、撤回插入的消息等。
+// 不能按固定时间点：排队场景等元素要在连接之后才生成，曾经点早了什么也没点到（见下面 `?hover=` 的说明）。
+if (params.get("click")) whenPresent(params.get("click")!, (el) => (el as HTMLElement).click());
 // `?range=today|7d|30d|all`：使用情况窗格的范围（会记住，截图时每张都写明）。
 if (params.get("range")) localStorage.setItem("cchub.usageRange", params.get("range")!);
 // `?metric=tokens|requests`：使用情况柱状图显示模型 token 还是请求次数（会记住）。
@@ -24,13 +25,14 @@ if (params.get("metric")) localStorage.setItem("cchub.usageMetric", params.get("
 if (params.get("models")) localStorage.setItem("cchub.usageModelView", params.get("models")!);
 // `?hover=<选择器>`：元素出现后模拟鼠标移上去，用来截图检查悬停浮层。
 // 统计数据异步到达；无头浏览器的虚拟时钟会跑在网络加载前面，不能按定时等，要看元素出现。
-if (params.get("hover")) {
-  const selector = params.get("hover")!;
+if (params.get("hover")) whenPresent(params.get("hover")!, (el) => el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+
+function whenPresent(selector: string, run: (el: Element) => void): void {
   const observer = new MutationObserver(() => {
     const el = document.querySelector(selector);
     if (!el) return;
     observer.disconnect();
-    el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    run(el);
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 }
@@ -211,6 +213,14 @@ export const demoHub: Hub = {
           ...Array.from({ length: 20 }, (_, i) => ({ name: `skill-${i}`, description: `示例技能 ${i}`, argumentHint: "" })),
         ];
         emit({ type: "event", session: msg.session, class: "durable", seq: 0, payload: JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: request.request_id, response: { models, commands } } }) });
+      } else if (request.request?.subtype === "cancel_async_message") {
+        // 撤回插入的消息：马上回复撤回成功；`?cancel=late` 回复来不及（看“已交给 Claude”），`?cancel=pending` 不回复（看“撤回中…”）。
+        // 不用定时器延迟回复：无头浏览器的虚拟时钟里它可能到截图时还没触发。
+        const mode = params.get("cancel");
+        if (mode !== "pending") {
+          const reply = { type: "control_response", response: { subtype: "success", request_id: request.request_id, response: { cancelled: mode !== "late" } } };
+          queueMicrotask(() => emit({ type: "event", session: msg.session, class: "durable", seq: 0, payload: JSON.stringify(reply) }));
+        }
       }
     } else if (msg.type === "list") {
       const now = Math.floor(Date.now() / 1000);

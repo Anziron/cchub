@@ -34,7 +34,7 @@
 - 侧边栏按 `active`（用户最后发言，hubd 收到 `user` 输入时 touch `<dir>/active`）排序，不能按日志更新时间排，否则几个会话同时输出时会来回跳。
 - 中断后 `result` 是 `error_during_execution`、`is_error: true`，界面不能显示成任务失败。
 - 录制 `plan` 场景会在 `~/.claude/plans/` 留下方案文件，录完要删。
-- 前端的 `demo.ts` 只在开发时用录制驱动界面：`npm run dev:web` 后打开 `/?s=rich&theme=dark`，`?s=turns` 是多轮对话（看轮次导航），`?scene=queue` 是排队消息和拖入的文件、`?draft=long` 是长输入（`setupDemo` 在输入框挂载前写草稿，挂载后再改赶不上无头截图），`?pane=changes` 打开窗格，`?click=<选择器>` 加载后点击（检查弹出菜单），`?hover=<选择器>` 元素出现后模拟悬停（检查图表浮层），`?range=today|7d|30d|all` 指定使用情况范围、`?metric=tokens|requests` 指定柱状图内容、`?models=tokens|cost` 指定常用模型显示 token 还是费用（都会记住，每张截图都要写明）。经 `pcrun` 启动的开发服务器随 SSH 会话退出，要和截图放在同一条命令里 → 用 `scripts/ui-shots.ps1`（无头 Edge，图片在 `.cc/shots/`）。
+- 前端的 `demo.ts` 只在开发时用录制驱动界面：`npm run dev:web` 后打开 `/?s=rich&theme=dark`，`?s=turns` 是多轮对话（看轮次导航），`?scene=queue` 是排队消息和拖入的文件、`?draft=long` 是长输入（`setupDemo` 在输入框挂载前写草稿，挂载后再改赶不上无头截图），`?pane=changes` 打开窗格，`?click=<选择器>` 元素出现后点击（检查弹出菜单；`?scene=queue&click=.queue li.insert button[aria-label="撤回"]` 看撤回，`?cancel=late|pending` 让 demo 回复来不及或不回复），`?hover=<选择器>` 元素出现后模拟悬停（检查图表浮层），`?range=today|7d|30d|all` 指定使用情况范围、`?metric=tokens|requests` 指定柱状图内容、`?models=tokens|cost` 指定常用模型显示 token 还是费用（都会记住，每张截图都要写明）。经 `pcrun` 启动的开发服务器随 SSH 会话退出，要和截图放在同一条命令里 → 用 `scripts/ui-shots.ps1`（无头 Edge，图片在 `.cc/shots/`）。
 - 弹窗高于容器时会被 `.main` 的 `overflow: hidden` 裁掉标题和关闭按钮，看起来像“弹不出来” → 遮罩用 flex 居中（grid 自动轨道会被内容撑大），弹窗用 `min(固定值, 100%)` 限宽高；改弹窗或窗格后用 `/?scene=tasks&pane=tasks`（40 个后台任务、长输出）在几种窗口尺寸下检查。
 - 设备没有 Rust，桌面端由 CI 编译，可执行文件在 Actions 的 `cchub-windows` 产物里。
 - 服务器上的 `claude` 受用户配置影响可能不发审批请求，要测审批时加 `--setting-sources project,local`。
@@ -83,11 +83,11 @@
 - 推理强度用 `apply_flag_settings` 的 `{effortLevel}`（`null` 恢复默认，`max` 也可用），不要发 `/effort`；它只在当前进程有效，`--resume` 后要重发；实时事件不带当前强度，只有 `.jsonl` 的 `assistant` 带 `effort`。
 - 新会话页输入框在窗口中间，向上弹的菜单在矮窗口里会被 `.main` 裁掉、滚不到 → 弹出菜单用 `Dialogs.tsx` 的 `useMenuFit` 按上下剩余空间定方向和最大高度；改菜单后用 900×460 窗口检查新会话页。
 - `web/src` 里的文件名不能只差大小写：设备是 Windows，`Sidebar.tsx` 和 `sidebar.ts` 会被当成同一个文件（tsc 报 TS1149）→ 侧栏组件叫 `SessionList.tsx`。
-- 无头 Edge 截图的虚拟时钟会跑在网络加载前面，数据到达后马上抓图：`setTimeout` 等元素、React 异步调度的更新都可能赶不上 → demo 里用 `MutationObserver` 等元素出现；图表浮层用 `flushSync` 同步更新（也让悬停立刻跟手）。截图 PNG 过大时图片接口会拒收，用 `System.Drawing` 裁成 JPEG 再看。
+- 无头 Edge 截图的虚拟时钟会跑在网络加载前面，数据到达后马上抓图：`setTimeout` 等元素、React 异步调度的更新、demo 里延迟回复的定时器都可能赶不上 → demo 里用 `MutationObserver` 等元素出现（`whenPresent`），模拟回复用 `queueMicrotask`；图表浮层用 `flushSync` 同步更新（也让悬停立刻跟手）。截图 PNG 过大时图片接口会拒收，用 `System.Drawing` 裁成 JPEG 再看。
 - 图表悬停浮层（`UsagePane.tsx` 的 `ChartTip`）：容器上事件委托找 `data-i`，只有浮层重画；不要给每个格子加 `title` 或各自的状态。
 - 窗格里的长内容（后台任务输出、子任务记录）不能跟着每秒的读秒重画：读秒放进独立的小组件，输出区 `memo` 按文本比较，子任务记录先只画最后 30 条。
 - 外部链接走 `platform.ts` 的 `openUrl`（桌面端是 `desktop.rs` 的 `open_url` 命令，只放行 http/https；Windows 用 `rundll32 url.dll,FileProtocolHandler`，不要经 `cmd start`，网址里的 `&` 会被拆开）。
-- 一轮进行中写进 FIFO 的用户消息，CLI 会在下一个工具结果之后插进同一轮（回传同一 `uuid`、带 `isReplay`，只出一个 `result`）→ “插入”直接发，看到回传才算送达；“等结束”留在桌面端（`queue.ts`），中断或进程结束时放回输入框，不自动发。
+- 一轮进行中写进 FIFO 的用户消息，CLI 会在下一个工具结果之后插进同一轮（回传同一 `uuid`、带 `isReplay`，只出一个 `result`）→ “插入”直接发，看到回传才算送达；“等结束”留在桌面端（`queue.ts`），中断或进程结束时放回输入框，不自动发。回传之前可以用控制消息 `cancel_async_message`（`message_uuid`）撤回，回复 `cancelled: false` 表示已经交给模型（`store.ts` 的 `cancelInsert` / `takeCancel`）。
 - 设备列表来自 `cc-workspace status`（登记表 + `tailscale status --json` 的 `Online`），hubd 缓存 15 秒；会话里的离线提示仍靠挂载探测（`Device` 消息），两者不一致时侧栏显示黄色“目录读不到”。
 - 被测模块（`web/test/` 直接用 `node --test` 跑）之间只能有类型导入，导入函数会因缺 `.ts` 扩展名失败 → 小工具函数在模块内重写或放进 `model.ts`。Windows 上 `node --test test/` 不认目录，要写 `test/*.test.ts`。
 - 侧栏会话行的菜单曾往上弹并被列表裁掉：判断上下空间时只按窗口算，而 `.side-scroll` 会裁剪（它的 `-webkit-mask-image` 连 `position: fixed` 的子元素也裁）→ `useMenuFit` 按最近的裁剪祖先算；侧栏行菜单用 `Dropdown` 的 `fixed`，经 portal 放到 `body` 下按窗口定位，所在列表滚动时关闭。

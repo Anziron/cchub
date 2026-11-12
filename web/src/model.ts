@@ -752,20 +752,27 @@ export function effortsFor(option?: ModelOption): typeof EFFORTS {
 
 /** 从事件里取模型列表。只认 `requestId` 这一次请求的回复，重放旧日志不能覆盖新列表。 */
 export function parseModels(line: string, requestId: string): ModelOption[] | null {
-  const models = initializeReply(line, requestId)?.models;
+  const models = controlReply(line, requestId)?.models;
   if (!Array.isArray(models)) return null;
   const valid = models.filter((m) => typeof m?.value === "string" && typeof m?.displayName === "string");
   return valid.length ? valid : null;
 }
 
 export function parseCommands(line: string, requestId: string): SlashCommand[] | null {
-  const commands = initializeReply(line, requestId)?.commands;
+  const commands = controlReply(line, requestId)?.commands;
   if (!Array.isArray(commands)) return null;
   const valid = commands.filter((c) => typeof c?.name === "string");
   return valid.length ? valid : null;
 }
 
-function initializeReply(line: string, requestId: string): Json | null {
+/** 撤回请求的回复：`true` 已撤回，`false` 已经交给模型（来不及了）；不是这条请求的回复返回 null。 */
+export function parseCancelled(line: string, requestId: string): boolean | null {
+  const cancelled = controlReply(line, requestId)?.cancelled;
+  return typeof cancelled === "boolean" ? cancelled : null;
+}
+
+/** 我们发出的控制请求的回复内容（按 `request_id` 认）。 */
+function controlReply(line: string, requestId: string): Json | null {
   if (!line.includes(requestId)) return null;
   try {
     const event = JSON.parse(line);
@@ -837,6 +844,13 @@ export function initializeLine(requestId: string): string {
   return JSON.stringify({ type: "control_request", request_id: requestId, request: { subtype: "initialize" } });
 }
 export const stopTaskLine = (taskId: string) => controlRequest({ subtype: "stop_task", task_id: taskId });
+/**
+ * 撤回插入的消息：CLI 还没把它接进这一轮时（下一个工具结果之前）从队列里删掉，模型看不到。
+ * 已经接进去就撤不回，回复 `cancelled: false`。2026-11-12 实测 claude 2.1.322。
+ */
+export function cancelInsertLine(requestId: string, uuid: string): string {
+  return JSON.stringify({ type: "control_request", request_id: requestId, request: { subtype: "cancel_async_message", message_uuid: uuid } });
+}
 export const setModelLine = (model: string) => controlRequest({ subtype: "set_model", model });
 /** 设推理强度：合并进 CLI 的 flag 设置层，只在当前进程有效，`--resume` 后要重发。`null` 恢复默认。 */
 export const setEffortLine = (effort: string | null) => controlRequest({ subtype: "apply_flag_settings", settings: { effortLevel: effort } });

@@ -211,21 +211,37 @@ function FileChips({ store, draftKey, files }: { store: Store; draftKey: string;
 
 const lastSegment = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
-/** 一轮进行中发的消息：插入的等 CLI 收下，等结束的可以改或删。 */
+/**
+ * 一轮进行中发的消息。等结束的可以改或删；插入的在 Claude 接收之前（下一个工具结果之前）可以撤回，
+ * 撤回要等 CLI 回复，来不及时标成“已交给 Claude”。
+ */
 function QueueList({ store, session, onEdit }: { store: Store; session: Session; onEdit: (text: string) => void }) {
   if (!session.queue.length) return null;
+  const actions = (q: Session["queue"][number]) => {
+    if (q.mode === "wait") {
+      return (
+        <span className="queue-actions">
+          <button type="button" title="放回输入框修改" aria-label="修改" onClick={() => onEdit(store.unqueue(session, q.id))}><Icon name="edit" size={13} /></button>
+          <button type="button" title="删除" aria-label="删除" onClick={() => store.unqueue(session, q.id)}><Icon name="close" size={13} /></button>
+        </span>
+      );
+    }
+    if (q.late) return <span className="queue-state" title="Claude 已经接收，撤回不了">已交给 Claude</span>;
+    if (q.cancelling) return <span className="queue-state">撤回中…</span>;
+    return (
+      <span className="queue-actions">
+        <button type="button" title="撤回并放回输入框修改（Claude 接收之前有效）" aria-label="撤回并修改" onClick={() => store.cancelInsert(session, q.id, true)}><Icon name="edit" size={13} /></button>
+        <button type="button" title="撤回（Claude 接收之前有效）" aria-label="撤回" onClick={() => store.cancelInsert(session, q.id, false)}><Icon name="close" size={13} /></button>
+      </span>
+    );
+  };
   return (
     <ul className="queue">
       {session.queue.map((q) => (
         <li key={q.id} className={q.mode}>
           <span className="queue-tag">{q.mode === "insert" ? "待插入" : "等结束"}</span>
           <span className="queue-text" title={q.text}>{q.text}</span>
-          {q.mode === "wait" ? (
-            <span className="queue-actions">
-              <button type="button" title="放回输入框修改" aria-label="修改" onClick={() => onEdit(store.unqueue(session, q.id))}><Icon name="edit" size={13} /></button>
-              <button type="button" title="删除" aria-label="删除" onClick={() => store.unqueue(session, q.id)}><Icon name="close" size={13} /></button>
-            </span>
-          ) : null}
+          {actions(q)}
         </li>
       ))}
     </ul>

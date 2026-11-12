@@ -638,6 +638,7 @@ a.link:hover { text-decoration-thickness: 2px; }
 .queue-actions { display: flex; flex: none; gap: 2px; }
 .queue-actions button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: var(--r-sm); color: var(--faint); }
 .queue-actions button:hover { background: var(--active); color: var(--text); }
+.queue-state { flex: none; padding-right: 6px; color: var(--faint); font-size: 12px; }
 .send { display: grid; flex: none; place-items: center; width: 28px; height: 28px; border-radius: var(--r-md); color: var(--faint); transition: background .16s var(--ease), color .16s var(--ease), transform .16s var(--ease); }
 .send:hover { background: var(--hover); color: var(--text); }
 .send.ready { background: var(--accent); color: #fff; }
