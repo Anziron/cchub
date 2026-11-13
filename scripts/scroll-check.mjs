@@ -63,4 +63,13 @@ await new Promise((r) => setTimeout(r, 300));
 await run(`window.__gaps = [];`);
 for (let k = 0; k < 15; k++) { await send("Input.insertText", { text: "字" }); await new Promise((r) => setTimeout(r, 60)); }
 console.log("多行输入时打字:", await run(`window.__stopGaps = true; const g = window.__gaps; return '帧数 ' + g.length + '，非 0 帧 ' + g.filter((x) => x !== 0).length + '，最大离底 ' + Math.max(...g);`));
+// 贴底时点左侧轮次导航：期望跳到那一轮并停住（曾被贴底逻辑拉回底部，要先往上翻一点才能跳）。
+console.log("贴底时点导航:", await run(`${helpers}
+  const s = document.querySelector('.stream');
+  s.scrollTop = s.scrollHeight; await sleep(300);
+  const before = gap();
+  const btns = document.querySelectorAll('.turn-nav button'); if (btns.length < 4) return 'no nav';
+  btns[btns.length - 4].click();
+  const g = await watch();
+  return '点击前 ' + before + '，之后 ' + g;`));
 ws.close();

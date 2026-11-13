@@ -297,7 +297,9 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
   // 最近一次用户滚动操作的时间，和是否正按住滚动条。只有用户在滚时，往上才算离开底部。
   const intent = useRef(0);
   const dragging = useRef(false);
-  const markIntent = () => { intent.current = performance.now(); };
+  // 导航跳转的平滑滚动进行中（截止时间）：头几帧离底仍不到 40px，不能据此重新贴底再拉回去。
+  const jumping = useRef(0);
+  const markIntent = () => { intent.current = performance.now(); jumping.current = 0; };
   // 离开底部时显示“回到底部”按钮。只在 onScroll 里更新，值不变时 React 不重画。
   const [away, setAway] = useState(false);
   const backToBottom = () => {
@@ -402,6 +404,10 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
     }
     if (!mark || !el) return;
     pinned.current = false;
+    syncAnchor();
+    // scrollend 结束跳转；不支持它或根本没滚动时靠截止时间兜底。
+    jumping.current = performance.now() + 1500;
+    el.addEventListener("scrollend", () => { jumping.current = 0; }, { once: true });
     el.scrollTo({ top: el.scrollTop + mark.getBoundingClientRect().top - el.getBoundingClientRect().top - 16, behavior: "smooth" });
   };
   // 详细档：工具逐条显示，不合并。
@@ -431,7 +437,8 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
           // 排版也会让 scrollTop 变小（滚动锚定、裁掉最上面一轮、新消息先按 40px 占位时区域临时变矮被压回），
           // 所以还要求刚有用户操作。
           const byUser = dragging.current || performance.now() - intent.current < 300;
-          if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) pinned.current = true;
+          if (performance.now() < jumping.current) pinned.current = false;
+          else if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) pinned.current = true;
           else if (byUser && el.scrollTop < lastTop.current - 1) pinned.current = false;
           // 贴底时被排版挤离底部（尺寸没净变化，ResizeObserver 不会触发）：拉回去。
           else if (!byUser && pinned.current) toBottom();
