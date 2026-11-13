@@ -51,4 +51,16 @@ console.log("点击按钮后:", await run(`${helpers}
   document.querySelector('.to-bottom')?.click();
   const g = await watch();
   return g + (document.querySelector('.to-bottom') ? ' 按钮仍在' : ' 按钮已消失');`));
+// 贴底时在多行输入框里打字：每帧采样离底距离，期望始终为 0（输入框量高度时曾让消息区每次按键闪一下往上跳）。
+await run(`
+  window.__gaps = [];
+  const s = document.querySelector('.stream');
+  const tick = () => { window.__gaps.push(Math.round(s.scrollHeight - s.scrollTop - s.clientHeight)); if (!window.__stopGaps) requestAnimationFrame(tick); };
+  window.__stopGaps = false; requestAnimationFrame(tick);
+  document.querySelector('.box textarea').focus();`);
+for (let k = 0; k < 4; k++) await send("Input.insertText", { text: `第 ${k + 1} 行\n` });
+await new Promise((r) => setTimeout(r, 300));
+await run(`window.__gaps = [];`);
+for (let k = 0; k < 15; k++) { await send("Input.insertText", { text: "字" }); await new Promise((r) => setTimeout(r, 60)); }
+console.log("多行输入时打字:", await run(`window.__stopGaps = true; const g = window.__gaps; return '帧数 ' + g.length + '，非 0 帧 ' + g.filter((x) => x !== 0).length + '，最大离底 ' + Math.max(...g);`));
 ws.close();

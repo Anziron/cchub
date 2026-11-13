@@ -173,9 +173,14 @@ function useInput(store: Store, key: string, cwd: string | undefined) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    // 清空高度再量时先锁住外框：否则这一瞬间消息区变高，贴底的 scrollTop 被浏览器夹小，
+    // 恢复高度后总尺寸没变、ResizeObserver 不触发，消息区就停在离底几十像素处，每次按键跳一下。
+    const box = el.parentElement;
+    if (box) box.style.height = `${box.offsetHeight}px`;
     el.style.height = "";
     // 矮窗口里不能把消息挤没：最多占窗口高度的 35%。
     el.style.height = `${Math.min(el.scrollHeight, MAX_INPUT_HEIGHT, Math.max(68, innerHeight * 0.35))}px`;
+    if (box) box.style.height = "";
   }, [text]);
   const files = store.files(key);
   /** 取走文字和文件，拼成要发的消息。 */

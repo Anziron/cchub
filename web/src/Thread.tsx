@@ -433,6 +433,8 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
           const byUser = dragging.current || performance.now() - intent.current < 300;
           if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) pinned.current = true;
           else if (byUser && el.scrollTop < lastTop.current - 1) pinned.current = false;
+          // 贴底时被排版挤离底部（尺寸没净变化，ResizeObserver 不会触发）：拉回去。
+          else if (!byUser && pinned.current) toBottom();
           lastTop.current = el.scrollTop;
           syncAnchor();
           setAway(!pinned.current);
