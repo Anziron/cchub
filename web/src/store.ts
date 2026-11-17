@@ -81,6 +81,8 @@ const PANES: PaneId[] = ["changes", "tasks", "todos", "plan", "info", "usage"];
 export const GLOBAL_PANES: PaneId[] = ["usage"];
 const PANE_KEY = "cchub.pane";
 const storedPane = (): PaneId | null => PANES.find((p) => p === localStorage.getItem(PANE_KEY)) ?? null;
+const VIEW_KEY = "cchub.view";
+const SIDE_COLLAPSED_KEY = "cchub.sideCollapsed";
 const VERBOSE_KEY = "cchub.verbose";
 
 function loadJson<T>(key: string, fallback: T): T {
@@ -130,6 +132,12 @@ export class Store {
   verbose = localStorage.getItem(VERBOSE_KEY) === "1";
   /** 窄屏下会话列表是否展开，手机上打开 App 先看列表。 */
   showDrawer = isNarrow();
+  /** 图标栏当前视图（会话栏和主区域的内容）。 */
+  view = localStorage.getItem(VIEW_KEY) ?? "home";
+  /** 会话栏手动收起（记在本地）。 */
+  sideCollapsed = localStorage.getItem(SIDE_COLLAPSED_KEY) === "1";
+  /** 消息区太窄、会话栏改成浮层时，浮层是否展开。 */
+  sideFloatOpen = false;
   /** 等确认结束的会话。 */
   stopping: Session | null = null;
   /** 确认结束后是关闭会话还是只结束进程。 */
@@ -518,12 +526,41 @@ export class Store {
     this.selected = id;
     this.showSettings = false;
     this.showDrawer = false;
+    this.sideFloatOpen = false;
     const session = id ? this.sessions.get(id) : undefined;
     if (session) {
       this.attach(session);
       if (session.running) this.requestInit(session);
     }
     this.changed();
+  }
+
+  /**
+   * 点图标栏的视图图标。当前视图再点一次：收起或展开会话栏（浮层模式下是开关浮层）；
+   * 换视图：切过去并展开。和窄屏抽屉（`showDrawer`）互不干扰。
+   */
+  clickView(id: string, floating: boolean): void {
+    if (id === this.view) {
+      if (floating) this.sideFloatOpen = !this.sideFloatOpen;
+      else this.setSideCollapsed(!this.sideCollapsed);
+    } else {
+      this.view = id;
+      localStorage.setItem(VIEW_KEY, id);
+      if (floating) this.sideFloatOpen = true;
+      else this.setSideCollapsed(false);
+    }
+    this.changed();
+  }
+
+  closeSideFloat(): void {
+    if (!this.sideFloatOpen) return;
+    this.sideFloatOpen = false;
+    this.changed();
+  }
+
+  private setSideCollapsed(value: boolean): void {
+    this.sideCollapsed = value;
+    localStorage.setItem(SIDE_COLLAPSED_KEY, value ? "1" : "0");
   }
 
   openDrawer(): void {

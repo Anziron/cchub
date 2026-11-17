@@ -2,6 +2,8 @@
 # 用法：pcrun "powershell -ExecutionPolicy Bypass -File scripts\ui-shots.ps1"，图片在 .cc\shots\。
 # 只截名称以某前缀开头的几张: -Only usage-
 # 每项是 名称、地址、窗口尺寸。demo 参数：?s=会话 ?theme= ?scene=tasks|offline|conn ?pane=窗格（空值关闭）?click=加载后点击的选择器。
+# 改版后的布局参数：?sidew= ?panew=（宽度 px）?collapsed=1（收起会话栏）?frame=custom（模拟无边框窗口按钮）?then=（点完 click 后再点的第二个元素）；
+# 每次加载不带 sidew / panew / collapsed 就回到默认，不会把上一张的设置带过来。layout-* 是改版的一组。
 # ?click 触发的内层滚动在截图里看不到；要验证滚动，用 --dump-dom --enable-logging=stderr 看 console 输出。
 # 无头 Edge 窗口最窄约 500px，更窄的截图只会裁切，不能用来判断窄屏布局。
 param([string]$Out = ".cc\shots", [string]$Only = "")
@@ -28,7 +30,21 @@ $shots = @(
   @("usage-small", "/?s=rich&theme=light&pane=usage&range=30d", "900,460"),
   @("usage-hover-heat", "/?theme=light&pane=usage&range=30d&hover=.heat-grid%20i.today", "1200,800"),
   @("usage-hover-bar", "/?theme=dark&pane=usage&range=30d&hover=.bars%20.bar:nth-last-child(2)", "1200,800"),
-  @("usage-today", "/?theme=light&pane=usage&range=today&hover=.bars%20.bar.today", "1200,800")
+  @("usage-today", "/?theme=light&pane=usage&range=today&hover=.bars%20.bar.today", "1200,800"),
+  @("layout-1440-light", "/?s=rich&theme=light&pane=&frame=custom", "1440,900"),
+  @("layout-1440-dark", "/?s=rich&theme=dark&pane=&frame=custom", "1440,900"),
+  @("layout-pane", "/?s=rich&theme=light&pane=changes&frame=custom", "1200,800"),
+  @("layout-pane-wide", "/?s=rich&theme=dark&pane=tasks&scene=tasks&panew=640&sidew=220&frame=custom", "1440,900"),
+  @("layout-900", "/?s=rich&theme=light&pane=&sidew=420", "900,460"),
+  @("layout-collapsed", "/?s=rich&theme=light&pane=&collapsed=1", "1200,800"),
+  @("layout-float", "/?s=rich&theme=light&pane=&sidew=420&click=.rail-btn", "900,460"),
+  @("layout-gear", "/?s=rich&theme=light&pane=&click=.rail-gear%20.dd-btn", "1200,700"),
+  @("layout-look", "/?s=rich&theme=dark&pane=&click=.rail-gear%20.dd-btn&then=.menu%20.mi:first-child", "1200,800"),
+  @("layout-look-small", "/?s=rich&theme=light&pane=&click=.rail-gear%20.dd-btn&then=.menu%20.mi:first-child", "900,460"),
+  @("layout-gear-small", "/?s=rich&theme=light&pane=&click=.rail-gear%20.dd-btn", "900,460"),
+  @("layout-narrow", "/?s=rich&theme=light&pane=&frame=custom", "820,700"),
+  @("layout-drawer", "/?s=rich&theme=light&pane=&frame=custom&click=.drawer-open", "820,700"),
+  @("layout-drawer-plain", "/?s=rich&theme=light&pane=&click=.drawer-open", "820,700")
 )
 $edge = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 if (-not (Test-Path $edge)) { $edge = "C:\Program Files\Microsoft\Edge\Application\msedge.exe" }

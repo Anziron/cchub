@@ -14,9 +14,23 @@ localStorage.setItem("cchub.url", "ws://demo");
 if (params.get("theme")) localStorage.setItem("cchub.theme", params.get("theme")!);
 // `?pane=changes` 等：打开指定窗格，`?pane=` 关闭。
 if (params.has("pane")) localStorage.setItem("cchub.pane", params.get("pane")!);
+// `?sidew=<px>` `?panew=<px>`：会话栏、窗格宽度；`?collapsed=1|0`：会话栏收起（和拖动、收起后的存储一样，但每次加载不带参数就清掉）。
+// 截图用的无头浏览器会保留 localStorage，所以不写参数就回到默认，免得上一张的设置带到下一张。
+for (const [name, key] of [["sidew", "cchub.sideWidth"], ["panew", "cchub.paneWidth"], ["collapsed", "cchub.sideCollapsed"]]) {
+  const value = params.get(name);
+  if (value) localStorage.setItem(key, name === "collapsed" ? (value === "1" ? "1" : "0") : value);
+  else localStorage.removeItem(key);
+}
+// `?frame=custom`：浏览器里模拟无边框窗口，显示窗口按钮（见 platform.ts 的 customFrame）。
 // `?click=<选择器>`：元素出现后点一下，用来截图检查弹出菜单、撤回插入的消息等。
 // 不能按固定时间点：排队场景等元素要在连接之后才生成，曾经点早了什么也没点到（见下面 `?hover=` 的说明）。
-if (params.get("click")) whenPresent(params.get("click")!, (el) => (el as HTMLElement).click());
+// `?then=<选择器>`：点完 click 的元素后，再等这个元素出现并点一下（两级菜单）。
+if (params.get("click")) {
+  whenPresent(params.get("click")!, (el) => {
+    (el as HTMLElement).click();
+    if (params.get("then")) whenPresent(params.get("then")!, (next) => (next as HTMLElement).click());
+  });
+}
 // `?range=today|7d|30d|all`：使用情况窗格的范围（会记住，截图时每张都写明）。
 if (params.get("range")) localStorage.setItem("cchub.usageRange", params.get("range")!);
 // `?metric=tokens|requests`：使用情况柱状图显示模型 token 还是请求次数（会记住）。

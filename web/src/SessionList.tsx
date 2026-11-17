@@ -1,7 +1,5 @@
 import { memo, useEffect, useState } from "react";
-import { AppearanceMenu } from "./Dialogs";
 import { pageVisible } from "./platform";
-import type { Appearance } from "./appearance";
 import { askHint, Dropdown, MenuItem, Meter, quotaPercent, rowState, sessionStatus, SessionMenu, STATE_ORDER, StateIcon } from "./Common";
 import { Icon } from "./Icon";
 import { firstAsk, isWaiting } from "./model";
@@ -138,27 +136,27 @@ function Status({ store }: { store: Store }) {
   );
 }
 
-function Footer({ store, look, onLook }: { store: Store; look: Appearance; onLook: (patch: Partial<Appearance>) => void }) {
+/** 会话栏底部：额度、设备和连接状态，不随图标栏的视图切换。外观和连接设置在图标栏的齿轮菜单里。 */
+export function SideFooter({ store }: { store: Store }) {
   const conn = store.connection;
   const connClass = !store.url ? "bad" : conn === "connected" ? "ok" : conn === "disconnected" ? "bad" : "pending";
   const connText = !store.url ? "未连接服务器" : conn === "connected" ? "已连接" : conn === "disconnected" ? "已断开" : "重连中";
   return (
-    <>
-    <Status store={store} />
-    <div className="side-foot">
-      <button className={`conn ${connClass}`} title="连接服务器" onClick={() => store.toggleSettings()}>
-        <i />
-        <span>{connText}</span>
-        {conn === "connected" && store.memAvailableMb != null ? <small title="服务器可用内存">可用 {store.memAvailableMb} MB</small> : null}
-      </button>
-      <AppearanceMenu look={look} onChange={onLook} />
-      <button className="icon" aria-label="连接服务器" title="连接服务器" onClick={() => store.toggleSettings()}><Icon name="server" /></button>
+    <div className="side-bottom">
+      <Status store={store} />
+      <div className="side-foot">
+        <button className={`conn ${connClass}`} title="连接服务器" onClick={() => store.toggleSettings()}>
+          <i />
+          <span>{connText}</span>
+          {conn === "connected" && store.memAvailableMb != null ? <small title="服务器可用内存">可用 {store.memAvailableMb} MB</small> : null}
+        </button>
+      </div>
     </div>
-    </>
   );
 }
 
-export function Sidebar({ store, look, onLook }: { store: Store; look: Appearance; onLook: (patch: Partial<Appearance>) => void }) {
+/** 首页视图的会话栏内容：新建会话、过滤分组、会话列表。 */
+export function SessionsPane({ store }: { store: Store }) {
   const [filter, setFilter] = useStored<StatusFilter>(FILTER_KEY, "all", ["all", "wait", "running"]);
   const [groupBy, setGroupBy] = useStored<GroupBy>(GROUP_KEY, "project", ["project", "date"]);
   const [collapsed, setCollapsed] = useState<string[]>(() => {
@@ -180,7 +178,7 @@ export function Sidebar({ store, look, onLook }: { store: Store; look: Appearanc
     : groupByDate(sessions, Math.floor(Date.now() / 1000)).map((g) => ({ id: g.key, label: g.label, sub: undefined, sessions: g.sessions }));
   const filterLabel = filter === "wait" ? "等你决定" : filter === "running" ? "运行中" : groupBy === "project" ? "项目" : "按时间";
   return (
-    <aside className="side">
+    <>
       <button className="row new" onClick={() => store.select(null)}>
         <Icon name="plus" size={14} /><span className="name">新建会话</span>
       </button>
@@ -220,7 +218,6 @@ export function Sidebar({ store, look, onLook }: { store: Store; look: Appearanc
         ) : null}
         {!all.length ? <p className="side-empty">还没有会话</p> : null}
       </div>
-      <Footer store={store} look={look} onLook={onLook} />
-    </aside>
+    </>
   );
 }
