@@ -51,7 +51,8 @@ export function Rail({ store, views, floating, look, onLook }: {
   const gearRef = useRef<HTMLDivElement>(null);
   useDismiss(menuOpen, gearRef, () => setMenuOpen(false));
   return (
-    <nav className="rail" aria-label="视图" data-tauri-drag-region>
+    // 不设 data-tauri-drag-region：拖动区一按下就进系统的移动窗口模式，点图标旁的空白时指针会闪、点击被吞（只有标题栏能拖）
+    <nav className="rail" aria-label="视图">
       <div className="rail-top">
         {views.map((v) => (
           <button

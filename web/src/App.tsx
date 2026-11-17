@@ -199,7 +199,7 @@ export function App({ store }: { store: Store }) {
   if (floating) classes.push("float", ...(store.sideFloatOpen ? ["float-open"] : []));
   else if (store.sideCollapsed) classes.push("collapsed");
   return (
-    <div className={classes.join(" ")} data-tauri-drag-region>
+    <div className={classes.join(" ")}>
       {customFrame() ? <TitleBar store={store} floating={floating} /> : null}
       <Rail store={store} views={VIEWS} floating={floating} look={look} onLook={setLook} />
       <div className="panel">
