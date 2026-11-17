@@ -16,13 +16,13 @@ export function TitleBar({ store, floating }: { store: Store; floating: boolean 
       <AppMark />
       <nav className="titlebar-nav" aria-label="导航">
         <button type="button" aria-label="后退" title="后退（Alt+←）" disabled={!store.canGo(-1)} onClick={() => store.go(-1)}>
-          <Icon name="back" size={15} />
+          <Icon name="back" size={17} />
         </button>
         <button type="button" aria-label="前进" title="前进（Alt+→）" disabled={!store.canGo(1)} onClick={() => store.go(1)}>
-          <Icon name="forward" size={15} />
+          <Icon name="forward" size={17} />
         </button>
         <button type="button" aria-label={shown ? "收起侧栏" : "展开侧栏"} title={`${shown ? "收起" : "展开"}侧栏（Ctrl+B）`} aria-pressed={shown} onClick={() => store.toggleSide(floating)}>
-          <Icon name="sidebar" size={15} />
+          <Icon name="sidebar" size={17} />
         </button>
       </nav>
       <WindowControls />

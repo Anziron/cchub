@@ -44,6 +44,9 @@ export function groupProjects<T extends RowSession>(sessions: T[]): ProjectGroup
   return groups.sort((a, b) => byTime(a.sessions[0]!, b.sessions[0]!));
 }
 
+/** 会话所在的设备；服务器本地目录和没有 cwd 的归 `SERVER_GROUP`。 */
+export const deviceOf = (cwd?: string) => (cwd ? describeCwd(cwd).device : SERVER_GROUP);
+
 export interface DeviceGroupData<T extends RowSession> {
   /** 设备名；服务器本地目录和没有 cwd 的会话归 `SERVER_GROUP`。 */
   device: string;
@@ -55,7 +58,7 @@ export interface DeviceGroupData<T extends RowSession> {
 export function groupDevices<T extends RowSession>(sessions: T[]): DeviceGroupData<T>[] {
   const map = new Map<string, T[]>();
   for (const s of sessions) {
-    const device = s.cwd ? describeCwd(s.cwd).device : SERVER_GROUP;
+    const device = deviceOf(s.cwd);
     map.set(device, [...(map.get(device) ?? []), s]);
   }
   const sections = [...map].map(([device, list]) => {

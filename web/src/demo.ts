@@ -16,7 +16,8 @@ if (params.get("theme")) localStorage.setItem("cchub.theme", params.get("theme")
 if (params.has("pane")) localStorage.setItem("cchub.pane", params.get("pane")!);
 // `?sidew=<px>` `?panew=<px>`：会话栏、窗格宽度；`?collapsed=1|0`：会话栏收起（和拖动、收起后的存储一样，但每次加载不带参数就清掉）。
 // 截图用的无头浏览器会保留 localStorage，所以不写参数就回到默认，免得上一张的设置带到下一张。
-for (const [name, key] of [["sidew", "cchub.sideWidth"], ["panew", "cchub.paneWidth"], ["collapsed", "cchub.sideCollapsed"]]) {
+// `?device=<设备名>`：侧栏设备切换器选中的设备（同样不带就回到“全部设备”）。
+for (const [name, key] of [["sidew", "cchub.sideWidth"], ["panew", "cchub.paneWidth"], ["collapsed", "cchub.sideCollapsed"], ["device", "cchub.deviceFilter"]]) {
   const value = params.get(name);
   if (value) localStorage.setItem(key, name === "collapsed" ? (value === "1" ? "1" : "0") : value);
   else localStorage.removeItem(key);

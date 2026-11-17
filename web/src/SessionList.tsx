@@ -1,9 +1,9 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useState, type CSSProperties } from "react";
 import { pageVisible } from "./platform";
 import { askHint, Dropdown, MenuItem, Meter, quotaPercent, rowState, sessionStatus, SessionMenu, STATE_ORDER, StateIcon } from "./Common";
 import { Icon } from "./Icon";
 import { firstAsk, isWaiting } from "./model";
-import { DEVICE_STATE, deviceList, groupByDate, groupDevices, SERVER_GROUP, type DeviceState } from "./sidebar";
+import { DEVICE_STATE, deviceList, deviceOf, groupByDate, groupDevices, SERVER_GROUP, type DeviceEntry } from "./sidebar";
 import { describeCwd, type Session, type Store } from "./store";
 
 type StatusFilter = "all" | "wait" | "running";
@@ -13,6 +13,7 @@ const VISIBLE_SESSIONS = 5;
 const COLLAPSED_KEY = "cchub.collapsedProjects";
 const FILTER_KEY = "cchub.sideFilter";
 const GROUP_KEY = "cchub.sideGroup";
+const DEVICE_KEY = "cchub.deviceFilter";
 
 function useStored<T extends string>(key: string, fallback: T, allowed: readonly T[]): [T, (value: T) => void] {
   const [value, setValue] = useState<T>(() => {
@@ -56,11 +57,13 @@ const SessionRowView = memo(function SessionRowView({ store, session, project }:
   );
 }, (a, b) => a.digest === b.digest && a.project === b.project && a.session === b.session && a.store === b.store);
 
-function Group({ store, id, label, sub, sessions, collapsed, toggle, withProject }: {
+function Group({ store, id, label, sub, device, sessions, collapsed, toggle, withProject }: {
   store: Store;
   id: string;
   label: string;
   sub?: string;
+  /** “全部设备”时在项目名右侧显示的设备标签。 */
+  device?: string;
   sessions: Session[];
   collapsed: boolean;
   toggle: () => void;
@@ -75,6 +78,7 @@ function Group({ store, id, label, sub, sessions, collapsed, toggle, withProject
     <div className={`group${collapsed ? " closed" : ""}`}>
       <button className="group-head" title={id || undefined} aria-expanded={!collapsed} onClick={toggle}>
         <span className="name">{label}{sub ? <em>{sub}</em> : null}</span>
+        {device ? <DeviceChip name={device} /> : null}
         {state ? <StateIcon state={state} /> : null}
         <Icon name="chev" size={10} className="fold" />
       </button>
@@ -82,39 +86,6 @@ function Group({ store, id, label, sub, sessions, collapsed, toggle, withProject
       {hidden > 0 ? <button className="row more" onClick={() => setShowAll(true)}>显示更多（{hidden}）</button> : null}
       {showAll && !collapsed && sessions.length > VISIBLE_SESSIONS ? <button className="row more" onClick={() => setShowAll(false)}>收起</button> : null}
     </div>
-  );
-}
-
-/**
- * 一台设备的分段：小标题（在线圆点、设备名、离线提示、可折叠）+ 这台设备的项目组。
- * 折叠时标题右侧显示段里最要紧的状态，等你决定的不会被漏掉。
- */
-function DeviceSection({ store, name, state, projects, collapsedKeys, toggle }: {
-  store: Store;
-  name: string;
-  state: DeviceState | "server";
-  projects: { id: string; label: string; sub?: string; sessions: Session[] }[];
-  collapsedKeys: string[];
-  toggle: (key: string) => void;
-}) {
-  const key = `device:${name}`;
-  const closed = collapsedKeys.includes(key);
-  const sessions = projects.flatMap((p) => p.sessions);
-  const urgent = closed ? STATE_ORDER.find((value) => value && sessions.some((s) => rowState(s) === value)) : undefined;
-  const note = state === "offline" ? "离线" : state === "warn" ? "目录读不到" : "";
-  return (
-    <section className={`dev-section${closed ? " closed" : ""}`}>
-      <button className={`dev-head ${state}`} aria-expanded={!closed} title={note ? `${name}：${note}` : name} onClick={() => toggle(key)}>
-        <i />
-        <span className="dev-head-name">{name}</span>
-        {note ? <small>{note}</small> : null}
-        {urgent ? <StateIcon state={urgent} /> : null}
-        <Icon name="chev" size={10} className="fold" />
-      </button>
-      {closed ? null : projects.map((g) => (
-        <Group key={g.id} store={store} id={g.id} label={g.label} sub={g.sub} sessions={g.sessions} collapsed={collapsedKeys.includes(g.id)} toggle={() => toggle(g.id)} />
-      ))}
-    </section>
   );
 }
 
@@ -134,10 +105,9 @@ function QuotaLine({ label, window }: { label: string; window: QuotaWindow }) {
 
 const DEVICES_REFRESH_MS = 60_000;
 
-/** 侧栏底部：额度进度（点开窗格看重置时间）和全部设备，点设备弹窗看项目、开会话。 */
+/** 侧栏底部：额度进度（点开窗格看重置时间）。设备状态在顶部的设备切换器里。 */
 function Status({ store }: { store: Store }) {
   const { fiveHour, sevenDay } = store.limits;
-  const devices = deviceList(store.devices, [...store.sessions.values()].filter((s) => !s.archived));
   const openUsage = () => store.togglePane("usage");
   // 页面看得见时每分钟刷新一次在线状态；切回窗口时补一次。
   useEffect(() => {
@@ -154,18 +124,65 @@ function Status({ store }: { store: Store }) {
           <QuotaLine label="本周" window={sevenDay} />
         </div>
       ) : null}
-      {devices.length ? (
-        <div className="side-devices">
-          {devices.map((d) => (
-            <button type="button" key={d.name} className={`dev ${d.state}`} title={`${d.name}：${DEVICE_STATE[d.state]}，点击查看项目或连接`} onClick={() => store.openDevice(d.name)}>
-              <i />
-              <span className="dev-name">{d.name}</span>
-              <small>{d.state === "online" ? (d.projects.length ? `${d.projects.length} 个项目` : "在线") : DEVICE_STATE[d.state]}</small>
-            </button>
-          ))}
-        </div>
-      ) : null}
     </>
+  );
+}
+
+/** 设备标签的颜色：按名字固定一个色相，深浅主题都用同一个色相（背景按主题混合）。 */
+function deviceHue(name: string): number {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return h;
+}
+
+export function DeviceChip({ name }: { name: string }) {
+  return <span className="dev-chip" style={{ "--chip-h": deviceHue(name) } as CSSProperties}>{name}</span>;
+}
+
+/**
+ * 会话栏顶部的设备切换器（参考 SaaS 的工作区切换器）：选“全部设备”或某一台，列表只显示它的项目。
+ * 菜单里是每台设备的在线状态和项目数，替代原来底部的设备列表；选中某台时可以打开它的项目窗口。
+ */
+function DeviceSwitcher({ store, devices, current, onChange }: {
+  store: Store;
+  devices: DeviceEntry[];
+  current: string | null;
+  onChange: (device: string | null) => void;
+}) {
+  const active = current ? devices.find((d) => d.name === current) : undefined;
+  const bad = devices.some((d) => d.state === "offline" || d.state === "warn");
+  const label = current ?? "全部设备";
+  const dotClass = active ? active.state : current === SERVER_GROUP ? "online" : bad ? "warn" : "online";
+  return (
+    <Dropdown
+      className="dev-switch"
+      label="切换设备"
+      align="left"
+      button={<><i className={`dot ${dotClass}`} /><span>{label}</span><Icon name="down" size={11} /></>}
+    >
+      {(close) => (
+        <>
+          <MenuItem label="全部设备" checked={current === null} onClick={() => { onChange(null); close(); }} />
+          <div className="menu-sep" />
+          {devices.map((d) => (
+            <MenuItem
+              key={d.name}
+              label={<span className={`dev-opt ${d.state}`}><i />{d.name}</span>}
+              hint={d.state === "online" ? (d.projects.length ? `${d.projects.length} 个项目` : "在线") : DEVICE_STATE[d.state]}
+              checked={current === d.name}
+              onClick={() => { onChange(d.name); close(); }}
+            />
+          ))}
+          <MenuItem label={<span className="dev-opt online"><i />{SERVER_GROUP}</span>} checked={current === SERVER_GROUP} onClick={() => { onChange(SERVER_GROUP); close(); }} />
+          {active ? (
+            <>
+              <div className="menu-sep" />
+              <MenuItem icon="folder" label={`${active.name} 的项目和连接…`} onClick={() => { close(); store.openDevice(active.name); }} />
+            </>
+          ) : null}
+        </>
+      )}
+    </Dropdown>
   );
 }
 
@@ -204,28 +221,30 @@ export function SessionsPane({ store }: { store: Store }) {
     setCollapsed(next);
     localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next));
   };
+  const [device, setDeviceState] = useState<string | null>(() => localStorage.getItem(DEVICE_KEY));
+  const setDevice = (next: string | null) => {
+    setDeviceState(next);
+    if (next) localStorage.setItem(DEVICE_KEY, next);
+    else localStorage.removeItem(DEVICE_KEY);
+  };
   const all = [...store.sessions.values()].filter((s) => !s.archived);
-  const sessions = all.filter((s) => filter === "all" || (filter === "wait" ? isWaiting(s.thread) : s.running));
-  // 按设备分段，段内是项目组；只有一台设备（含只有服务器）时不显示设备小标题。
-  const sections = groupBy === "project"
-    ? groupDevices(sessions).map((d) => ({
-      device: d.device,
-      projects: d.projects.map((g) => ({ id: g.key, label: g.project, sub: g.device || undefined, sessions: g.sessions })),
-    }))
-    : [];
-  const showDevices = sections.length > 1;
-  const deviceStates = new Map(deviceList(store.devices, all).map((d) => [d.name, d.state]));
+  const devices = deviceList(store.devices, all);
+  const sessions = all.filter((s) => (filter === "all" || (filter === "wait" ? isWaiting(s.thread) : s.running)) && (!device || deviceOf(s.cwd) === device));
+  // 只有两层：项目 → 会话。“全部设备”时同一设备的项目排在一起，项目名右侧带设备标签；选了某台设备就不带。
+  const sections = groupBy === "project" ? groupDevices(sessions) : [];
+  const tagged = !device && sections.length > 1;
   const groups = groupBy === "project"
-    ? sections.flatMap((d) => d.projects)
-    : groupByDate(sessions, Math.floor(Date.now() / 1000)).map((g) => ({ id: g.key, label: g.label, sub: undefined, sessions: g.sessions }));
-  const filterLabel = filter === "wait" ? "等你决定" : filter === "running" ? "运行中" : groupBy === "project" ? "项目" : "按时间";
+    ? sections.flatMap((d) => d.projects.map((g) => ({ id: g.key, label: g.project, sub: g.device || undefined, device: tagged ? d.device : undefined, sessions: g.sessions })))
+    : groupByDate(sessions, Math.floor(Date.now() / 1000)).map((g) => ({ id: g.key, label: g.label, sub: undefined, device: undefined, sessions: g.sessions }));
+  const filterLabel = filter === "wait" ? "等你决定" : filter === "running" ? "运行中" : "";
   return (
     <>
       <button className="row new" onClick={() => store.select(null)}>
         <Icon name="plus" size={14} /><span className="name">新建会话</span>
       </button>
       <div className="side-head">
-        <span>{filterLabel}</span>
+        <DeviceSwitcher store={store} devices={devices} current={device} onChange={setDevice} />
+        {filterLabel ? <button type="button" className="side-filter-tag" title="显示全部会话" onClick={() => setFilter("all")}>{filterLabel}<Icon name="close" size={10} /></button> : null}
         <Dropdown className="side-filter" label="过滤和分组" align="left" button={<Icon name="gear" size={14} />}>
           {(close) => (
             <>
@@ -242,23 +261,14 @@ export function SessionsPane({ store }: { store: Store }) {
         </Dropdown>
       </div>
       <div className="side-scroll">
-        {showDevices ? sections.map((d) => (
-          <DeviceSection
-            key={d.device}
-            store={store}
-            name={d.device}
-            state={d.device === SERVER_GROUP ? "server" : deviceStates.get(d.device) ?? "unknown"}
-            projects={d.projects}
-            collapsedKeys={collapsed}
-            toggle={toggle}
-          />
-        )) : groups.map((g) => (
+        {groups.map((g) => (
           <Group
             key={g.id}
             store={store}
             id={g.id}
             label={g.label}
             sub={g.sub}
+            device={g.device}
             sessions={g.sessions}
             collapsed={collapsed.includes(g.id)}
             toggle={() => toggle(g.id)}
@@ -266,7 +276,10 @@ export function SessionsPane({ store }: { store: Store }) {
           />
         ))}
         {!groups.length && all.length ? (
-          <p className="side-empty">没有{filter === "wait" ? "等你决定的" : "运行中的"}会话。<button className="link-btn" onClick={() => setFilter("all")}>显示全部</button></p>
+          <p className="side-empty">
+            {device ? `${device} 上` : ""}没有{filter === "wait" ? "等你决定的" : filter === "running" ? "运行中的" : ""}会话。
+            <button className="link-btn" onClick={() => { setFilter("all"); setDevice(null); }}>显示全部</button>
+          </p>
         ) : null}
         {!all.length ? <p className="side-empty">还没有会话</p> : null}
       </div>

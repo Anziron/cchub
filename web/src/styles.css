@@ -402,15 +402,16 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 13.5px/1.5 va
 body.resizing, body.resizing * { cursor: col-resize !important; user-select: none !important; }
 .side-scrim { position: absolute; inset: 0; z-index: 35; background: rgba(20, 18, 15, .14); }
 /* 无边框窗口：顶部单独一行标题栏横跨整个窗口（图标栏和面板都在它下面），左边图标和名称，右边窗口按钮 */
-:root { --title-h: 32px; }
+/* 标题栏 40px，和下面的面板之间留 4px（用户觉得 32px 太挤）；图标栏上内边距跟着加 4px，首页图标仍和“新建会话”对齐 */
+:root { --title-h: 40px; }
 .app.frame-custom { grid-template-rows: var(--title-h) minmax(0, 1fr); }
-.app.frame-custom .rail { padding-top: 7px; }
-.app.frame-custom .panel { margin-top: 0; }
-.titlebar { grid-column: 1 / -1; display: flex; align-items: center; height: var(--title-h); padding-left: 16px; color: var(--text-2); font-size: 12px; user-select: none; }
+.app.frame-custom .rail { padding-top: 11px; }
+.app.frame-custom .panel { margin-top: 4px; }
+.titlebar { grid-column: 1 / -1; display: flex; align-items: center; height: var(--title-h); padding-left: 15px; color: var(--text-2); font-size: 12px; user-select: none; }
 /* 图标和图标栏的图标对齐（同一竖线），导航按钮从面板左边缘开始 */
-.titlebar .app-mark { width: 16px; height: 16px; pointer-events: none; }
-.titlebar-nav { display: flex; align-items: center; gap: 2px; margin-left: calc(var(--rail-w) - 32px); }
-.titlebar-nav button { display: grid; place-items: center; width: 28px; height: 24px; border-radius: var(--r-sm); color: var(--muted); transition: background .12s var(--ease), color .12s var(--ease); }
+.titlebar .app-mark { width: 18px; height: 18px; pointer-events: none; }
+.titlebar-nav { display: flex; align-items: center; gap: 4px; margin-left: calc(var(--rail-w) - 33px); }
+.titlebar-nav button { display: grid; place-items: center; width: 32px; height: 30px; border-radius: var(--r-md); color: var(--muted); transition: background .12s var(--ease), color .12s var(--ease); }
 .titlebar-nav button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .titlebar-nav button:disabled { opacity: .35; cursor: default; }
 .winctl { display: flex; align-self: stretch; flex: none; margin-left: auto; }
@@ -436,22 +437,18 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .side-head .dd-btn:hover, .side-head .open .dd-btn { background: var(--hover); color: var(--text-2); }
 .side-empty { margin: 8px 10px; color: var(--faint); font-size: 12px; line-height: 1.6; }
 .group { margin-bottom: 4px; }
-/* 设备分段：和“项目”那行一样的小字标题，不加缩进；圆点是在线状态（服务器不显示圆点） */
-.dev-section + .dev-section { margin-top: 8px; padding-top: 4px; border-top: 1px solid var(--line); }
-.dev-head { display: flex; align-items: center; gap: 7px; width: 100%; height: 28px; margin-top: 2px; padding: 0 10px; border-radius: var(--r-sm); color: var(--text-2); font-size: 12px; font-weight: 600; letter-spacing: .02em; text-align: left; }
-.dev-head:hover { color: var(--text); }
-.dev-head i { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--faint); opacity: .6; }
-.dev-head.online i { background: var(--ok); opacity: 1; }
-.dev-head.warn i { background: var(--warn); opacity: 1; }
-.dev-head.offline i { background: var(--del); opacity: 1; }
-.dev-head.server i { display: none; }
-.dev-head-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.dev-head small { flex: none; color: var(--faint); font-size: 11px; font-weight: 400; }
-.dev-head.offline small { color: var(--del); }
-.dev-head.warn small { color: var(--warn); }
-.dev-head .fold { opacity: 0; transform: rotate(90deg); transition: transform .15s var(--ease), opacity .15s var(--ease); }
-.dev-head:hover .fold, .dev-section.closed .dev-head .fold { opacity: 1; }
-.dev-section.closed .dev-head .fold { transform: none; }
+/* 设备切换器（“项目”那行左边）：圆点是当前设备的状态，全部设备时有设备离线就是黄色 */
+.side-head .dev-switch { margin-left: -6px; }
+.side-head .dev-switch .dd-btn { display: flex; align-items: center; gap: 6px; width: auto; height: 26px; padding: 0 6px; color: var(--text-2); font-size: 12px; font-weight: 600; }
+.side-head .dev-switch .dd-btn svg { color: var(--faint); }
+.dot, .dev-opt i { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--faint); }
+.dot.online, .dev-opt.online i { background: var(--ok); }
+.dot.warn, .dev-opt.warn i { background: var(--warn); }
+.dot.offline, .dev-opt.offline i { background: var(--del); }
+.dev-opt { display: inline-flex; align-items: center; gap: 8px; }
+.side-filter-tag { display: inline-flex; align-items: center; gap: 4px; height: 20px; margin-left: 2px; margin-right: auto; padding: 0 6px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-size: 11px; }
+/* 项目名右侧的设备标签：每台设备固定一个色相，背景按主题混合 */
+.dev-chip { flex: none; max-width: 40%; overflow: hidden; padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, hsl(var(--chip-h) 55% 50%) 14%, transparent); color: light-dark(hsl(var(--chip-h) 45% 40%), hsl(var(--chip-h) 55% 70%)); font-size: 10.5px; font-weight: 500; line-height: 16px; white-space: nowrap; text-overflow: ellipsis; }
 /* 项目名：比会话标题小一点但看得清（用户反馈原来 12px 灰色太浅） */
 .group-head { display: flex; align-items: center; gap: 6px; width: 100%; height: 28px; margin-top: 6px; padding: 0 10px; border-radius: var(--r-sm); color: var(--text-2); font-size: 13px; font-weight: 500; text-align: left; }
 .group-head:hover { color: var(--text); }
@@ -485,13 +482,6 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .quota-line { display: grid; grid-template-columns: 38px minmax(30px, 1fr) 32px; align-items: center; gap: 6px; color: var(--muted); }
 .quota-line b { color: var(--text-2); font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
 /* 设备：每台一行，可点开弹窗；状态点 绿=在线 黄=目录读不到 红=离线 灰=未检测 */
-.side-devices { display: flex; flex-direction: column; gap: 1px; padding: 5px 0; border-top: 1px solid var(--line); max-height: 150px; overflow-y: auto; }
-.side-devices .dev { width: 100%; height: 26px; padding: 0 8px; border-radius: var(--r-md); color: var(--text-2); font-size: 12px; text-align: left; }
-.side-devices .dev:hover { background: var(--hover); color: var(--text); }
-.side-devices .dev small { margin-left: auto; color: var(--faint); font-size: 11px; }
-.side-devices .dev.offline small { color: var(--del); }
-.side-devices .dev.warn small { color: var(--warn); }
-.dev-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dev { display: flex; align-items: center; gap: 7px; max-width: 100%; overflow: hidden; white-space: nowrap; }
 .dev i { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--faint); opacity: .6; }
 .dev.online i { background: var(--ok); opacity: 1; }
