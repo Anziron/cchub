@@ -84,7 +84,7 @@ function HomeMain({ store }: { store: Store }) {
 
 /** 图标栏的视图。以后加插件、定时任务：各加一项（会话栏内容 + 主区域内容）。 */
 const VIEWS: ViewDef[] = [
-  { id: "home", label: "首页", icon: "home", side: SessionsPane, main: HomeMain },
+  { id: "home", label: "新会话", icon: "home", side: SessionsPane, main: HomeMain, activate: (store) => store.goHome() },
 ];
 
 const RAIL_WIDTH = 48;

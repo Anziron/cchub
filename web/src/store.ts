@@ -572,6 +572,15 @@ export class Store {
     this.select(this.history[i], true);
   }
 
+  /** 图标栏的“首页”：回到首页视图并打开新会话页。 */
+  goHome(): void {
+    if (this.view !== "home") {
+      this.view = "home";
+      localStorage.setItem(VIEW_KEY, "home");
+    }
+    this.select(null);
+  }
+
   /** 标题栏的“收起侧栏”：窄屏开关抽屉，否则和再点一次当前视图图标一样。 */
   toggleSide(floating: boolean): void {
     if (isNarrow()) {

@@ -72,7 +72,8 @@ function demoModels(messages: number, weights: Record<string, number>): Record<s
 const DEMO_PROJECT_MIX: Record<string, Record<string, number>> = {
   "/mnt/pc/d/demo-api": { "claude-opus-5-5": 0.7, "claude-sonnet-5-5": 0.2, "claude-haiku-5-5": 0.1, "claude-fable-5-2": 0.6 },
   "/mnt/mac-mini/Users/dev/cchub": { "claude-opus-5-5": 0.25, "claude-sonnet-5-5": 0.7, "claude-haiku-5-5": 0.3, "claude-fable-5-2": 0.4 },
-  "/root/notes": { "claude-opus-5-5": 0.05, "claude-sonnet-5-5": 0.1, "claude-haiku-5-5": 0.6, "claude-fable-5-2": 0 },
+  // 名字故意取长，检查“常用项目”拉宽窗格时名称能显示全
+  "/root/team-handbook-and-meeting-notes": { "claude-opus-5-5": 0.05, "claude-sonnet-5-5": 0.1, "claude-haiku-5-5": 0.6, "claude-fable-5-2": 0 },
 };
 function demoProjectTokens(models: Record<string, [number, number, number, number]>) {
   return Object.fromEntries(Object.entries(DEMO_PROJECT_MIX).map(([cwd, mix]) => [cwd, Object.fromEntries(
@@ -205,7 +206,7 @@ export const demoHub: Hub = {
           messages, sessions: messages ? 1 + (seed % 4) : 0,
           input: messages * 3, output: messages * 900, cacheWrite: messages * 4000, cacheRead: messages * 60000,
           models,
-          projects: messages ? { "/mnt/pc/d/demo-api": Math.round(messages * 0.6), "/mnt/mac-mini/Users/dev/cchub": Math.round(messages * 0.3), "/root/notes": Math.round(messages * 0.1) } : {},
+          projects: messages ? { "/mnt/pc/d/demo-api": Math.round(messages * 0.6), "/mnt/mac-mini/Users/dev/cchub": Math.round(messages * 0.3), "/root/team-handbook-and-meeting-notes": Math.round(messages * 0.1) } : {},
           projectTokens: scene === "usage-old" ? undefined : demoProjectTokens(models),
           hours,
           hourTokens: isToday ? {

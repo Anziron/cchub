@@ -381,11 +381,15 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 13.5px/1.5 va
    中间的分隔线就是拖拽条。宽度用 :root 上的变量，拖动时只改变量（Resizer.tsx），不经过 React。 */
 :root { --side-w: 264px; --pane-w: 380px; --rail-w: 48px; }
 .app { display: grid; grid-template-columns: var(--rail-w) minmax(0, 1fr); height: 100vh; background: var(--raised); }
-.rail { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: space-between; min-height: 0; padding: 12px 0 10px; }
+/* 上内边距让“首页”图标和会话栏的“新建会话”一行在同一水平线（面板上边距 8 + 会话栏内边距 10 + 行高 30 的一半 − 图标 18） */
+.rail { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: space-between; min-height: 0; padding: 15px 0 10px; }
 .rail-top, .rail-bottom { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.rail-btn, .rail-gear .dd-btn { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; color: var(--muted); transition: background .16s var(--ease), color .16s var(--ease); }
-.rail-btn:hover, .rail-gear .dd-btn:hover, .rail-gear.open .dd-btn { background: var(--hover); color: var(--text); }
+.rail-btn { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; color: var(--muted); transition: background .16s var(--ease), color .16s var(--ease); }
+.rail-btn:hover, .rail-btn.open { background: var(--hover); color: var(--text); }
 .rail-btn.on { background: var(--active); color: var(--text); }
+/* 齿轮菜单和外观面板都向右弹：贴着面板左边缘，和面板底边对齐 */
+.menu.rail-pop { position: fixed; right: auto; bottom: 8px; left: calc(var(--rail-w) + 4px); z-index: 50; min-width: 180px; animation-name: pop-right; }
+@keyframes pop-right { from { opacity: 0; transform: translateX(-4px); } }
 .rail-look { position: fixed; bottom: 8px; left: calc(var(--rail-w) + 4px); z-index: 50; }
 .rail-look .look { position: static; max-height: calc(100vh - 16px); overflow-y: auto; }
 .panel { position: relative; display: flex; min-width: 0; min-height: 0; margin: 8px 8px 8px 0; overflow: hidden; border-radius: 14px; background: var(--bg); box-shadow: 0 0 0 1px var(--line); }
@@ -400,7 +404,7 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 /* 无边框窗口：顶部单独一行标题栏横跨整个窗口（图标栏和面板都在它下面），左边图标和名称，右边窗口按钮 */
 :root { --title-h: 32px; }
 .app.frame-custom { grid-template-rows: var(--title-h) minmax(0, 1fr); }
-.app.frame-custom .rail { padding-top: 4px; }
+.app.frame-custom .rail { padding-top: 7px; }
 .app.frame-custom .panel { margin-top: 0; }
 .titlebar { grid-column: 1 / -1; display: flex; align-items: center; height: var(--title-h); padding-left: 16px; color: var(--text-2); font-size: 12px; user-select: none; }
 /* 图标和图标栏的图标对齐（同一竖线），导航按钮从面板左边缘开始 */
@@ -840,8 +844,10 @@ a.link:hover { text-decoration-thickness: 2px; }
 .rank-total { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; padding-top: 7px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .rank-note { overflow: hidden; color: var(--faint); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
 .rank-total .num { margin-left: auto; color: var(--text); font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.rank { display: flex; flex-direction: column; gap: 2px; }
-.rank-row { display: grid; grid-template-columns: minmax(0, 7.5em) 1fr 3.2em auto; align-items: center; gap: 10px; margin: 0 -6px; padding: 5px 6px; border-radius: var(--r-sm); font-size: 12.5px; transition: background .12s var(--ease); }
+/* 名称列先按最长的名称撑开（拉宽窗格时先把名称显示全），剩下的给条；窄了名称截断，条至少留 48px。
+   各行用 subgrid 共用同一套列宽，条的起点对齐。 */
+.rank { display: grid; grid-template-columns: minmax(0, max-content) minmax(48px, 1fr) 3.2em auto; column-gap: 10px; row-gap: 2px; }
+.rank-row { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; margin: 0 -6px; padding: 5px 6px; border-radius: var(--r-sm); font-size: 12.5px; transition: background .12s var(--ease); }
 .rank-row:hover { background: var(--hover); }
 .rank-name { display: flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; color: var(--text); white-space: nowrap; text-overflow: ellipsis; }
 .rank-name i { width: 8px; height: 8px; flex: none; border-radius: 2px; }

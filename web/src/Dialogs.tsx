@@ -478,11 +478,12 @@ export function ResumeDialog({ store }: { store: Store }) {
 export function AppearancePanel({ look, onChange, onClose }: { look: Appearance; onChange: (patch: Partial<Appearance>) => void; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const onDown = (event: MouseEvent) => {
+    // 捕获阶段的 pointerdown：点到哪里都收起（同 Dropdown）
+    const onDown = (event: PointerEvent) => {
       if (!ref.current?.contains(event.target as Node)) onClose();
     };
-    addEventListener("mousedown", onDown);
-    return () => removeEventListener("mousedown", onDown);
+    addEventListener("pointerdown", onDown, true);
+    return () => removeEventListener("pointerdown", onDown, true);
   }, [onClose]);
   return (
     <div

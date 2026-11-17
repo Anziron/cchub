@@ -5,7 +5,7 @@ import { isNarrow, watchMaximized, windowOps } from "./platform";
 import type { Store } from "./store";
 
 /**
- * 无边框窗口的标题栏：横跨整个窗口的单独一行，只放全局的东西——左边应用图标、收起侧栏、后退 / 前进，
+ * 无边框窗口的标题栏：横跨整个窗口的单独一行，只放全局的东西——左边应用图标、后退 / 前进、收起侧栏，
  * 右边窗口按钮（当前会话的操作留在面板顶栏）。中间留给以后的搜索框。
  * 整行可拖动、双击最大化；图标不接收鼠标，点到它也算点到标题栏本身（拖动区只认带属性的元素）。
  */
@@ -15,14 +15,14 @@ export function TitleBar({ store, floating }: { store: Store; floating: boolean 
     <header className="titlebar" data-tauri-drag-region>
       <AppMark />
       <nav className="titlebar-nav" aria-label="导航">
-        <button type="button" aria-label={shown ? "收起侧栏" : "展开侧栏"} title={`${shown ? "收起" : "展开"}侧栏（Ctrl+B）`} aria-pressed={shown} onClick={() => store.toggleSide(floating)}>
-          <Icon name="sidebar" size={15} />
-        </button>
         <button type="button" aria-label="后退" title="后退（Alt+←）" disabled={!store.canGo(-1)} onClick={() => store.go(-1)}>
           <Icon name="back" size={15} />
         </button>
         <button type="button" aria-label="前进" title="前进（Alt+→）" disabled={!store.canGo(1)} onClick={() => store.go(1)}>
           <Icon name="forward" size={15} />
+        </button>
+        <button type="button" aria-label={shown ? "收起侧栏" : "展开侧栏"} title={`${shown ? "收起" : "展开"}侧栏（Ctrl+B）`} aria-pressed={shown} onClick={() => store.toggleSide(floating)}>
+          <Icon name="sidebar" size={15} />
         </button>
       </nav>
       <WindowControls />
