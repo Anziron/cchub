@@ -500,7 +500,8 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .conn small { margin-left: auto; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
 
 /* 主区域 */
-.main { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg); }
+/* flex: 1：面板是横向 flex，主区域必须撑满剩余宽度；不写的话按内容缩，新会话页内容窄时右侧空出一大片 */
+.main { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg); }
 .top { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; height: 48px; padding: 0 12px 0 20px; }
 .top-right { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 /* 置顶开着时图钉用强调色、竖直；关着时灰色、斜放 */
