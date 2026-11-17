@@ -6,7 +6,7 @@
 # 每次加载不带 sidew / panew / collapsed 就回到默认，不会把上一张的设置带过来。layout-* 是改版的一组。
 # ?click 触发的内层滚动在截图里看不到；要验证滚动，用 --dump-dom --enable-logging=stderr 看 console 输出。
 # 无头 Edge 窗口最窄约 500px，更窄的截图只会裁切，不能用来判断窄屏布局。
-param([string]$Out = ".cc\shots", [string]$Only = "")
+param([string]$Out = ".cc\shots", [string]$Only = "", [switch]$NoMotion)
 $ErrorActionPreference = "Continue"
 $shots = @(
   @("rich-light", "/?s=rich&theme=light&pane=", "1440,900"),
@@ -35,13 +35,13 @@ $shots = @(
   @("layout-1440-dark", "/?s=rich&theme=dark&pane=&frame=custom", "1440,900"),
   @("layout-pane", "/?s=rich&theme=light&pane=changes&frame=custom", "1200,800"),
   @("layout-pane-wide", "/?s=rich&theme=dark&pane=tasks&scene=tasks&panew=640&sidew=220&frame=custom", "1440,900"),
-  @("layout-900", "/?s=rich&theme=light&pane=&sidew=420", "900,460"),
-  @("layout-collapsed", "/?s=rich&theme=light&pane=&collapsed=1", "1200,800"),
-  @("layout-float", "/?s=rich&theme=light&pane=&sidew=420&click=.rail-btn", "900,460"),
-  @("layout-gear", "/?s=rich&theme=light&pane=&click=.rail-gear%20.dd-btn", "1200,700"),
-  @("layout-look", "/?s=rich&theme=dark&pane=&click=.rail-gear%20.dd-btn&then=.menu%20.mi:first-child", "1200,800"),
-  @("layout-look-small", "/?s=rich&theme=light&pane=&click=.rail-gear%20.dd-btn&then=.menu%20.mi:first-child", "900,460"),
-  @("layout-gear-small", "/?s=rich&theme=light&pane=&click=.rail-gear%20.dd-btn", "900,460"),
+  @("layout-900", "/?s=rich&theme=light&pane=&sidew=420&frame=custom", "900,460"),
+  @("layout-collapsed", "/?s=rich&theme=light&pane=&collapsed=1&frame=custom", "1200,800"),
+  @("layout-float", "/?s=rich&theme=light&pane=&sidew=420&frame=custom&click=.rail-btn", "900,460"),
+  @("layout-gear", "/?s=rich&theme=light&pane=&frame=custom&click=.rail-gear%20.dd-btn", "1200,700"),
+  @("layout-look", "/?s=rich&theme=dark&pane=&frame=custom&click=.rail-gear%20.dd-btn&then=.menu%20.mi:first-child", "1200,800"),
+  @("layout-look-small", "/?s=rich&theme=light&pane=&frame=custom&click=.rail-gear%20.dd-btn&then=.menu%20.mi:first-child", "900,460"),
+  @("layout-gear-small", "/?s=rich&theme=light&pane=&frame=custom&click=.rail-gear%20.dd-btn", "900,460"),
   @("layout-narrow", "/?s=rich&theme=light&pane=&frame=custom", "820,700"),
   @("layout-drawer", "/?s=rich&theme=light&pane=&frame=custom&click=.drawer-open", "820,700"),
   @("layout-drawer-plain", "/?s=rich&theme=light&pane=&click=.drawer-open", "820,700")
@@ -58,7 +58,9 @@ foreach ($s in $shots) {
   if ($Only -and -not $s[0].StartsWith($Only)) { continue }
   $file = Join-Path $full ($s[0] + ".png")
   # 独立的用户目录：设备上开着 Edge 时，共用目录的无头实例会把请求交给已开的浏览器后直接退出，截不到图。
-  & $edge --headless=new "--user-data-dir=$env:TEMP\cchub-shots-edge" --disable-gpu --hide-scrollbars --virtual-time-budget=4000 "--window-size=$($s[2])" "--screenshot=$file" "http://127.0.0.1:5199$($s[1])" 2>$null | Out-Null
+  # -NoMotion：按“减少动画”渲染（styles.css 会关掉过渡），排除主题切换时颜色过渡没走完造成的发暗。
+  $motion = if ($NoMotion) { "--force-prefers-reduced-motion" } else { "--no-first-run" }
+  & $edge --headless=new "--user-data-dir=$env:TEMP\cchub-shots-edge" --disable-gpu --hide-scrollbars $motion --virtual-time-budget=4000 "--window-size=$($s[2])" "--screenshot=$file" "http://127.0.0.1:5199$($s[1])" 2>$null | Out-Null
 }
 Get-ChildItem $full -Filter *.png | Select-Object Name, Length
 taskkill /PID $p.Id /T /F 2>$null | Out-Null

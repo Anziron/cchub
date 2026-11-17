@@ -397,7 +397,15 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 13.5px/1.5 va
 .pane-resizer { left: -5px; }
 body.resizing, body.resizing * { cursor: col-resize !important; user-select: none !important; }
 .side-scrim { position: absolute; inset: 0; z-index: 35; background: rgba(20, 18, 15, .14); }
-.winctl { display: flex; align-self: stretch; flex: none; margin-left: 4px; }
+/* 无边框窗口：顶部单独一行标题栏横跨整个窗口（图标栏和面板都在它下面），左边图标和名称，右边窗口按钮 */
+:root { --title-h: 32px; }
+.app.frame-custom { grid-template-rows: var(--title-h) minmax(0, 1fr); }
+.app.frame-custom .rail { padding-top: 4px; }
+.app.frame-custom .panel { margin-top: 0; }
+.titlebar { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; height: var(--title-h); padding-left: 15px; color: var(--text-2); font-size: 12px; user-select: none; }
+.titlebar .app-mark { width: 16px; height: 16px; }
+.titlebar .app-mark, .titlebar-name { pointer-events: none; }
+.winctl { display: flex; align-self: stretch; flex: none; margin-left: auto; }
 .winctl button { display: grid; place-items: center; width: 46px; color: var(--text-2); transition: background .12s var(--ease), color .12s var(--ease); }
 .winctl button:hover { background: var(--hover); color: var(--text); }
 .winctl button.close:hover { background: #c42b1c; color: #fff; }
@@ -487,8 +495,6 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .main { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg); }
 .top { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; height: 48px; padding: 0 12px 0 20px; }
 .top-right { display: flex; align-items: center; gap: 4px; margin-left: auto; }
-.app.frame-custom .top { padding-right: 0; }
-.app.frame-custom .top-right { margin-right: 8px; }
 /* 置顶开着时图钉用强调色、竖直；关着时灰色、斜放 */
 .icon.pin svg { transform: rotate(35deg); transition: transform .15s var(--ease); }
 .icon.pin.on { color: var(--accent); }
@@ -908,8 +914,8 @@ a.link:hover { text-decoration-thickness: 2px; }
   .panel { display: contents; }
   .side { display: none; width: auto; border-right: 0; }
   .app.drawer .side { position: fixed; inset: 0; z-index: 30; display: flex; }
-  /* 窄的桌面窗口没有系统标题栏：抽屉让出顶栏，窗口按钮和拖动区还在 */
-  .app.frame-custom.drawer .side { top: 48px; }
+  /* 窄的桌面窗口没有系统标题栏：抽屉让出标题栏，窗口按钮和拖动区还在 */
+  .app.frame-custom.drawer .side { top: var(--title-h); }
   .icon.drawer-open { display: grid; flex: none; margin-left: -12px; }
   .top { gap: 8px; padding-left: 16px; }
   .crumb { flex: 1; overflow: hidden; }

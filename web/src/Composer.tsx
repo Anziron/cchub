@@ -361,7 +361,7 @@ function greeting(hour: number, random = Math.random): string {
 }
 
 /** 应用图标（同 `desktop/icons/source.svg`）：两个 C 用强调色，圆点用正文色，深色主题下也看得见。 */
-function AppMark() {
+export function AppMark() {
   return (
     <svg className="app-mark" viewBox="0 0 512 512" aria-hidden="true">
       <g transform="translate(256 256) scale(1.26) translate(-264 -256)">

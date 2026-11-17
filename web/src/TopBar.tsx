@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { canPin, customFrame, setOnTop } from "./platform";
-import { WindowControls } from "./WindowControls";
+import { canPin, setOnTop } from "./platform";
 import { Dropdown, MenuItem, rowState, sessionStatus, SessionMenu, StateIcon } from "./Common";
 import { Icon } from "./Icon";
 import { backgroundTasks, collectChanges, latestPlan, runningTasks } from "./model";
@@ -81,7 +80,7 @@ export function TopBar({ store, session }: { store: Store; session?: Session }) 
   const { project } = describeCwd(session?.cwd);
   const status = session ? sessionStatus(session) : "";
   return (
-    <header className="top" data-tauri-drag-region>
+    <header className="top">
       <button className="icon drawer-open" aria-label="会话列表" onClick={() => store.openDrawer()}><Icon name="back" /></button>
       {session ? (
         <Dropdown
@@ -106,7 +105,6 @@ export function TopBar({ store, session }: { store: Store; session?: Session }) 
         <PinButton />
         <PaneMenu store={store} session={session} />
       </div>
-      {customFrame() ? <WindowControls /> : null}
     </header>
   );
 }

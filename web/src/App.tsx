@@ -12,6 +12,7 @@ import { SessionsPane, SideFooter } from "./SessionList";
 import { GLOBAL_PANES, type Session, type Store } from "./store";
 import { ThreadView } from "./Thread";
 import { TopBar } from "./TopBar";
+import { TitleBar } from "./WindowControls";
 
 function useAppearance() {
   const [look, setLook] = useState<Appearance>(() => loadAppearance(localStorage, matchMedia("(prefers-color-scheme: dark)").matches));
@@ -187,6 +188,7 @@ export function App({ store }: { store: Store }) {
   else if (store.sideCollapsed) classes.push("collapsed");
   return (
     <div className={classes.join(" ")} data-tauri-drag-region>
+      {customFrame() ? <TitleBar /> : null}
       <Rail store={store} views={VIEWS} floating={floating} look={look} onLook={setLook} />
       <div className="panel">
         <aside className="side">
