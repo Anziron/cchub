@@ -148,6 +148,8 @@ let emit: (event: UiEvent) => void = () => {};
  * 需要操作界面状态的场景。`?scene=queue`：运行中排了两条消息、拖入两个文件（一个在项目外）、输入框里一段长文字。
  * `?draft=long`：只放长文字，检查滚动条和发送按钮的位置。
  */
+const DEVICE_CWDS = ["/mnt/laptop/d/demo-api", "/mnt/mac-mini/Users/dev/cchub", "/root/notes", "/mnt/laptop/d/demo-api", "/mnt/office-pc/e/billing", "/mnt/laptop/d/blog"];
+
 export function setupDemo(store: Store): void {
   const long = Array.from({ length: 14 }, (_, i) => `第 ${i + 1} 行：补充说明，输入框变高后滚动条和发送按钮的位置。`).join("\n");
   // 草稿要在输入框挂载前写好：无头浏览器的虚拟时钟到点就截图，之后的重画赶不上。
@@ -251,7 +253,8 @@ export const demoHub: Hub = {
       emit({
         type: "sessions",
         mem_available_mb: 412,
-        sessions: SESSIONS.map((s, i) => ({ id: s.id, title: s.title, cwd: "/mnt/laptop/d/demo-api", running: s.running, updated: now - i * 60, active: now - i * 60, archived: false })),
+        // ?scene=devices：会话分到几台设备和服务器上，看侧栏的设备分段
+        sessions: SESSIONS.map((s, i) => ({ id: s.id, title: s.title, cwd: scene === "devices" ? DEVICE_CWDS[i % DEVICE_CWDS.length] : "/mnt/laptop/d/demo-api", running: s.running, updated: now - i * 60, active: now - i * 60, archived: false })),
       });
     } else if (msg.type === "attach") {
       const session = SESSIONS.find((s) => s.id === msg.session);

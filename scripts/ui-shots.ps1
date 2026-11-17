@@ -16,6 +16,8 @@ $shots = @(
   @("tasks-1200", "/?s=rich&scene=tasks&theme=light&pane=tasks", "1200,800"),
   @("welcome", "/?theme=light&pane=", "1440,900"),
   # 新会话页内容窄：主区域要撑满面板，不能按内容缩（曾经右侧空出一大片）
+  @("devices-light", "/?s=rich&scene=devices&theme=light&pane=&frame=custom", "1200,800"),
+  @("devices-dark", "/?s=rich&scene=devices&theme=dark&pane=&frame=custom", "1200,800"),
   @("welcome-wide", "/?theme=dark&pane=&frame=custom", "1500,940"),
   @("approval", "/?s=approval&theme=light&pane=", "1200,800"),
   @("small", "/?s=rich&theme=light&pane=", "900,460"),

@@ -1,9 +1,34 @@
 // 侧边栏的分组、排序和相对时间。运行：node --test web/test/
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatAgo, groupProjects, recentSessions, SERVER_GROUP } from "../src/sidebar.ts";
+import { formatAgo, groupDevices, groupProjects, recentSessions, SERVER_GROUP } from "../src/sidebar.ts";
 
 const s = (id: string, cwd: string | undefined, updated: number) => ({ id, title: `t-${id}`, cwd, updated });
+
+test("按设备分段：段按最新会话排序，段内按项目分组，服务器本地目录和没有 cwd 的归“服务器”", () => {
+  const sections = groupDevices([
+    s("1", "/mnt/pc/d/app", 100),
+    s("2", "/mnt/mac/Users/me/web", 300),
+    s("3", "/root/notes", 200),
+    s("4", undefined, 50),
+    s("5", "/mnt/pc/d/lib", 150),
+  ]);
+  assert.deepEqual(sections.map((d) => d.device), ["mac", SERVER_GROUP, "pc"]);
+  assert.deepEqual(sections[2]!.projects.map((g) => g.project), ["lib", "app"]);
+  assert.deepEqual(sections[1]!.projects.map((g) => g.project), ["notes", SERVER_GROUP]);
+});
+
+test("设备分段里不同设备的同名项目不带后缀，同一设备的同名项目带上级目录", () => {
+  const sections = groupDevices([
+    s("1", "/mnt/pc/d/app", 300),
+    s("2", "/mnt/mac/app", 200),
+    s("3", "/mnt/pc/e/work/app", 100),
+  ]);
+  assert.deepEqual(sections.map((d) => [d.device, d.projects.map((g) => [g.project, g.device])]), [
+    ["pc", [["app", "d"], ["app", "e/work"]]],
+    ["mac", [["app", ""]]],
+  ]);
+});
 
 test("按完整 cwd 分组，组按最新会话排序，组内按时间倒序", () => {
   const groups = groupProjects([

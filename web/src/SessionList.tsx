@@ -3,7 +3,7 @@ import { pageVisible } from "./platform";
 import { askHint, Dropdown, MenuItem, Meter, quotaPercent, rowState, sessionStatus, SessionMenu, STATE_ORDER, StateIcon } from "./Common";
 import { Icon } from "./Icon";
 import { firstAsk, isWaiting } from "./model";
-import { DEVICE_STATE, deviceList, groupByDate, groupProjects, SERVER_GROUP } from "./sidebar";
+import { DEVICE_STATE, deviceList, groupByDate, groupDevices, SERVER_GROUP, type DeviceState } from "./sidebar";
 import { describeCwd, type Session, type Store } from "./store";
 
 type StatusFilter = "all" | "wait" | "running";
@@ -82,6 +82,39 @@ function Group({ store, id, label, sub, sessions, collapsed, toggle, withProject
       {hidden > 0 ? <button className="row more" onClick={() => setShowAll(true)}>显示更多（{hidden}）</button> : null}
       {showAll && !collapsed && sessions.length > VISIBLE_SESSIONS ? <button className="row more" onClick={() => setShowAll(false)}>收起</button> : null}
     </div>
+  );
+}
+
+/**
+ * 一台设备的分段：小标题（在线圆点、设备名、离线提示、可折叠）+ 这台设备的项目组。
+ * 折叠时标题右侧显示段里最要紧的状态，等你决定的不会被漏掉。
+ */
+function DeviceSection({ store, name, state, projects, collapsedKeys, toggle }: {
+  store: Store;
+  name: string;
+  state: DeviceState | "server";
+  projects: { id: string; label: string; sub?: string; sessions: Session[] }[];
+  collapsedKeys: string[];
+  toggle: (key: string) => void;
+}) {
+  const key = `device:${name}`;
+  const closed = collapsedKeys.includes(key);
+  const sessions = projects.flatMap((p) => p.sessions);
+  const urgent = closed ? STATE_ORDER.find((value) => value && sessions.some((s) => rowState(s) === value)) : undefined;
+  const note = state === "offline" ? "离线" : state === "warn" ? "目录读不到" : "";
+  return (
+    <section className={`dev-section${closed ? " closed" : ""}`}>
+      <button className={`dev-head ${state}`} aria-expanded={!closed} title={note ? `${name}：${note}` : name} onClick={() => toggle(key)}>
+        <i />
+        <span className="dev-head-name">{name}</span>
+        {note ? <small>{note}</small> : null}
+        {urgent ? <StateIcon state={urgent} /> : null}
+        <Icon name="chev" size={10} className="fold" />
+      </button>
+      {closed ? null : projects.map((g) => (
+        <Group key={g.id} store={store} id={g.id} label={g.label} sub={g.sub} sessions={g.sessions} collapsed={collapsedKeys.includes(g.id)} toggle={() => toggle(g.id)} />
+      ))}
+    </section>
   );
 }
 
@@ -173,8 +206,17 @@ export function SessionsPane({ store }: { store: Store }) {
   };
   const all = [...store.sessions.values()].filter((s) => !s.archived);
   const sessions = all.filter((s) => filter === "all" || (filter === "wait" ? isWaiting(s.thread) : s.running));
+  // 按设备分段，段内是项目组；只有一台设备（含只有服务器）时不显示设备小标题。
+  const sections = groupBy === "project"
+    ? groupDevices(sessions).map((d) => ({
+      device: d.device,
+      projects: d.projects.map((g) => ({ id: g.key, label: g.project, sub: g.device || undefined, sessions: g.sessions })),
+    }))
+    : [];
+  const showDevices = sections.length > 1;
+  const deviceStates = new Map(deviceList(store.devices, all).map((d) => [d.name, d.state]));
   const groups = groupBy === "project"
-    ? groupProjects(sessions).map((g) => ({ id: g.key, label: g.project, sub: g.device || undefined, sessions: g.sessions }))
+    ? sections.flatMap((d) => d.projects)
     : groupByDate(sessions, Math.floor(Date.now() / 1000)).map((g) => ({ id: g.key, label: g.label, sub: undefined, sessions: g.sessions }));
   const filterLabel = filter === "wait" ? "等你决定" : filter === "running" ? "运行中" : groupBy === "project" ? "项目" : "按时间";
   return (
@@ -193,14 +235,24 @@ export function SessionsPane({ store }: { store: Store }) {
               <MenuItem label="运行中" hint={String(all.filter((s) => s.running).length)} checked={filter === "running"} onClick={() => { setFilter("running"); close(); }} />
               <div className="menu-sep" />
               <div className="menu-title">分组</div>
-              <MenuItem label="按项目" checked={groupBy === "project"} onClick={() => { setGroupBy("project"); close(); }} />
+              <MenuItem label="按设备和项目" checked={groupBy === "project"} onClick={() => { setGroupBy("project"); close(); }} />
               <MenuItem label="按时间" checked={groupBy === "date"} onClick={() => { setGroupBy("date"); close(); }} />
             </>
           )}
         </Dropdown>
       </div>
       <div className="side-scroll">
-        {groups.map((g) => (
+        {showDevices ? sections.map((d) => (
+          <DeviceSection
+            key={d.device}
+            store={store}
+            name={d.device}
+            state={d.device === SERVER_GROUP ? "server" : deviceStates.get(d.device) ?? "unknown"}
+            projects={d.projects}
+            collapsedKeys={collapsed}
+            toggle={toggle}
+          />
+        )) : groups.map((g) => (
           <Group
             key={g.id}
             store={store}

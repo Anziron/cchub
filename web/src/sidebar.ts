@@ -44,6 +44,37 @@ export function groupProjects<T extends RowSession>(sessions: T[]): ProjectGroup
   return groups.sort((a, b) => byTime(a.sessions[0]!, b.sessions[0]!));
 }
 
+export interface DeviceGroupData<T extends RowSession> {
+  /** 设备名；服务器本地目录和没有 cwd 的会话归 `SERVER_GROUP`。 */
+  device: string;
+  /** 段内的项目组。`device` 字段在这里用来区分同一设备上的同名项目（放上级目录），没冲突时为空。 */
+  projects: ProjectGroupData<T>[];
+}
+
+/** 按设备分段，段内按项目分组（规则同 groupProjects）；段按段内最新会话倒序。 */
+export function groupDevices<T extends RowSession>(sessions: T[]): DeviceGroupData<T>[] {
+  const map = new Map<string, T[]>();
+  for (const s of sessions) {
+    const device = s.cwd ? describeCwd(s.cwd).device : SERVER_GROUP;
+    map.set(device, [...(map.get(device) ?? []), s]);
+  }
+  const sections = [...map].map(([device, list]) => {
+    const projects = groupProjects(list);
+    const count = new Map<string, number>();
+    for (const g of projects) count.set(g.project, (count.get(g.project) ?? 0) + 1);
+    for (const g of projects) g.device = g.key && (count.get(g.project) ?? 0) > 1 ? parentDir(g.key) : "";
+    return { device, projects };
+  });
+  return sections.sort((a, b) => byTime(a.projects[0]!.sessions[0]!, b.projects[0]!.sessions[0]!));
+}
+
+/** 项目的上级目录（去掉 `/mnt/<设备>`），区分同一设备上的同名项目。 */
+function parentDir(cwd: string): string {
+  const parts = cwd.split("/").filter(Boolean);
+  const start = parts[0] === "mnt" ? 2 : 0;
+  return parts.slice(start, -1).join("/") || "/";
+}
+
 /** 所有会话按时间倒序，最多 limit 条，附项目名。 */
 export function recentSessions<T extends RowSession>(sessions: T[], limit = 10): { session: T; project: string }[] {
   return [...sessions].sort(byTime).slice(0, limit).map((session) => ({ session, project: session.cwd ? describeCwd(session.cwd).project : SERVER_GROUP }));

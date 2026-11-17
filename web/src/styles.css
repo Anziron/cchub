@@ -436,6 +436,22 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .side-head .dd-btn:hover, .side-head .open .dd-btn { background: var(--hover); color: var(--text-2); }
 .side-empty { margin: 8px 10px; color: var(--faint); font-size: 12px; line-height: 1.6; }
 .group { margin-bottom: 4px; }
+/* 设备分段：和“项目”那行一样的小字标题，不加缩进；圆点是在线状态（服务器不显示圆点） */
+.dev-section + .dev-section { margin-top: 8px; padding-top: 4px; border-top: 1px solid var(--line); }
+.dev-head { display: flex; align-items: center; gap: 7px; width: 100%; height: 28px; margin-top: 2px; padding: 0 10px; border-radius: var(--r-sm); color: var(--text-2); font-size: 12px; font-weight: 600; letter-spacing: .02em; text-align: left; }
+.dev-head:hover { color: var(--text); }
+.dev-head i { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--faint); opacity: .6; }
+.dev-head.online i { background: var(--ok); opacity: 1; }
+.dev-head.warn i { background: var(--warn); opacity: 1; }
+.dev-head.offline i { background: var(--del); opacity: 1; }
+.dev-head.server i { display: none; }
+.dev-head-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dev-head small { flex: none; color: var(--faint); font-size: 11px; font-weight: 400; }
+.dev-head.offline small { color: var(--del); }
+.dev-head.warn small { color: var(--warn); }
+.dev-head .fold { opacity: 0; transform: rotate(90deg); transition: transform .15s var(--ease), opacity .15s var(--ease); }
+.dev-head:hover .fold, .dev-section.closed .dev-head .fold { opacity: 1; }
+.dev-section.closed .dev-head .fold { transform: none; }
 /* 项目名：比会话标题小一点但看得清（用户反馈原来 12px 灰色太浅） */
 .group-head { display: flex; align-items: center; gap: 6px; width: 100%; height: 28px; margin-top: 6px; padding: 0 10px; border-radius: var(--r-sm); color: var(--text-2); font-size: 13px; font-weight: 500; text-align: left; }
 .group-head:hover { color: var(--text); }
