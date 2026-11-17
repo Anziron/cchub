@@ -3,7 +3,7 @@ import { Icon } from "./Icon";
 import { FONTS, SIZES, THEMES, type Appearance } from "./appearance";
 import { effortsFor, findModel, hubHost, hubUrl, runningTasks, type ModelOption, type SlashCommand } from "./model";
 import { backgroundStatus, isAndroid, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
-import { DEVICE_STATE, deviceList, formatAgo } from "./sidebar";
+import { deviceList, formatAgo } from "./sidebar";
 import { describeCwd, type Session, type Store } from "./store";
 
 /** 弹窗。Esc 只关弹窗，不能冒泡到窗口上变成中断任务。 */
@@ -101,6 +101,8 @@ export function WorkspaceDialog({ store }: { store: Store }) {
   const { device, path, parent, entries, error, loading } = store.browse;
   const [manual, setManual] = useState("");
   const recent = store.recentWorkspaces();
+  // 设备列表带在线状态和项目数（原来的设备弹窗并进这里）。
+  const states = new Map(deviceList(store.devices, [...store.sessions.values()].filter((s) => !s.archived)).map((d) => [d.name, d]));
   const close = () => store.closeWorkspace();
   const up = () => {
     if (parent) store.browseTo(device, parent);
@@ -133,24 +135,38 @@ export function WorkspaceDialog({ store }: { store: Store }) {
             <span title={path ?? device}>{device}{path ? ` · ${path}` : ""}</span>
           </div>
         ) : (
-          <h3>设备</h3>
+          <h3 className="picker-head">
+            设备
+            <button type="button" className="link-btn" disabled={store.devicesLoading} onClick={() => store.requestDevices()}>
+              {store.devicesLoading ? "正在检测…" : "重新检测"}
+            </button>
+          </h3>
         )}
+        {!device && store.devicesError ? <p className="help bad" role="alert">{store.devicesError}</p> : null}
         <div className="list">
           {loading ? <p className="empty">正在读取…</p> : null}
           {!loading && error ? <p className="empty bad">{error}</p> : null}
           {!loading && !error && !entries.length ? <p className="empty">{device ? "没有子文件夹" : "没有登记的设备"}</p> : null}
           {!loading && !error
-            ? entries.map((entry) => (
-                <button
-                  type="button"
-                  key={entry}
-                  className="pick"
-                  title={entry}
-                  onClick={() => (device ? store.browseTo(device, entry) : store.browseTo(entry, null))}
-                >
-                  <Icon name="folder" /><span>{device ? lastSegment(entry) : entry}</span><Icon name="chev" size={13} />
-                </button>
-              ))
+            ? entries.map((entry) => {
+                const info = device ? undefined : states.get(entry);
+                const state = info?.state ?? "unknown";
+                const note = state === "offline" ? "离线：确认已开机并连上 Tailscale" : state === "warn" ? "在线，但有目录读不到" : info?.projects.length ? `${info.projects.length} 个项目` : "";
+                return (
+                  <button
+                    type="button"
+                    key={entry}
+                    className={`pick${device ? "" : ` dev ${state}`}`}
+                    title={entry}
+                    onClick={() => (device ? store.browseTo(device, entry) : store.browseTo(entry, null))}
+                  >
+                    {device ? <Icon name="folder" /> : <i />}
+                    <span>{device ? lastSegment(entry) : entry}</span>
+                    {note ? <small>{note}</small> : null}
+                    <Icon name="chev" size={13} />
+                  </button>
+                );
+              })
             : null}
         </div>
       </section>
@@ -384,51 +400,6 @@ export function ConfirmDialog({ store, session }: { store: Store; session: Sessi
   );
 }
 
-const OS_LABEL: Record<string, string> = { windows: "Windows", macos: "macOS", mac: "macOS", darwin: "macOS", linux: "Linux" };
-
-/** 设备弹窗：在线状态、这台设备上用过的项目（可直接开新会话）、浏览目录挂载新项目。 */
-export function DeviceDialog({ store, name }: { store: Store; name: string }) {
-  const device = deviceList(store.devices, [...store.sessions.values()].filter((s) => !s.archived)).find((d) => d.name === name);
-  const close = () => store.closeDevice();
-  const state = device?.state ?? "unknown";
-  const os = device?.os ? OS_LABEL[device.os.toLowerCase()] ?? device.os : null;
-  const hint =
-    state === "offline" ? "设备不在线：确认它已开机并连上 Tailscale。这台设备上的会话读写文件会失败，发出的消息会排队。"
-    : state === "warn" ? "设备在线，但有项目目录读不到（挂载可能断了）。新会话启动前会自动重新挂载。"
-    : state === "unknown" ? "还没有拿到这台设备的状态。"
-    : null;
-  return (
-    <Modal title={name} onClose={close} className="device-modal">
-      <div className={`device-status dev ${state}`}>
-        <i />
-        <span>{DEVICE_STATE[state]}</span>
-        {os ? <small>· {os}</small> : null}
-        <button type="button" className="link-btn" disabled={store.devicesLoading} onClick={() => store.requestDevices()}>
-          {store.devicesLoading ? "正在检测…" : "重新检测"}
-        </button>
-      </div>
-      {hint ? <p className={`help${state === "offline" ? " bad" : ""}`}>{hint}</p> : null}
-      {store.devicesError ? <p className="help bad" role="alert">{store.devicesError}</p> : null}
-      <section className="picker">
-        <h3>项目</h3>
-        <div className="list short">
-          {device?.projects.length ? device.projects.map((p) => (
-            <button type="button" key={p.cwd} className="pick" title={`${p.cwd}\n在这个项目里开新会话`} onClick={() => store.newSessionIn(p.cwd)}>
-              <Icon name="folder" />
-              <span>{p.project}</span>
-              <small>{p.running ? `${p.running} 个运行中 · ` : ""}{p.sessions} 个会话</small>
-              <Icon name="plus" size={13} />
-            </button>
-          )) : <p className="empty">还没有在这台设备上开过会话。</p>}
-        </div>
-      </section>
-      <div className="actions end">
-        <button type="button" className="btn quiet" onClick={close}>关闭</button>
-        <button type="button" className="btn solid" disabled={state === "offline"} onClick={() => store.browseDevice(name)}>浏览目录…</button>
-      </div>
-    </Modal>
-  );
-}
 
 /** `/resume`：已关闭的会话，按标题或项目名搜索，选中后回到侧边栏并打开。 */
 export function ResumeDialog({ store }: { store: Store }) {

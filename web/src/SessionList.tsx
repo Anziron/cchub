@@ -1,8 +1,9 @@
-import { memo, useEffect, useState, type CSSProperties } from "react";
+import { Fragment, memo, useEffect, useState } from "react";
 import { pageVisible } from "./platform";
 import { askHint, Dropdown, MenuItem, Meter, quotaPercent, rowState, sessionStatus, SessionMenu, STATE_ORDER, StateIcon } from "./Common";
 import { Icon } from "./Icon";
 import { firstAsk, isWaiting } from "./model";
+import { deviceColorMap, deviceColorVars } from "./deviceColors";
 import { DEVICE_STATE, deviceList, deviceOf, groupByDate, groupDevices, SERVER_GROUP, type DeviceEntry } from "./sidebar";
 import { describeCwd, type Session, type Store } from "./store";
 
@@ -57,13 +58,11 @@ const SessionRowView = memo(function SessionRowView({ store, session, project }:
   );
 }, (a, b) => a.digest === b.digest && a.project === b.project && a.session === b.session && a.store === b.store);
 
-function Group({ store, id, label, sub, device, sessions, collapsed, toggle, withProject }: {
+function Group({ store, id, label, sub, sessions, collapsed, toggle, withProject }: {
   store: Store;
   id: string;
   label: string;
   sub?: string;
-  /** “全部设备”时在项目名右侧显示的设备标签。 */
-  device?: string;
   sessions: Session[];
   collapsed: boolean;
   toggle: () => void;
@@ -78,7 +77,6 @@ function Group({ store, id, label, sub, device, sessions, collapsed, toggle, wit
     <div className={`group${collapsed ? " closed" : ""}`}>
       <button className="group-head" title={id || undefined} aria-expanded={!collapsed} onClick={toggle}>
         <span className="name">{label}{sub ? <em>{sub}</em> : null}</span>
-        {device ? <DeviceChip name={device} /> : null}
         {state ? <StateIcon state={state} /> : null}
         <Icon name="chev" size={10} className="fold" />
       </button>
@@ -128,23 +126,23 @@ function Status({ store }: { store: Store }) {
   );
 }
 
-/** 设备标签的颜色：按名字固定一个色相，深浅主题都用同一个色相（背景按主题混合）。 */
-function deviceHue(name: string): number {
-  let h = 0;
-  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
-  return h;
-}
-
-export function DeviceChip({ name }: { name: string }) {
-  return <span className="dev-chip" style={{ "--chip-h": deviceHue(name) } as CSSProperties}>{name}</span>;
+/**
+ * “全部设备”时设备之间的分隔线：设备名在中间、左右两条线，名字和线都用这台设备的颜色（外观里可自选）；离线时名字后带红色“离线”。
+ * 只是分隔，不是一层可折叠的标题（三层结构用户试过觉得别扭）。
+ */
+function DeviceRule({ name, color, state }: { name: string; color: number; state?: string }) {
+  return (
+    <div className="dev-rule" style={deviceColorVars(color)} role="separator" aria-label={name}>
+      <span>{name}{state === "offline" ? <small>离线</small> : state === "warn" ? <small className="warn">目录读不到</small> : null}</span>
+    </div>
+  );
 }
 
 /**
  * 会话栏顶部的设备切换器（参考 SaaS 的工作区切换器）：选“全部设备”或某一台，列表只显示它的项目。
- * 菜单里是每台设备的在线状态和项目数，替代原来底部的设备列表；选中某台时可以打开它的项目窗口。
+ * 菜单里是每台设备的在线状态和项目数，替代原来底部的设备列表。浏览、挂载设备目录在新建会话的“选择工作区”里。
  */
-function DeviceSwitcher({ store, devices, current, onChange }: {
-  store: Store;
+function DeviceSwitcher({ devices, current, onChange }: {
   devices: DeviceEntry[];
   current: string | null;
   onChange: (device: string | null) => void;
@@ -174,12 +172,6 @@ function DeviceSwitcher({ store, devices, current, onChange }: {
             />
           ))}
           <MenuItem label={<span className="dev-opt online"><i />{SERVER_GROUP}</span>} checked={current === SERVER_GROUP} onClick={() => { onChange(SERVER_GROUP); close(); }} />
-          {active ? (
-            <>
-              <div className="menu-sep" />
-              <MenuItem icon="folder" label={`${active.name} 的项目和连接…`} onClick={() => { close(); store.openDevice(active.name); }} />
-            </>
-          ) : null}
         </>
       )}
     </Dropdown>
@@ -230,9 +222,11 @@ export function SessionsPane({ store }: { store: Store }) {
   const all = [...store.sessions.values()].filter((s) => !s.archived);
   const devices = deviceList(store.devices, all);
   const sessions = all.filter((s) => (filter === "all" || (filter === "wait" ? isWaiting(s.thread) : s.running)) && (!device || deviceOf(s.cwd) === device));
-  // 只有两层：项目 → 会话。“全部设备”时同一设备的项目排在一起，项目名右侧带设备标签；选了某台设备就不带。
+  // 只有两层：项目 → 会话。“全部设备”时同一设备的项目排在一起，设备之间一条带设备名的彩色分隔线；选了某台设备就不画。
   const sections = groupBy === "project" ? groupDevices(sessions) : [];
   const tagged = !device && sections.length > 1;
+  const states = new Map<string, string>(devices.map((d) => [d.name, d.state]));
+  const colors = deviceColorMap(store);
   const groups = groupBy === "project"
     ? sections.flatMap((d) => d.projects.map((g) => ({ id: g.key, label: g.project, sub: g.device || undefined, device: tagged ? d.device : undefined, sessions: g.sessions })))
     : groupByDate(sessions, Math.floor(Date.now() / 1000)).map((g) => ({ id: g.key, label: g.label, sub: undefined, device: undefined, sessions: g.sessions }));
@@ -243,7 +237,7 @@ export function SessionsPane({ store }: { store: Store }) {
         <Icon name="plus" size={14} /><span className="name">新建会话</span>
       </button>
       <div className="side-head">
-        <DeviceSwitcher store={store} devices={devices} current={device} onChange={setDevice} />
+        <DeviceSwitcher devices={devices} current={device} onChange={setDevice} />
         {filterLabel ? <button type="button" className="side-filter-tag" title="显示全部会话" onClick={() => setFilter("all")}>{filterLabel}<Icon name="close" size={10} /></button> : null}
         <Dropdown className="side-filter" label="过滤和分组" align="left" button={<Icon name="gear" size={14} />}>
           {(close) => (
@@ -261,19 +255,20 @@ export function SessionsPane({ store }: { store: Store }) {
         </Dropdown>
       </div>
       <div className="side-scroll">
-        {groups.map((g) => (
-          <Group
-            key={g.id}
-            store={store}
-            id={g.id}
-            label={g.label}
-            sub={g.sub}
-            device={g.device}
-            sessions={g.sessions}
-            collapsed={collapsed.includes(g.id)}
-            toggle={() => toggle(g.id)}
-            withProject={groupBy === "date"}
-          />
+        {groups.map((g, i) => (
+          <Fragment key={g.id}>
+            {g.device && g.device !== groups[i - 1]?.device ? <DeviceRule name={g.device} color={colors.get(g.device) ?? 0} state={states.get(g.device)} /> : null}
+            <Group
+              store={store}
+              id={g.id}
+              label={g.label}
+              sub={g.sub}
+              sessions={g.sessions}
+              collapsed={collapsed.includes(g.id)}
+              toggle={() => toggle(g.id)}
+              withProject={groupBy === "date"}
+            />
+          </Fragment>
         ))}
         {!groups.length && all.length ? (
           <p className="side-empty">

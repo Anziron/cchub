@@ -1,7 +1,15 @@
 // 侧边栏的分组、排序和相对时间。运行：node --test web/test/
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatAgo, groupDevices, groupProjects, recentSessions, SERVER_GROUP } from "../src/sidebar.ts";
+import { assignDeviceColors, DEVICE_COLORS, formatAgo, groupDevices, groupProjects, recentSessions, SERVER_GROUP } from "../src/sidebar.ts";
+
+test("设备颜色：按名字排序依次分配，前五台不撞色，重复的名字只算一次", () => {
+  const colors = assignDeviceColors(["mac", "pc", "laptop", "mac"]);
+  assert.deepEqual([...colors].sort(), [["laptop", 0], ["mac", 1], ["pc", 2]]);
+  const six = assignDeviceColors(["a", "b", "c", "d", "e", "f"]);
+  assert.equal(new Set([...six.values()].slice(0, DEVICE_COLORS.length)).size, DEVICE_COLORS.length);
+  assert.equal(six.get("f"), 0);
+});
 
 const s = (id: string, cwd: string | undefined, updated: number) => ({ id, title: `t-${id}`, cwd, updated });
 

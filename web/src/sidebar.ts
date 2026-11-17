@@ -44,6 +44,18 @@ export function groupProjects<T extends RowSession>(sessions: T[]): ProjectGroup
   return groups.sort((a, b) => byTime(a.sessions[0]!, b.sessions[0]!));
 }
 
+/**
+ * 设备颜色：蓝、绿、琥珀、玫瑰、灰，两两一眼能分开（用户认为青绿和草绿、天蓝和灰蓝是同一种，也不要紫色这类重颜色）。
+ * 每项是 [色相, 饱和度%]，界面按主题取明度（CSS 的 light-dark）。
+ */
+export const DEVICE_COLORS: [number, number][] = [[212, 45], [140, 38], [38, 55], [348, 42], [0, 0]];
+
+/** 每台设备的颜色编号：按名字排序依次分配，前五台一定不撞色，之后从头轮。 */
+export function assignDeviceColors(names: string[]): Map<string, number> {
+  const sorted = [...new Set(names)].sort((a, b) => a.localeCompare(b));
+  return new Map(sorted.map((name, i) => [name, i % DEVICE_COLORS.length]));
+}
+
 /** 会话所在的设备；服务器本地目录和没有 cwd 的归 `SERVER_GROUP`。 */
 export const deviceOf = (cwd?: string) => (cwd ? describeCwd(cwd).device : SERVER_GROUP);
 

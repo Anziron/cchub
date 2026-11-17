@@ -161,8 +161,6 @@ export class Store {
   devices: DeviceInfo[] | null = null;
   devicesError: string | null = null;
   devicesLoading = false;
-  /** 打开设备弹窗的设备名。 */
-  deviceDialog: string | null = null;
   /** 草稿被界面以外的逻辑改写（排队消息放回输入框）时加一，输入框据此重读。 */
   draftRev = 0;
   version = 0;
@@ -628,7 +626,6 @@ export class Store {
   back(): boolean {
     if (this.stopping) this.cancelStop();
     else if (this.showResume) this.closeResume();
-    else if (this.deviceDialog) this.closeDevice();
     else if (this.pane) this.closePane();
     else if (this.showWorkspace) this.closeWorkspace();
     else if (this.showSettings && this.url) this.toggleSettings();
@@ -650,35 +647,12 @@ export class Store {
     this.changed();
   }
 
-  openDevice(name: string): void {
-    this.deviceDialog = name;
-    this.requestDevices();
-  }
-
-  closeDevice(): void {
-    this.deviceDialog = null;
-    this.changed();
-  }
-
-  /** 在设备上浏览目录选工作区：打开工作区弹窗并直接进入这台设备。 */
-  browseDevice(name: string): void {
-    this.deviceDialog = null;
-    this.showWorkspace = true;
-    this.mountError = null;
-    this.browseTo(name, null);
-  }
-
-  /** 在某个项目里开新会话：切到新会话页并选好工作区。 */
-  newSessionIn(cwd: string): void {
-    this.deviceDialog = null;
-    this.chooseWorkspace(cwd);
-    this.select(null);
-  }
-
+  /** 选择工作区弹窗：顺带刷新设备在线状态（设备列表里显示）。 */
   openWorkspace(): void {
     this.showWorkspace = true;
     this.mountError = null;
     this.browseTo(null, null);
+    this.requestDevices();
   }
 
   closeWorkspace(): void {

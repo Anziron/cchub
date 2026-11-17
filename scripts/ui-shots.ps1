@@ -18,6 +18,8 @@ $shots = @(
   # 新会话页内容窄：主区域要撑满面板，不能按内容缩（曾经右侧空出一大片）
   @("devices-light", "/?s=rich&scene=devices&theme=light&pane=&frame=custom", "1200,800"),
   @("devices-dark", "/?s=rich&scene=devices&theme=dark&pane=&frame=custom", "1200,800"),
+  @("devices-cool", "/?s=rich&scene=devices&theme=cool&pane=&frame=custom", "1200,800"),
+  @("workspace-devices", "/?scene=devices&theme=light&pane=&frame=custom&click=.chip-btn", "1200,800"),
   @("devices-menu", "/?s=rich&scene=devices&theme=light&pane=&frame=custom&click=.dev-switch%20.dd-btn", "1200,800"),
   @("devices-pick", "/?s=rich&scene=devices&theme=light&pane=&frame=custom&device=laptop", "1200,800"),
   @("welcome-wide", "/?theme=dark&pane=&frame=custom", "1500,940"),
