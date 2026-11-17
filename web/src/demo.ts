@@ -182,6 +182,11 @@ export const demoHub: Hub = {
     }
     if (msg.type === "browse") {
       if (!msg.device) emit({ type: "browse", device: null, path: null, parent: null, entries: ["laptop", "office-pc"], error: null });
+      // 服务器本机（hubd 自己列目录）：从 /root 开始。
+      else if (msg.device === "@server") {
+        const path = msg.path ?? "/root";
+        emit({ type: "browse", device: msg.device, path, parent: path === "/" ? null : path.replace(/\/[^/]*$/, "") || "/", entries: ["notes", "scripts", "work"].map((name) => `${path.replace(/\/$/, "")}/${name}`), error: null });
+      }
       else if (msg.device === "office-pc") emit({ type: "browse", device: msg.device, path: null, parent: null, entries: [], error: "读取目录失败：设备离线、没有权限或路径不存在" });
       else if (!msg.path) emit({ type: "browse", device: msg.device, path: null, parent: null, entries: ["C:\\", "D:\\"], error: null });
       else emit({ type: "browse", device: msg.device, path: msg.path, parent: msg.path.length > 3 ? "D:\\" : null, entries: ["cchub", "demo-api", "docs-site"].map((name) => `${msg.path!.replace(/\\$/, "")}\\${name}`), error: null });

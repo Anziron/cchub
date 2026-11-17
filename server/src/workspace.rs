@@ -42,7 +42,14 @@ fn run(program: &str, args: &[&str], timeout: Duration) -> Result<String, ()> {
     }
 }
 
+/// 浏览服务器本机目录用的设备名。`@` 不会出现在登记的设备名里，工作区命令也不认它：
+/// 服务器本机由 `hubd` 自己列目录，没装工作区命令也能选服务器上的项目。
+pub const SERVER_DEVICE: &str = "@server";
+
 pub fn browse(program: &str, device: Option<&str>, path: Option<&str>) -> Result<Listing, String> {
+    if device == Some(SERVER_DEVICE) {
+        return local_listing(path);
+    }
     let Some(device) = device else {
         let output = run(program, &["devices"], BROWSE_TIMEOUT)
             .map_err(|_| "读取设备列表失败".to_string())?;
@@ -171,6 +178,40 @@ fn conversation_tail(text: &str, partial_first: bool, max: usize) -> String {
     kept.join("\n")
 }
 
+/// 服务器本机的目录：不给路径从 `$HOME` 开始，只列不以 `.` 开头的子目录。
+/// `/mnt` 及以下是设备的 sshfs 挂载，断开时读目录会让线程卡在不可中断状态，所以不进、也不列出来，要从对应设备进入。
+/// 子目录用目录项自带的类型判断，不对每一项 `stat`（挂载点本身也不会被访问）。
+fn local_listing(path: Option<&str>) -> Result<Listing, String> {
+    let is_mounts = |p: &Path| p.starts_with("/mnt");
+    let start = match path {
+        Some(p) => std::path::PathBuf::from(p),
+        None => std::env::var_os("HOME").map_or_else(|| "/".into(), std::path::PathBuf::from),
+    };
+    let unreadable = || "读取目录失败：没有权限或路径不存在".to_string();
+    if is_mounts(&start) {
+        return Err("设备上的目录请从对应设备进入".to_string());
+    }
+    let dir = fs::canonicalize(&start).map_err(|_| unreadable())?;
+    if is_mounts(&dir) {
+        return Err("设备上的目录请从对应设备进入".to_string());
+    }
+    let mut entries: Vec<String> = fs::read_dir(&dir)
+        .map_err(|_| unreadable())?
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .map(|e| e.path())
+        .filter(|p| !is_mounts(p))
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    entries.sort();
+    Ok(Listing {
+        path: Some(dir.to_string_lossy().into_owned()),
+        parent: dir.parent().map(|p| p.to_string_lossy().into_owned()),
+        entries,
+    })
+}
+
 fn parse_listing(output: &str) -> Listing {
     let not_empty = |line: Option<&str>| line.filter(|l| !l.is_empty()).map(str::to_string);
     let mut lines = output.lines();
@@ -187,6 +228,46 @@ fn parse_listing(output: &str) -> Listing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_device_lists_local_directories_without_the_command() {
+        let root = std::env::temp_dir().join(format!("hubd-ls-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for dir in ["b", "a", ".hidden"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        fs::write(root.join("file.txt"), "x").unwrap();
+        let root_str = fs::canonicalize(&root)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        // 命令不存在也能列：服务器本机不经过工作区命令。
+        let listing = browse(
+            "/nonexistent/cc-workspace",
+            Some(SERVER_DEVICE),
+            Some(&root_str),
+        )
+        .unwrap();
+        assert_eq!(listing.path.as_deref(), Some(root_str.as_str()));
+        assert_eq!(
+            listing.parent.as_deref(),
+            Path::new(&root_str).parent().and_then(Path::to_str)
+        );
+        // 只列子目录，隐藏目录和文件不列，按名字排序。
+        assert_eq!(
+            listing.entries,
+            vec![format!("{root_str}/a"), format!("{root_str}/b")]
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn server_device_refuses_mounted_device_directories() {
+        // /mnt 下是 sshfs 挂载，断开时读目录会卡死线程，必须从对应设备进入。
+        assert!(browse("/nonexistent", Some(SERVER_DEVICE), Some("/mnt/pc/d")).is_err());
+        assert!(browse("/nonexistent", Some(SERVER_DEVICE), Some("/mnt")).is_err());
+        assert!(browse("/nonexistent", Some(SERVER_DEVICE), Some("/no/such/dir")).is_err());
+    }
 
     #[test]
     fn parses_current_parent_and_children() {

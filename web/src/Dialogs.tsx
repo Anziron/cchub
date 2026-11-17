@@ -3,7 +3,10 @@ import { Icon } from "./Icon";
 import { FONTS, SIZES, THEMES, type Appearance } from "./appearance";
 import { effortsFor, findModel, hubHost, hubUrl, runningTasks, type ModelOption, type SlashCommand } from "./model";
 import { backgroundStatus, isAndroid, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
-import { deviceList, formatAgo } from "./sidebar";
+import { deviceList, formatAgo, SERVER_GROUP } from "./sidebar";
+
+/** 浏览服务器本机目录时发给 hubd 的设备名（同 `server/src/workspace.rs` 的 `SERVER_DEVICE`）。 */
+const SERVER_DEVICE = "@server";
 import { describeCwd, type Session, type Store } from "./store";
 
 /** 弹窗。Esc 只关弹窗，不能冒泡到窗口上变成中断任务。 */
@@ -104,9 +107,10 @@ export function WorkspaceDialog({ store }: { store: Store }) {
   // 设备列表带在线状态和项目数（原来的设备弹窗并进这里）。
   const states = new Map(deviceList(store.devices, [...store.sessions.values()].filter((s) => !s.archived)).map((d) => [d.name, d]));
   const close = () => store.closeWorkspace();
+  const onServer = device === SERVER_DEVICE;
   const up = () => {
     if (parent) store.browseTo(device, parent);
-    else if (path) store.browseTo(device, null);
+    else if (path && !onServer) store.browseTo(device, null);
     else store.browseTo(null, null);
   };
   return (
@@ -132,7 +136,7 @@ export function WorkspaceDialog({ store }: { store: Store }) {
         {device ? (
           <div className="crumbs">
             <button type="button" className="icon" aria-label="上一级" onClick={up}><Icon name="back" /></button>
-            <span title={path ?? device}>{device}{path ? ` · ${path}` : ""}</span>
+            <span title={path ?? device}>{onServer ? SERVER_GROUP : device}{path ? ` · ${path}` : ""}</span>
           </div>
         ) : (
           <h3 className="picker-head">
@@ -144,9 +148,15 @@ export function WorkspaceDialog({ store }: { store: Store }) {
         )}
         {!device && store.devicesError ? <p className="help bad" role="alert">{store.devicesError}</p> : null}
         <div className="list">
+          {/* 服务器本机总在最前面：由 hubd 直接列目录，不依赖工作区命令，选中后不用挂载。 */}
+          {!device ? (
+            <button type="button" className="pick dev online" title="服务器上的目录" onClick={() => store.browseTo(SERVER_DEVICE, null)}>
+              <i /><span>{SERVER_GROUP}</span><small>本机目录</small><Icon name="chev" size={13} />
+            </button>
+          ) : null}
           {loading ? <p className="empty">正在读取…</p> : null}
           {!loading && error ? <p className="empty bad">{error}</p> : null}
-          {!loading && !error && !entries.length ? <p className="empty">{device ? "没有子文件夹" : "没有登记的设备"}</p> : null}
+          {!loading && !error && !entries.length && device ? <p className="empty">没有子文件夹</p> : null}
           {!loading && !error
             ? entries.map((entry) => {
                 const info = device ? undefined : states.get(entry);
@@ -181,7 +191,7 @@ export function WorkspaceDialog({ store }: { store: Store }) {
         ) : null}
         <button type="button" className="btn quiet" onClick={close}>取消</button>
         {device ? (
-          <button type="button" className="btn solid" disabled={!path || loading || store.mounting} onClick={() => path && store.mount(device, path)}>
+          <button type="button" className="btn solid" disabled={!path || loading || store.mounting} onClick={() => path && (onServer ? store.chooseWorkspace(path) : store.mount(device, path))}>
             {store.mounting ? "正在挂载…" : "选择这个文件夹"}
           </button>
         ) : null}
