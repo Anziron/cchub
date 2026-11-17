@@ -81,6 +81,9 @@ const PANES: PaneId[] = ["changes", "tasks", "todos", "plan", "info", "usage"];
 export const GLOBAL_PANES: PaneId[] = ["usage"];
 const PANE_KEY = "cchub.pane";
 const storedPane = (): PaneId | null => PANES.find((p) => p === localStorage.getItem(PANE_KEY)) ?? null;
+const VIEW_KEY = "cchub.view";
+const SIDE_COLLAPSED_KEY = "cchub.sideCollapsed";
+const HISTORY_MAX = 50;
 const VERBOSE_KEY = "cchub.verbose";
 
 function loadJson<T>(key: string, fallback: T): T {
@@ -130,6 +133,15 @@ export class Store {
   verbose = localStorage.getItem(VERBOSE_KEY) === "1";
   /** 窄屏下会话列表是否展开，手机上打开 App 先看列表。 */
   showDrawer = isNarrow();
+  /** 图标栏当前视图（会话栏和主区域的内容）。 */
+  view = localStorage.getItem(VIEW_KEY) ?? "home";
+  /** 会话栏手动收起（记在本地）。 */
+  sideCollapsed = localStorage.getItem(SIDE_COLLAPSED_KEY) === "1";
+  /** 消息区太窄、会话栏改成浮层时，浮层是否展开。 */
+  sideFloatOpen = false;
+  /** 后退 / 前进的历史：看过的会话 id，null 是新会话页。 */
+  private history: (string | null)[] = [null];
+  private historyAt = 0;
   /** 等确认结束的会话。 */
   stopping: Session | null = null;
   /** 确认结束后是关闭会话还是只结束进程。 */
@@ -514,16 +526,97 @@ export class Store {
     void this.send({ type: "attach", session: session.id, after: 0 });
   }
 
-  select(id: string | null): void {
+  /** `fromHistory`：后退 / 前进触发的切换，不再记进历史。 */
+  select(id: string | null, fromHistory = false): void {
     this.selected = id;
+    if (!fromHistory) this.remember(id);
     this.showSettings = false;
     this.showDrawer = false;
+    this.sideFloatOpen = false;
     const session = id ? this.sessions.get(id) : undefined;
     if (session) {
       this.attach(session);
       if (session.running) this.requestInit(session);
     }
     this.changed();
+  }
+
+  /** 记一个新位置：丢掉“前进”那一截，连续重复的不记。 */
+  private remember(id: string | null): void {
+    if (this.history[this.historyAt] === id) return;
+    this.history = this.history.slice(0, this.historyAt + 1);
+    this.history.push(id);
+    if (this.history.length > HISTORY_MAX) this.history.shift();
+    this.historyAt = this.history.length - 1;
+  }
+
+  /** 往 `step` 方向第一个还能去的位置（已关闭或不存在的会话跳过），没有就是 -1。 */
+  private historyTarget(step: -1 | 1): number {
+    for (let i = this.historyAt + step; i >= 0 && i < this.history.length; i += step) {
+      const id = this.history[i];
+      const session = id === null ? undefined : this.sessions.get(id);
+      if (id === null || (session && !session.archived)) return i;
+    }
+    return -1;
+  }
+
+  canGo(step: -1 | 1): boolean {
+    return this.historyTarget(step) >= 0;
+  }
+
+  /** 后退（-1）/ 前进（1），像浏览器一样在看过的会话之间来回。 */
+  go(step: -1 | 1): void {
+    const i = this.historyTarget(step);
+    if (i < 0) return;
+    this.historyAt = i;
+    this.select(this.history[i], true);
+  }
+
+  /** 图标栏的“首页”：回到首页视图并打开新会话页。 */
+  goHome(): void {
+    if (this.view !== "home") {
+      this.view = "home";
+      localStorage.setItem(VIEW_KEY, "home");
+    }
+    this.select(null);
+  }
+
+  /** 标题栏的“收起侧栏”：窄屏开关抽屉，否则和再点一次当前视图图标一样。 */
+  toggleSide(floating: boolean): void {
+    if (isNarrow()) {
+      this.showDrawer = !this.showDrawer;
+      this.changed();
+    } else {
+      this.clickView(this.view, floating);
+    }
+  }
+
+  /**
+   * 点图标栏的视图图标。当前视图再点一次：收起或展开会话栏（浮层模式下是开关浮层）；
+   * 换视图：切过去并展开。和窄屏抽屉（`showDrawer`）互不干扰。
+   */
+  clickView(id: string, floating: boolean): void {
+    if (id === this.view) {
+      if (floating) this.sideFloatOpen = !this.sideFloatOpen;
+      else this.setSideCollapsed(!this.sideCollapsed);
+    } else {
+      this.view = id;
+      localStorage.setItem(VIEW_KEY, id);
+      if (floating) this.sideFloatOpen = true;
+      else this.setSideCollapsed(false);
+    }
+    this.changed();
+  }
+
+  closeSideFloat(): void {
+    if (!this.sideFloatOpen) return;
+    this.sideFloatOpen = false;
+    this.changed();
+  }
+
+  private setSideCollapsed(value: boolean): void {
+    this.sideCollapsed = value;
+    localStorage.setItem(SIDE_COLLAPSED_KEY, value ? "1" : "0");
   }
 
   openDrawer(): void {
@@ -641,6 +734,7 @@ export class Store {
     session.running = true;
     session.attached = true;
     this.selected = id;
+    this.remember(id);
     this.showDrawer = false;
     // 第一条消息交给 hubd 在后台概括成标题（`/` 命令不概括），几秒后刷新列表拿到。
     const prompt = text.trimStart().startsWith("/") ? undefined : text;

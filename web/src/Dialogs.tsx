@@ -474,33 +474,29 @@ export function ResumeDialog({ store }: { store: Store }) {
   );
 }
 
-// 外观面板：配色、正文字体、字号，选中立即生效
-export function AppearanceMenu({ look, onChange }: { look: Appearance; onChange: (patch: Partial<Appearance>) => void }) {
-  const [open, setOpen] = useState(false);
+// 外观面板：配色、正文字体、字号，选中立即生效。从图标栏的齿轮菜单打开，点外面或按 Esc 关闭。
+export function AppearancePanel({ look, onChange, onClose }: { look: Appearance; onChange: (patch: Partial<Appearance>) => void; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!open) return;
-    const onDown = (event: MouseEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+    // 捕获阶段的 pointerdown：点到哪里都收起（同 Dropdown）
+    const onDown = (event: PointerEvent) => {
+      if (!ref.current?.contains(event.target as Node)) onClose();
     };
-    addEventListener("mousedown", onDown);
-    return () => removeEventListener("mousedown", onDown);
-  }, [open]);
+    addEventListener("pointerdown", onDown, true);
+    return () => removeEventListener("pointerdown", onDown, true);
+  }, [onClose]);
   return (
     <div
       className="look-wrap"
       ref={ref}
       onKeyDown={(event) => {
-        if (event.key === "Escape" && open) {
+        if (event.key === "Escape") {
           event.stopPropagation();
-          setOpen(false);
+          onClose();
         }
       }}
     >
-      <button type="button" className="icon" aria-label="外观" title="外观" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <Icon name="palette" />
-      </button>
-      {open ? (
+      {(
         <div className="look" role="dialog" aria-label="外观">
           <h4>配色</h4>
           <div className="opts" role="radiogroup" aria-label="配色">
@@ -531,7 +527,7 @@ export function AppearanceMenu({ look, onChange }: { look: Appearance; onChange:
             ))}
           </div>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }

@@ -140,7 +140,8 @@ export function Dropdown({ button, label, className, menuClass, align = "right",
   const fit = useMenuFit(ref, open, [], fixed, align, menuRef);
   useEffect(() => {
     if (!open) return;
-    const onDown = (event: MouseEvent) => {
+    // 捕获阶段的 pointerdown：点到哪里都收起，不怕别处拦截冒泡，也赶在标题栏、图标栏的窗口拖动之前。
+    const onDown = (event: PointerEvent) => {
       const target = event.target as Node;
       if (!ref.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     };
@@ -149,10 +150,10 @@ export function Dropdown({ button, label, className, menuClass, align = "right",
       const target = event.target;
       if (ref.current && target instanceof Node && target.contains(ref.current)) setOpen(false);
     };
-    addEventListener("mousedown", onDown);
+    addEventListener("pointerdown", onDown, true);
     if (fixed) addEventListener("scroll", onScroll, true);
     return () => {
-      removeEventListener("mousedown", onDown);
+      removeEventListener("pointerdown", onDown, true);
       removeEventListener("scroll", onScroll, true);
     };
   }, [open, fixed]);

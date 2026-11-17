@@ -14,9 +14,23 @@ localStorage.setItem("cchub.url", "ws://demo");
 if (params.get("theme")) localStorage.setItem("cchub.theme", params.get("theme")!);
 // `?pane=changes` 等：打开指定窗格，`?pane=` 关闭。
 if (params.has("pane")) localStorage.setItem("cchub.pane", params.get("pane")!);
+// `?sidew=<px>` `?panew=<px>`：会话栏、窗格宽度；`?collapsed=1|0`：会话栏收起（和拖动、收起后的存储一样，但每次加载不带参数就清掉）。
+// 截图用的无头浏览器会保留 localStorage，所以不写参数就回到默认，免得上一张的设置带到下一张。
+for (const [name, key] of [["sidew", "cchub.sideWidth"], ["panew", "cchub.paneWidth"], ["collapsed", "cchub.sideCollapsed"]]) {
+  const value = params.get(name);
+  if (value) localStorage.setItem(key, name === "collapsed" ? (value === "1" ? "1" : "0") : value);
+  else localStorage.removeItem(key);
+}
+// `?frame=custom`：浏览器里模拟无边框窗口，显示窗口按钮（见 platform.ts 的 customFrame）。
 // `?click=<选择器>`：元素出现后点一下，用来截图检查弹出菜单、撤回插入的消息等。
 // 不能按固定时间点：排队场景等元素要在连接之后才生成，曾经点早了什么也没点到（见下面 `?hover=` 的说明）。
-if (params.get("click")) whenPresent(params.get("click")!, (el) => (el as HTMLElement).click());
+// `?then=<选择器>`：点完 click 的元素后，再等这个元素出现并点一下（两级菜单）。
+if (params.get("click")) {
+  whenPresent(params.get("click")!, (el) => {
+    (el as HTMLElement).click();
+    if (params.get("then")) whenPresent(params.get("then")!, (next) => (next as HTMLElement).click());
+  });
+}
 // `?range=today|7d|30d|all`：使用情况窗格的范围（会记住，截图时每张都写明）。
 if (params.get("range")) localStorage.setItem("cchub.usageRange", params.get("range")!);
 // `?metric=tokens|requests`：使用情况柱状图显示模型 token 还是请求次数（会记住）。
@@ -58,7 +72,8 @@ function demoModels(messages: number, weights: Record<string, number>): Record<s
 const DEMO_PROJECT_MIX: Record<string, Record<string, number>> = {
   "/mnt/pc/d/demo-api": { "claude-opus-5-5": 0.7, "claude-sonnet-5-5": 0.2, "claude-haiku-5-5": 0.1, "claude-fable-5-2": 0.6 },
   "/mnt/mac-mini/Users/dev/cchub": { "claude-opus-5-5": 0.25, "claude-sonnet-5-5": 0.7, "claude-haiku-5-5": 0.3, "claude-fable-5-2": 0.4 },
-  "/root/notes": { "claude-opus-5-5": 0.05, "claude-sonnet-5-5": 0.1, "claude-haiku-5-5": 0.6, "claude-fable-5-2": 0 },
+  // 名字故意取长，检查“常用项目”拉宽窗格时名称能显示全
+  "/root/team-handbook-and-meeting-notes": { "claude-opus-5-5": 0.05, "claude-sonnet-5-5": 0.1, "claude-haiku-5-5": 0.6, "claude-fable-5-2": 0 },
 };
 function demoProjectTokens(models: Record<string, [number, number, number, number]>) {
   return Object.fromEntries(Object.entries(DEMO_PROJECT_MIX).map(([cwd, mix]) => [cwd, Object.fromEntries(
@@ -133,6 +148,8 @@ let emit: (event: UiEvent) => void = () => {};
  * 需要操作界面状态的场景。`?scene=queue`：运行中排了两条消息、拖入两个文件（一个在项目外）、输入框里一段长文字。
  * `?draft=long`：只放长文字，检查滚动条和发送按钮的位置。
  */
+const DEVICE_CWDS = ["/mnt/laptop/d/demo-api", "/mnt/mac-mini/Users/dev/cchub", "/root/notes", "/mnt/laptop/d/demo-api", "/mnt/office-pc/e/billing", "/mnt/laptop/d/blog"];
+
 export function setupDemo(store: Store): void {
   const long = Array.from({ length: 14 }, (_, i) => `第 ${i + 1} 行：补充说明，输入框变高后滚动条和发送按钮的位置。`).join("\n");
   // 草稿要在输入框挂载前写好：无头浏览器的虚拟时钟到点就截图，之后的重画赶不上。
@@ -191,7 +208,7 @@ export const demoHub: Hub = {
           messages, sessions: messages ? 1 + (seed % 4) : 0,
           input: messages * 3, output: messages * 900, cacheWrite: messages * 4000, cacheRead: messages * 60000,
           models,
-          projects: messages ? { "/mnt/pc/d/demo-api": Math.round(messages * 0.6), "/mnt/mac-mini/Users/dev/cchub": Math.round(messages * 0.3), "/root/notes": Math.round(messages * 0.1) } : {},
+          projects: messages ? { "/mnt/pc/d/demo-api": Math.round(messages * 0.6), "/mnt/mac-mini/Users/dev/cchub": Math.round(messages * 0.3), "/root/team-handbook-and-meeting-notes": Math.round(messages * 0.1) } : {},
           projectTokens: scene === "usage-old" ? undefined : demoProjectTokens(models),
           hours,
           hourTokens: isToday ? {
@@ -236,7 +253,8 @@ export const demoHub: Hub = {
       emit({
         type: "sessions",
         mem_available_mb: 412,
-        sessions: SESSIONS.map((s, i) => ({ id: s.id, title: s.title, cwd: "/mnt/laptop/d/demo-api", running: s.running, updated: now - i * 60, active: now - i * 60, archived: false })),
+        // ?scene=devices：会话分到几台设备和服务器上，看侧栏的设备分段
+        sessions: SESSIONS.map((s, i) => ({ id: s.id, title: s.title, cwd: scene === "devices" ? DEVICE_CWDS[i % DEVICE_CWDS.length] : "/mnt/laptop/d/demo-api", running: s.running, updated: now - i * 60, active: now - i * 60, archived: false })),
       });
     } else if (msg.type === "attach") {
       const session = SESSIONS.find((s) => s.id === msg.session);

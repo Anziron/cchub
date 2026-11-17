@@ -4,6 +4,7 @@ import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 import { backgroundTasks, collectChanges, findModel, groupChanges, isTranscript, latestPlan, parseTranscript, taskOutputPath, type ChangeGroup, type FileChange, type Task } from "./model";
 import { pageVisible } from "./platform";
+import { PANE_SIZING, Resizer } from "./Resizer";
 import { describeCwd, GLOBAL_PANES, type Session, type Store } from "./store";
 import { Diff, TranscriptView } from "./Thread";
 import { PANE_TITLES } from "./TopBar";
@@ -219,6 +220,7 @@ export function PaneView({ store, session }: { store: Store; session?: Session }
   if (!pane || (!session && !GLOBAL_PANES.includes(pane))) return null;
   return (
     <aside className="pane" aria-label={PANE_TITLES[pane]}>
+      <Resizer sizing={PANE_SIZING} target="parent" label="调整窗格宽度" />
       <header>
         <h3>{PANE_TITLES[pane]}</h3>
         <button type="button" className="icon" aria-label="关闭窗格" title="关闭窗格" onClick={() => store.closePane()}><Icon name="close" size={14} /></button>

@@ -17,6 +17,38 @@ export function setOnTop(on: boolean): Promise<void> {
   return canPin() ? invoke<void>("set_on_top", { on }) : Promise.resolve();
 }
 
+/**
+ * 桌面端去掉了系统标题栏，顶栏兼做标题栏并自带窗口按钮。
+ * 开发时浏览器里加 `?frame=custom` 可以模拟显示按钮（按钮不起作用）。
+ */
+export const customFrame = () => (isTauri() && !isAndroid) || (import.meta.env.DEV && new URLSearchParams(location.search).get("frame") === "custom");
+
+/** 窗口操作，只在桌面端有效；浏览器里的模拟什么也不做。 */
+export const windowOps = {
+  minimize: () => (isTauri() ? import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().minimize()) : Promise.resolve()),
+  toggleMaximize: () => (isTauri() ? import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().toggleMaximize()) : Promise.resolve()),
+  close: () => (isTauri() ? import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().close()) : Promise.resolve()),
+};
+
+/** 订阅最大化状态：先查一次，窗口尺寸变化时再查。返回取消订阅的函数。 */
+export function watchMaximized(onChange: (maximized: boolean) => void): () => void {
+  if (!isTauri()) return () => {};
+  let unlisten: (() => void) | undefined;
+  let gone = false;
+  void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
+    const win = getCurrentWindow();
+    const sync = () => void win.isMaximized().then((m) => { if (!gone) onChange(m); });
+    sync();
+    const fn = await win.onResized(sync);
+    if (gone) fn();
+    else unlisten = fn;
+  });
+  return () => {
+    gone = true;
+    unlisten?.();
+  };
+}
+
 /** 触屏上回车换行、不自动弹键盘。 */
 export const isTouch = matchMedia("(pointer: coarse)").matches;
 export const isAndroid = /Android/i.test(navigator.userAgent);
