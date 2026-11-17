@@ -167,15 +167,27 @@ export function App({ store }: { store: Store }) {
   // Ctrl+B 收起 / 展开会话栏，和再点一次当前视图图标一样；浮层展开时 Esc 收回。窄屏抽屉不受影响。
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "b" && !isNarrow()) {
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "b") {
         event.preventDefault();
-        store.clickView(store.view, floating);
+        store.toggleSide(floating);
+      } else if (event.altKey && !event.ctrlKey && !event.metaKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        // Alt+← / Alt+→ 后退 / 前进，和浏览器一样
+        event.preventDefault();
+        store.go(event.key === "ArrowLeft" ? -1 : 1);
       } else if (event.key === "Escape" && floating && store.sideFloatOpen) {
         store.closeSideFloat();
       }
     };
+    // 鼠标侧键（第 4、5 键）后退 / 前进
+    const onMouse = (event: MouseEvent) => {
+      if (event.button === 3 || event.button === 4) {
+        event.preventDefault();
+        store.go(event.button === 3 ? -1 : 1);
+      }
+    };
     addEventListener("keydown", onKey);
-    return () => removeEventListener("keydown", onKey);
+    addEventListener("mouseup", onMouse);
+    return () => { removeEventListener("keydown", onKey); removeEventListener("mouseup", onMouse); };
   }, [store, floating]);
 
   const view = VIEWS.find((v) => v.id === store.view) ?? VIEWS[0];
@@ -188,7 +200,7 @@ export function App({ store }: { store: Store }) {
   else if (store.sideCollapsed) classes.push("collapsed");
   return (
     <div className={classes.join(" ")} data-tauri-drag-region>
-      {customFrame() ? <TitleBar /> : null}
+      {customFrame() ? <TitleBar store={store} floating={floating} /> : null}
       <Rail store={store} views={VIEWS} floating={floating} look={look} onLook={setLook} />
       <div className="panel">
         <aside className="side">
