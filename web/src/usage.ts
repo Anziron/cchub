@@ -140,36 +140,6 @@ export function tokenParts(days: UsageDay[]): TokenParts {
 }
 
 /**
- * 上期四项，用来显示涨跌。7 天、30 天取紧挨着的前一段同样长的日子；“全部”没有上期；上期没有数据返回 null。
- * “今天”和昨天的同一时刻比：今天还没过完，和整天的昨天比上午总是大跌。统计只有每小时的 token 合计、
- * 没有分项，所以按“昨天到此刻的 token 占全天的比例”缩放昨天的四项（旧版统计命令按每小时回复数算比例）。
- */
-export function previousParts(days: UsageDay[], range: UsageRange, today: string, now: Date): TokenParts | null {
-  if (range === "all") return null;
-  if (range === "today") return yesterdaySoFar(days.find((d) => d.date === addDays(today, -1)), now);
-  const n = RANGE_DAYS[range];
-  const to = addDays(today, -n);
-  const from = addDays(to, 1 - n);
-  const list = days.filter((d) => d.date >= from && d.date <= to && dayTokens(d) > 0);
-  return list.length ? tokenParts(list) : null;
-}
-
-/** 昨天截至 `now` 这个钟点的四项（按比例估算）；昨天没数据、或这个钟点之前还没用过时返回 null。 */
-function yesterdaySoFar(day: UsageDay | undefined, now: Date): TokenParts | null {
-  if (!day || dayTokens(day) <= 0) return null;
-  const perHour = day.hourTokens
-    ? Array.from({ length: 24 }, (_, h) => Object.values(day.hourTokens!).reduce((sum, hours) => sum + (hours[h] ?? 0), 0))
-    : day.hours;
-  const total = perHour.reduce((a, b) => a + b, 0);
-  const hour = now.getHours();
-  const sofar = perHour.slice(0, hour).reduce((a, b) => a + b, 0) + (perHour[hour] ?? 0) * (now.getMinutes() / 60);
-  if (!total || !sofar) return null;
-  const ratio = Math.min(1, sofar / total);
-  const scale = (n: number) => Math.round(n * ratio);
-  return { input: scale(day.input), output: scale(day.output), cacheWrite: scale(day.cacheWrite), cacheRead: scale(day.cacheRead) };
-}
-
-/**
  * 额度节奏。`elapsed`：窗口时间过去的比例（0～1）；`runsOut`：照窗口开始以来的平均速度，
  * 会在重置前用完时的时刻（秒），用不完为 null。窗口刚开始（时间过去不到 5%）不预测；窗口已过期返回 null。
  */

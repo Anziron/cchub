@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { formatTokens, quotaPercent, resetText, resetWhen } from "./Common";
 import { Icon } from "./Icon";
 import type { Store } from "./store";
-import { addDays, dailySeries, heatmap, hourlySeries, localDate, modelLabel, OTHER, previousParts, quotaPace, summarize, type Bar, type TokenParts, type UsageDay, type UsageMetric, type UsageRange, type UsageSummary } from "./usage";
+import { addDays, dailySeries, heatmap, hourlySeries, localDate, modelLabel, OTHER, quotaPace, summarize, type Bar, type TokenParts, type UsageDay, type UsageMetric, type UsageRange, type UsageSummary } from "./usage";
 
 const RANGES: [UsageRange, string][] = [["today", "今天"], ["7d", "7 天"], ["30d", "30 天"], ["all", "全部"]];
 const RANGE_KEY = "cchub.usageRange";
@@ -71,15 +71,6 @@ function runsOutText(at: number, now: number): string {
   return `${days === 1 ? "明天" : WEEKDAY_NAMES[date.getDay()]} ${date.getHours()} 点`;
 }
 
-/** 和上期比的涨跌：`+23%`、`−5%`，变化不到 1% 是“持平”。不用箭头：小字号下 `↑` 像数字 1。涨红跌绿（用量涨了是提醒）。 */
-function Delta({ now, before, title }: { now: number; before?: number; title: string }) {
-  if (!before) return null;
-  const change = (now - before) / before;
-  const size = Math.round(Math.abs(change) * 100);
-  const text = size < 1 ? "持平" : `${change > 0 ? "+" : "−"}${size}%`;
-  const tone = size < 1 ? "" : change > 0 ? " up" : " down";
-  return <em className={`delta${tone}`} title={title}>{text}</em>;
-}
 
 /** 0.934 → `93%`，小于 10% 留一位小数。 */
 const percent = (n: number) => `${n >= 0.995 ? 100 : (n * 100).toFixed(n < 0.1 ? 1 : 0)}%`;
@@ -369,8 +360,6 @@ export function UsagePane({ store }: { store: Store }) {
   const now = new Date();
   const today = localDate(now);
   const summary = stats ? summarize(stats.days, range, today) : null;
-  const previous = stats ? previousParts(stats.days, range, today, now) : null;
-  const previousLabel = range === "today" ? "昨天此时" : `前 ${range === "7d" ? 7 : 30} 天`;
   const [view, setViewState] = useState<ModelView>(() => (localStorage.getItem(VIEW_KEY) === "cost" ? "cost" : "tokens"));
   const setView = (value: ModelView) => {
     setViewState(value);
@@ -405,7 +394,7 @@ export function UsagePane({ store }: { store: Store }) {
             {PARTS.map(([key, label]) => (
               <div key={key}>
                 <b>{formatTokens(summary.parts[key])}</b>
-                <span>{label}<Delta now={summary.parts[key]} before={previous?.[key]} title={`比${previousLabel}（${formatTokens(previous?.[key] ?? 0)}）`} /></span>
+                <span>{label}</span>
               </div>
             ))}
           </div>

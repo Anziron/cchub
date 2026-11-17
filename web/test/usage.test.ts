@@ -1,7 +1,7 @@
 // 使用情况窗格的统计：解析、按范围截取、汇总、连续天数、排行、每日序列、热力图。运行：node --test web/test/
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addDays, dailySeries, dayTokens, heatmap, hourlySeries, modelCost, modelLabel, parseUsage, previousParts, quotaPace, REQUESTS, summarize, type UsageDay } from "../src/usage.ts";
+import { addDays, dailySeries, dayTokens, heatmap, hourlySeries, modelCost, modelLabel, parseUsage, quotaPace, REQUESTS, summarize, type UsageDay } from "../src/usage.ts";
 
 test("费用：按 API 标价估算，缓存写入按 1 小时价（输入的 2 倍）；带日期的 ID 也认；不认识的模型返回 null", () => {
   const M = 1_000_000;
@@ -177,29 +177,6 @@ test("请求次数：每天一根柱子，值是回复数；全部范围按周�
   assert.deepEqual(week.keys, [REQUESTS]);
   assert.deepEqual(week.bars.map((b) => b.total), [0, 0, 0, 0, 4, 0, 6]);
   assert.equal(dailySeries(days, "all", "2026-11-11", "requests").bars[0].total, 10);
-});
-
-test("上期对比：7 天、30 天取紧挨着的前一段同样长的日子；全部、上期没有数据时返回 null", () => {
-  const big = { input: 2, output: 20, cacheWrite: 200, cacheRead: 2000 };
-  // 本期 11-05～11-11，上期 10-29～11-04；10-28 不算。
-  const days = [day("2026-10-28", 1, big), day("2026-10-29", 1), day("2026-11-04", 1, big), day("2026-11-05", 1)];
-  const now = new Date(2026, 10, 11, 12, 0);
-  assert.deepEqual(previousParts(days, "7d", "2026-11-11", now), { input: 3, output: 30, cacheWrite: 300, cacheRead: 3000 });
-  assert.equal(previousParts(days, "today", "2026-11-11", now), null, "没有昨天的数据");
-  assert.equal(previousParts(days, "all", "2026-11-11", now), null);
-  assert.equal(previousParts([day("2026-11-10", 1)], "7d", "2026-11-11", now), null);
-});
-
-test("今天和昨天此时比：按昨天到同一时刻的 token 占全天的比例缩放昨天的四项", () => {
-  // 昨天 2 点用了 300、10 点用了 700（token），四项合计 1100 里输入 100、输出 1000。
-  const hourTokens = { "claude-opus-5-5": Array.from({ length: 24 }, (_, h) => (h === 2 ? 300 : h === 10 ? 700 : 0)) };
-  const yesterday = day("2026-11-10", 4, { input: 100, output: 1000, cacheWrite: 0, cacheRead: 0, hourTokens });
-  // 10:30：2 点全部 + 10 点的一半 = 650 / 1000。
-  assert.deepEqual(previousParts([yesterday], "today", "2026-11-11", new Date(2026, 10, 11, 10, 30)), { input: 65, output: 650, cacheWrite: 0, cacheRead: 0 });
-  // 2:00 整：昨天这时还没用，比不了。
-  assert.equal(previousParts([yesterday], "today", "2026-11-11", new Date(2026, 10, 11, 2, 0)), null);
-  // 旧版统计命令没有 hourTokens：按每小时回复数算比例（默认 9 点有回复，10 点时已经全部用完）。
-  assert.deepEqual(previousParts([day("2026-11-10", 4)], "today", "2026-11-11", new Date(2026, 10, 11, 10, 0)), { input: 1, output: 10, cacheWrite: 100, cacheRead: 1000 });
 });
 
 test("额度节奏：时间进度按窗口长度算；照当前速度在重置前用完时给出用完的时刻", () => {
