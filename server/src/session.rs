@@ -4,12 +4,30 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use cchub_protocol::SessionInfo;
+use cchub_protocol::{AckError, Dedupe, SessionInfo};
+
+/// 把输入 FIFO 放大到这么大（Linux 普通用户的默认上限），能整行写入的输入更长。
+const PIPE_SIZE: libc::c_int = 1024 * 1024;
+/// 管道按页存放，读到一半和写到一半的页各占一整页：估算剩余空间时扣掉。
+const PIPE_SLACK: usize = 2 * 4096;
+/// 写不进去时多久再看一次。
+const WRITE_POLL: Duration = Duration::from_millis(20);
+
+/// 一条输入的结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Written {
+    /// 这次完整写进了 FIFO。
+    Fresh,
+    /// 同一个 `id` 之前已经写过，这次没有再写。
+    Duplicate,
+}
 
 /// 会话 ID 会拼进路径、unit 名和 shell 命令，只允许安全字符。
 pub fn valid_id(id: &str) -> bool {
@@ -23,6 +41,9 @@ pub struct Sessions {
     root: PathBuf,
     /// FIFO 的最后一个 fd 关闭时缓冲数据会丢，所以先打开并持有，再启动进程。
     inputs: Mutex<HashMap<String, Arc<Mutex<File>>>>,
+    /// 每个会话最近写入过的输入 `id`。进程结束（`release`）后仍保留，
+    /// 免得重连补发时把已经交给旧进程的输入再写一遍。
+    written: Mutex<HashMap<String, Dedupe>>,
 }
 
 impl Sessions {
@@ -30,6 +51,7 @@ impl Sessions {
         Self {
             root,
             inputs: Mutex::new(HashMap::new()),
+            written: Mutex::new(HashMap::new()),
         }
     }
 
@@ -130,6 +152,7 @@ impl Sessions {
             }
             if !is_running(session, &dir) && fs::remove_dir_all(&dir).is_ok() {
                 self.release(session);
+                self.lock_written().remove(session);
                 removed += 1;
             }
         }
@@ -156,18 +179,38 @@ impl Sessions {
         Ok(())
     }
 
-    /// 写一行到进程的 stdin。FIFO 写满时会阻塞，要放在阻塞线程池里调用。
-    pub fn write_line(&self, session: &str, line: &str) -> io::Result<()> {
+    /// 写一行到进程的 stdin，每个 `id` 最多写一次。进程不在不写；FIFO 剩余空间放得下整行才写，
+    /// 等 `timeout` 还放不下就放弃，所以不会留下半行。会等待，要放在阻塞线程池里调用。
+    pub fn write_input(
+        &self,
+        session: &str,
+        id: &str,
+        line: &str,
+        timeout: Duration,
+        is_running: impl FnOnce() -> bool,
+    ) -> Result<Written, AckError> {
         if line.contains('\n') {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "输入不能包含换行",
-            ));
+            return Err(AckError::Invalid);
         }
-        let input = self.input(session)?;
+        // 同一会话的写入都在这把锁里，查重、写入、记下 `id` 之间不会插进别的连接的同一条输入。
+        let input = self.input(session).map_err(|_| AckError::NotRunning)?;
         let mut file = input.lock().unwrap_or_else(|e| e.into_inner());
-        // 一次写完整行，超过 PIPE_BUF 的内容也不会和别的连接交错。
-        file.write_all(format!("{line}\n").as_bytes())
+        if self
+            .lock_written()
+            .get(session)
+            .is_some_and(|ids| ids.contains(id))
+        {
+            return Ok(Written::Duplicate);
+        }
+        if !is_running() {
+            return Err(AckError::NotRunning);
+        }
+        write_whole(&mut file, format!("{line}\n").as_bytes(), timeout)?;
+        self.lock_written()
+            .entry(session.to_string())
+            .or_default()
+            .insert(id);
+        Ok(Written::Fresh)
     }
 
     pub fn release(&self, session: &str) {
@@ -179,19 +222,69 @@ impl Sessions {
         if let Some(input) = inputs.get(session) {
             return Ok(input.clone());
         }
-        // 读写方式打开 FIFO 不会阻塞等对端。
+        // 读写方式打开 FIFO 不会阻塞等对端。非阻塞只影响 hubd 这一端，进程有自己打开的文件描述。
         let file = OpenOptions::new()
             .read(true)
             .write(true)
+            .custom_flags(libc::O_NONBLOCK)
             .open(self.dir(session).join("in"))?;
+        // SAFETY: fd 在 file 存活期间有效；失败只是管道保持默认大小。
+        unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETPIPE_SZ, PIPE_SIZE) };
         let input = Arc::new(Mutex::new(file));
         inputs.insert(session.to_string(), input.clone());
         Ok(input)
     }
 
+    fn lock_written(&self) -> std::sync::MutexGuard<'_, HashMap<String, Dedupe>> {
+        self.written.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn lock_inputs(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Mutex<File>>>> {
         self.inputs.lock().unwrap_or_else(|e| e.into_inner())
     }
+}
+
+/// 等管道剩余空间放得下整行再写。FIFO 只有 hubd 在写（同一把锁），空间只会被进程读走而变大，
+/// 所以开始写之后一定能写完。
+fn write_whole(file: &mut File, bytes: &[u8], timeout: Duration) -> Result<(), AckError> {
+    let fd = file.as_raw_fd();
+    // SAFETY: fd 有效；返回值小于 0 表示查询失败。
+    let capacity = unsafe { libc::fcntl(fd, libc::F_GETPIPE_SZ) };
+    let capacity = usize::try_from(capacity).unwrap_or(64 * 1024);
+    let usable = capacity.saturating_sub(PIPE_SLACK);
+    if bytes.len() > usable {
+        return Err(AckError::Invalid);
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        let mut queued: libc::c_int = 0;
+        // SAFETY: FIONREAD 往 queued 里写一个 int。
+        let queued = if unsafe { libc::ioctl(fd, libc::FIONREAD, &mut queued) } == 0 {
+            usize::try_from(queued).unwrap_or(usable)
+        } else {
+            usable
+        };
+        if usable.saturating_sub(queued) >= bytes.len() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(AckError::Stalled);
+        }
+        std::thread::sleep(WRITE_POLL);
+    }
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        match file.write(rest) {
+            Ok(count) => rest = &rest[count..],
+            // 估算偏乐观时可能先写进一部分：已经开了头，就等进程读走后写完，不留半行。
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                std::thread::sleep(WRITE_POLL)
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => return Err(AckError::Stalled),
+        }
+    }
+    Ok(())
 }
 
 fn mtime_secs(path: &Path) -> Option<u64> {
@@ -265,6 +358,89 @@ mod tests {
         sessions.touch_active("a").unwrap();
         let active = sessions.list(|_, _| false)[0].active.unwrap();
         assert!(active > old.duration_since(UNIX_EPOCH).unwrap().as_secs() + 3000);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// 读出 FIFO 里现有的全部内容（hubd 自己持有读写端，不会读到 EOF）。
+    fn drain(root: &Path, session: &str) -> Vec<u8> {
+        use std::io::Read;
+        let mut fifo = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(root.join(session).join("in"))
+            .unwrap();
+        let mut data = Vec::new();
+        let mut buffer = vec![0; 64 * 1024];
+        loop {
+            match fifo.read(&mut buffer) {
+                Ok(0) => return data,
+                Ok(count) => data.extend_from_slice(&buffer[..count]),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return data,
+                Err(error) => panic!("{error}"),
+            }
+        }
+    }
+
+    #[test]
+    fn write_input_writes_each_id_once_and_only_while_running() {
+        let root = std::env::temp_dir().join(format!("hubd-input-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let sessions = Sessions::new(root.clone());
+        sessions.prepare("a").unwrap();
+        let wait = Duration::from_millis(50);
+        let write = |id: &str, line: &str, running: bool| {
+            sessions.write_input("a", id, line, wait, || running)
+        };
+
+        assert_eq!(write("1", "x", false), Err(AckError::NotRunning));
+        assert_eq!(write("1", "x", true), Ok(Written::Fresh));
+        assert_eq!(write("1", "x", true), Ok(Written::Duplicate));
+        // 已经写过的重发，即使进程已结束也照常回执成功。
+        assert_eq!(write("1", "x", false), Ok(Written::Duplicate));
+        assert_eq!(write("2", "a\nb", true), Err(AckError::Invalid));
+        assert_eq!(drain(&root, "a"), b"x\n");
+        // 进程结束后输入句柄被释放，记录的 id 仍在。
+        sessions.release("a");
+        assert_eq!(write("1", "x", true), Ok(Written::Duplicate));
+        assert_eq!(write("3", "y", true), Ok(Written::Fresh));
+        assert_eq!(drain(&root, "a"), b"y\n");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn write_input_never_leaves_half_a_line() {
+        let root = std::env::temp_dir().join(format!("hubd-stall-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let sessions = Sessions::new(root.clone());
+        sessions.prepare("a").unwrap();
+        let wait = Duration::from_millis(50);
+        let line = "z".repeat(60 * 1024);
+        // 没人读：写到放不下为止，之后的都回 `stalled`。
+        let mut written = 0;
+        let stalled = loop {
+            match sessions.write_input("a", &written.to_string(), &line, wait, || true) {
+                Ok(_) => written += 1,
+                Err(error) => break error,
+            }
+            assert!(written < 1000, "管道没有上限");
+        };
+        assert_eq!(stalled, AckError::Stalled);
+        assert!(written > 0);
+        let huge = "z".repeat(4 * 1024 * 1024);
+        assert_eq!(
+            sessions.write_input("a", "huge", &huge, wait, || true),
+            Err(AckError::Invalid)
+        );
+
+        let data = drain(&root, "a");
+        assert_eq!(data.len(), written * (line.len() + 1), "只有完整的行");
+        assert!(data.ends_with(b"z\n"));
+        // 读走之后，被拒的那条可以用同一个 id 重新写入。
+        let id = written.to_string();
+        assert_eq!(
+            sessions.write_input("a", &id, &line, wait, || true),
+            Ok(Written::Fresh)
+        );
         fs::remove_dir_all(&root).unwrap();
     }
 

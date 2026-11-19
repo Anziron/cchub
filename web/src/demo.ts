@@ -229,6 +229,8 @@ export const demoHub: Hub = {
       emit({ type: "mounted", device: msg.device, path: msg.path, cwd: `/mnt/${msg.device}/${msg.path[0].toLowerCase()}/${msg.path.slice(3).replaceAll("\\", "/")}`, error: null });
     } else if (msg.type === "input") {
       const request = JSON.parse(msg.line);
+      // 和 hubd 一样对每条 input 回执，不然界面一直“发送中”。
+      queueMicrotask(() => emit({ type: "ack", session: msg.session, id: msg.id, error: null }));
       if (request.request?.subtype === "initialize") {
         const models = [
           { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)", description: "Opus 5.5 · Best for everyday, complex tasks", supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },

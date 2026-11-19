@@ -21,6 +21,12 @@ export interface Ask {
   plan?: string;
   /** 回复已发出，等 CLI 确认。 */
   sent: boolean;
+  /** 回执说进程已不在：这张卡片没人能收到回复了。 */
+  expired?: boolean;
+  /** 回复没写进进程（卡住 / 不合法），卡片已解锁，这里是原因。 */
+  error?: string;
+  /** 用户在输入框里打字回复的原文，卡片结束后显示“你回复：…”。 */
+  reply?: string;
 }
 
 export interface ToolItem {
@@ -39,8 +45,11 @@ export interface ToolItem {
   children: number;
 }
 
+/** 发送中 → hubd 回执成功（已送达，等 CLI 回传）→ 回传后没有状态；失败可重试。 */
+export type UserState = "sending" | "delivered" | "failed";
+
 export type Item =
-  | { kind: "user"; id: string; text: string; state?: "sending" | "failed" }
+  | { kind: "user"; id: string; text: string; state?: UserState; error?: string }
   | { kind: "text"; id: string; text: string; live: boolean }
   | { kind: "thinking"; id: string; text: string }
   | ToolItem
@@ -86,6 +95,8 @@ export interface Thread {
   interruptAt?: number;
   claudeSessionId?: string;
   model?: string;
+  /** 一轮进行中选的模型：这一轮剩下的回复仍是旧模型，下一个 `system/init` 才生效。 */
+  nextModel?: string;
   /** 推理强度。实时事件不带，只有 `.jsonl` 的 `assistant` 带；没有时表示跟随模型默认。 */
   effort?: string;
   cwd?: string;
@@ -244,7 +255,7 @@ function commandText(content: string): string | null {
 }
 
 /**
- * 本地命令的输出：`set_model` 时 CLI 回显 `<local-command-stdout>Set model to …`，
+ * 本地命令的输出，不是用户说的话。`set_model` 的回显 `Set model to …` 返回空串（吞掉，不显示）；
  * 会话记录里还带着 `/model` 命令本身。其他带命令名的仍按内置命令回传处理。
  */
 function localNotice(content: string): string | null {
@@ -252,8 +263,9 @@ function localNotice(content: string): string | null {
   if (output === undefined) return null;
   const command = commandText(content);
   if (command && !command.startsWith("/model")) return null;
-  const model = /^Set model to `?([^`]+?)`?$/.exec(output)?.[1];
-  return model ? `已切换模型：${model}` : output;
+  // 切换提示由 `set_model` 的成功回复生成（见 `onControlResponse`），回显不再显示。
+  if (/^Set model to /.test(output)) return "";
+  return output;
 }
 
 /** CLI 注入给模型的消息，不是用户说的话。 */
@@ -457,7 +469,7 @@ function onUser(thread: Thread, event: Json): void {
     }
     const notice = localNotice(content);
     if (notice !== null) {
-      thread.items.push({ kind: "notice", id: event.uuid ?? `n${thread.items.length}`, text: notice });
+      if (notice) thread.items.push({ kind: "notice", id: event.uuid ?? `n${thread.items.length}`, text: notice });
       return;
     }
     const command = commandText(content);
@@ -506,7 +518,8 @@ function onUser(thread: Thread, event: Json): void {
 function onAssistant(thread: Thread, event: Json): void {
   const message: Json = event.message ?? {};
   const parent: string | null = event.parent_tool_use_id ?? null;
-  if (message.model && !parent) thread.model = message.model;
+  // 一轮中切了模型：CLI 这一轮不回显新模型，回复里还是旧的，不能改回去。
+  if (message.model && !parent && !thread.nextModel) thread.model = message.model;
   if (typeof event.effort === "string" && !parent && !event.isSidechain) thread.effort = event.effort;
   const usage: Json | undefined = message.usage;
   if (usage && !parent) {
@@ -631,8 +644,69 @@ function onResult(thread: Thread, event: Json): void {
   }
 }
 
+function pushNotice(thread: Thread, id: string, text: string): void {
+  // 重放时事件会再来一遍，同一条提示只留一条。
+  if (findLast(thread, (item) => item.kind === "notice" && item.id === id) >= 0) return;
+  thread.items.push({ kind: "notice", id, text });
+}
+
+/** `claude-opus-5-5` → `Opus 5.5`，`claude-fable-5-2` → `Fable 5.2`；带日期后缀也认，认不出原样返回。 */
+export function modelDisplayName(id: string): string {
+  const match = /^claude-([a-z]+)-(\d+)-(\d+)(?:-\d{8})?$/.exec(id);
+  if (!match) return id;
+  return `${match[1][0].toUpperCase()}${match[1].slice(1)} ${match[2]}.${match[3]}`;
+}
+
+/**
+ * 所选模型（可能是别名 `opus`）和实际模型（完整 ID）是不是同一个。
+ * 列表里找不到所选的、判断不了时按相同处理：宁可不提示，也不误报。
+ */
+export function sameModel(models: ModelOption[], chosen: string, actual: string): boolean {
+  if (chosen === actual) return true;
+  const option = findModel(models, chosen);
+  if (!option) return true;
+  if (option.resolvedModel) return option.resolvedModel === actual;
+  // 还是内置别名列表（没有 resolvedModel）：完整 ID 里含别名就算同一个；“默认”判断不了。
+  return option.value === "default" || actual.includes(option.value);
+}
+
+/** 新一轮的 `system/init`：一轮中选的模型到这里才生效，没生效要说一声。 */
+function onInitModel(thread: Thread, actual: unknown, models: ModelOption[]): void {
+  const chosen = thread.nextModel;
+  thread.nextModel = undefined;
+  if (!chosen || typeof actual !== "string" || sameModel(models, chosen, actual)) return;
+  const name = findModel(models, chosen)?.displayName ?? chosen;
+  thread.items.push({ kind: "notice", id: `nm${thread.items.length}`, text: `所选模型 ${name} 没有生效，当前是 ${modelDisplayName(actual)}` });
+}
+
+/** 安全机制拦下回复后 CLI 自动换了模型。 */
+function onModelFallback(thread: Thread, event: Json): void {
+  const from = typeof event.original_model === "string" ? modelDisplayName(event.original_model) : "原模型";
+  const to = typeof event.fallback_model === "string" ? event.fallback_model : undefined;
+  const reason = [event.api_refusal_explanation, event.content].find((r) => typeof r === "string" && r);
+  const text = `${from} 的安全机制拦下了回复，本会话已自动换成 ${to ? modelDisplayName(to) : "备用模型"}${reason ? `。${reason}` : ""}`;
+  pushNotice(thread, event.uuid ?? `mf${thread.items.length}`, text);
+  if (to) thread.model = to;
+  thread.nextModel = undefined;
+}
+
+/** `set_model` 的回复生成切换提示，一次切换一条（按 request_id 去重，重放也只有一条）。 */
+function onControlResponse(thread: Thread, event: Json): void {
+  const response: Json = event.response ?? {};
+  const requestId: unknown = response.request_id;
+  if (typeof requestId !== "string" || !requestId.startsWith(SET_MODEL_PREFIX)) return;
+  const id = `model:${requestId}`;
+  if (response.subtype === "success") {
+    const model = response.response?.model;
+    const name = typeof model === "string" ? modelDisplayName(model) : "新模型";
+    pushNotice(thread, id, `已切换模型：${name}${thread.phase !== "idle" ? "（下一轮生效）" : ""}`);
+  } else if (response.subtype === "error") {
+    pushNotice(thread, id, `切换模型失败：${response.error ?? "未知错误"}`);
+  }
+}
+
 /** 应用一行事件。不认识的事件直接忽略，CLI 新增类型不影响显示。 */
-export function apply(thread: Thread, line: string): void {
+export function apply(thread: Thread, line: string, models: ModelOption[] = []): void {
   let event: Json;
   try {
     event = JSON.parse(line);
@@ -644,8 +718,11 @@ export function apply(thread: Thread, line: string): void {
       if (event.subtype === "init") {
         thread.claudeSessionId = event.session_id;
         thread.model = event.model;
+        onInitModel(thread, event.model, models);
         thread.cwd = event.cwd;
         if (typeof event.permissionMode === "string") thread.permissionMode = event.permissionMode;
+      } else if (event.subtype === "model_refusal_fallback") {
+        onModelFallback(thread, event);
       } else if (["task_started", "task_updated", "task_notification", "background_tasks_changed"].includes(event.subtype)) {
         onTaskEvent(thread, event);
       }
@@ -658,6 +735,9 @@ export function apply(thread: Thread, line: string): void {
       break;
     case "user":
       onUser(thread, event);
+      break;
+    case "control_response":
+      onControlResponse(thread, event);
       break;
     case "control_request":
       if (event.request?.subtype === "can_use_tool") addAsk(thread, event);
@@ -702,14 +782,45 @@ export function addSending(thread: Thread, id: string, text: string): void {
   }
 }
 
+/** 还没被 CLI 回传确认的消息（发送中或已送达）。 */
 export const isSending = (thread: Thread): boolean =>
-  thread.items.some((item) => item.kind === "user" && item.state === "sending");
+  thread.items.some((item) => item.kind === "user" && (item.state === "sending" || item.state === "delivered"));
+
+/** hubd 回执成功：写给进程了，等 CLI 回传。只有还在“发送中”的才变，回传早于回执时不倒退。 */
+export function markDelivered(thread: Thread, id: string): void {
+  thread.items = thread.items.map((item) => (item.kind === "user" && item.id === id && item.state === "sending" ? { ...item, state: "delivered" } : item));
+}
+
+/** 单条消息发送失败，`error` 是显示在旁边的原因。和 `failSending` 一样结束“思考中”。 */
+export function failUser(thread: Thread, id: string, error?: string): void {
+  const item = thread.items.find((i) => i.kind === "user" && i.id === id);
+  if (!item || item.kind !== "user" || item.state === undefined) return;
+  thread.items = thread.items.map((i) => (i === item ? { ...item, state: "failed", error } : i));
+  if (!isSending(thread)) {
+    thread.phase = "idle";
+    thread.turnStartedAt = undefined;
+    thread.interruptAt = undefined;
+  }
+}
+
+/** 找一条消息的当前状态；回传后没有状态，返回 undefined。 */
+export function userState(thread: Thread, id: string): UserState | undefined {
+  const item = thread.items.find((i) => i.kind === "user" && i.id === id);
+  return item?.kind === "user" ? item.state : undefined;
+}
+
+/** 输入没有写给进程的原因（hubd 回执的 `error`）。 */
+export function ackReason(error: "not_running" | "stalled" | "invalid"): string {
+  if (error === "not_running") return "进程已结束";
+  if (error === "stalled") return "Claude 没有读取输入，进程可能卡住了";
+  return "消息太长或格式不对，没有发出";
+}
 
 /** 服务器报错时，还没确认的消息都算没发出去。 */
 export function failSending(thread: Thread): void {
   if (!isSending(thread)) return;
   thread.items = thread.items.map((item) =>
-    item.kind === "user" && item.state === "sending" ? { ...item, state: "failed" } : item,
+    item.kind === "user" && (item.state === "sending" || item.state === "delivered") ? { ...item, state: "failed" } : item,
   );
   thread.phase = "idle";
   thread.turnStartedAt = undefined;
@@ -851,6 +962,7 @@ export const stopTaskLine = (taskId: string) => controlRequest({ subtype: "stop_
 export function cancelInsertLine(requestId: string, uuid: string): string {
   return JSON.stringify({ type: "control_request", request_id: requestId, request: { subtype: "cancel_async_message", message_uuid: uuid } });
 }
+const SET_MODEL_PREFIX = "cchub-set_model-";
 export const setModelLine = (model: string) => controlRequest({ subtype: "set_model", model });
 /** 设推理强度：合并进 CLI 的 flag 设置层，只在当前进程有效，`--resume` 后要重发。`null` 恢复默认。 */
 export const setEffortLine = (effort: string | null) => controlRequest({ subtype: "apply_flag_settings", settings: { effortLevel: effort } });

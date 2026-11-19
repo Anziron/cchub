@@ -19,12 +19,14 @@ export interface Queued {
   cancelling?: boolean;
   /** 插入的消息：撤回时 CLI 说已经交给模型了，等回传后移出。 */
   late?: boolean;
+  /** 插入的消息：hubd 回执成功，已写给 CLI。 */
+  delivered?: boolean;
 }
 
 /** 撤回请求有了回复：撤回成功就移出队列，来不及就标成 `late`。 */
 export function settleCancel(queue: Queued[], id: string, cancelled: boolean): Queued[] {
   if (cancelled) return queue.filter((q) => q.id !== id);
-  return queue.map((q) => (q.id === id ? { id: q.id, text: q.text, mode: q.mode, late: true } : q));
+  return queue.map((q) => (q.id === id ? { id: q.id, text: q.text, mode: q.mode, ...(q.delivered ? { delivered: true } : {}), late: true } : q));
 }
 
 /** 回传已到的插入消息移出队列；没有变化时返回原数组。 */

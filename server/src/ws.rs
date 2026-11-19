@@ -12,8 +12,8 @@ use axum::extract::{ConnectInfo, RawQuery, State, WebSocketUpgrade};
 use axum::http::{header::ORIGIN, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use cchub_protocol::{
-    is_user_message, wants_deflate, ClientMsg, DeviceInfo, Frame, FrameEncoder, LineSplitter,
-    Outbound, OutboundLimits, ServerMsg,
+    client_version, is_user_message, wants_deflate, ClientMsg, DeviceInfo, Frame, FrameEncoder,
+    LineSplitter, Outbound, OutboundLimits, ServerMsg, PROTOCOL_VERSION,
 };
 use futures_util::{SinkExt, StreamExt};
 use inotify::{Inotify, WatchMask};
@@ -23,8 +23,8 @@ use tokio::task::{spawn_blocking, JoinHandle};
 
 use crate::auth;
 use crate::device::{self, Probes, Subscription};
-use crate::host::ProcessHost;
-use crate::session::{valid_id, Sessions};
+use crate::host::{valid_model, Launch, ProcessHost};
+use crate::session::{valid_id, Sessions, Written};
 use crate::title;
 use crate::usage;
 use crate::workspace;
@@ -55,6 +55,8 @@ pub struct App {
     pub probes: Probes,
     /// `cc-workspace status` 的结果和取得时间。
     pub devices_cache: tokio::sync::Mutex<Option<(std::time::Instant, Vec<DeviceInfo>)>>,
+    /// 进程不读输入时写一行最多等这么久，见 `Sessions::write_input`。
+    pub input_timeout: Duration,
 }
 
 pub async fn upgrade(
@@ -78,13 +80,46 @@ pub async fn upgrade(
         return StatusCode::FORBIDDEN.into_response();
     }
     let deflate = wants_deflate(query.as_deref());
-    ws.on_upgrade(move |socket| serve(app, socket, deflate))
+    let version = client_version(query.as_deref());
+    ws.on_upgrade(move |socket| serve(app, socket, deflate, version))
+}
+
+/// 协议版本不一致时给对方看的话；一致时为空。旧客户端不带版本，只认得 `Error`。
+fn version_mismatch(client: Option<u32>) -> Option<&'static str> {
+    match client {
+        Some(version) if version == PROTOCOL_VERSION => None,
+        Some(version) if version > PROTOCOL_VERSION => {
+            Some("服务器版本过旧，请升级服务器上的 hubd")
+        }
+        _ => Some("客户端版本过旧，请升级"),
+    }
 }
 
 /// `deflate`：客户端要求压缩（见 `cchub_protocol::codec`）。这时把已经就绪的帧合成一批，
 /// 压缩后作为一条二进制消息发出；回放长会话时消息数和字节数都大幅减少。
-async fn serve(app: Arc<App>, socket: WebSocket, deflate: bool) {
+async fn serve(app: Arc<App>, socket: WebSocket, deflate: bool, version: Option<u32>) {
     let (mut sink, mut stream) = socket.split();
+    // 第一帧总是文本：版本不对就说明原因后断开；对了就发 `Hello`，客户端收到才开始收发。
+    let first = match version_mismatch(version) {
+        Some(message) => ServerMsg::Error {
+            message: message.to_string(),
+        },
+        None => ServerMsg::Hello {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            protocol_version: PROTOCOL_VERSION,
+        },
+    };
+    let first = Frame {
+        session: None,
+        msg: first,
+    };
+    let Ok(text) = serde_json::to_string(&first) else {
+        return;
+    };
+    if sink.send(Message::Text(text.into())).await.is_err() || version_mismatch(version).is_some() {
+        let _ = sink.close().await;
+        return;
+    }
     let (tx, mut rx) = mpsc::channel::<Frame>(CHANNEL_FRAMES);
 
     let writer = tokio::spawn(async move {
@@ -251,18 +286,9 @@ async fn session_worker(
     tx: mpsc::Sender<Frame>,
 ) {
     let mut reader = None;
-    let mut start_failed = false;
+    // 启动失败后进程不在，紧跟着的输入会被回执 `not_running`，不会留在 FIFO 里。
     while let Some(msg) = messages.recv().await {
-        // 启动失败时，客户端已经因为同一个错误把消息标成没发出去。这里写进 FIFO
-        // 会留到下次启动，和用户重发的消息一起被处理。
-        if start_failed && matches!(msg, ClientMsg::Input { .. }) {
-            continue;
-        }
-        let is_start = matches!(msg, ClientMsg::Start { .. });
         let result = handle(&app, &session, msg, &tx, &mut reader).await;
-        if is_start {
-            start_failed = result.is_err();
-        }
         if let Err(message) = result {
             if send_error(&tx, Some(session.clone()), message)
                 .await
@@ -286,13 +312,18 @@ async fn handle(
 ) -> Result<(), String> {
     let id = session.to_string();
     match msg {
-        ClientMsg::Start { resume, cwd, .. } => {
+        ClientMsg::Start {
+            resume, cwd, model, ..
+        } => {
             let cwd = cwd.map(PathBuf::from);
             if cwd.as_ref().is_some_and(|cwd| !cwd.is_absolute()) {
                 return Err("cwd 必须是绝对路径".to_string());
             }
             if resume.as_deref().is_some_and(|id| !valid_id(id)) {
                 return Err("resume ID 不合法".to_string());
+            }
+            if model.as_deref().is_some_and(|model| !valid_model(model)) {
+                return Err("模型名不合法".to_string());
             }
             blocking(app, move |app| {
                 let dir = app.sessions.dir(&id);
@@ -325,7 +356,11 @@ async fn handle(
                     }
                     None => dir.clone(),
                 };
-                app.host.start(&id, &dir, &workdir, resume.as_deref())
+                let launch = Launch {
+                    resume: resume.as_deref(),
+                    model: model.as_deref(),
+                };
+                app.host.start(&id, &dir, &workdir, launch)
             })
             .await?;
         }
@@ -335,16 +370,39 @@ async fn handle(
             }
             *reader = Some(tokio::spawn(follow(app.clone(), id, after, tx.clone())));
         }
-        ClientMsg::Input { line, .. } => {
-            blocking(app, move |app| {
-                app.sessions.write_line(&id, &line)?;
+        ClientMsg::Input {
+            id: input, line, ..
+        } => {
+            let host = app.clone();
+            let session = id.clone();
+            let written = spawn_blocking(move || {
+                let app = host;
+                let dir = app.sessions.dir(&session);
+                let written =
+                    app.sessions
+                        .write_input(&session, &input, &line, app.input_timeout, || {
+                            app.host.is_running(&session, &dir)
+                        });
                 // 用户发言才算活跃，侧边栏据此排序；审批回复等控制消息不算。
-                if is_user_message(&line) {
-                    app.sessions.touch_active(&id)?;
+                if written == Ok(Written::Fresh) && is_user_message(&line) {
+                    let _ = app.sessions.touch_active(&session);
                 }
-                Ok(())
+                (input, written)
             })
-            .await?;
+            .await;
+            let Ok((input, written)) = written else {
+                return Err("写入输入失败".to_string());
+            };
+            let msg = ServerMsg::Ack {
+                id: input,
+                error: written.err(),
+            };
+            let _ = tx
+                .send(Frame {
+                    session: Some(id),
+                    msg,
+                })
+                .await;
         }
         ClientMsg::Stop { .. } => {
             blocking(app, move |app| {
@@ -704,7 +762,18 @@ async fn read_at(path: &std::path::Path, offset: u64, buffer: &mut [u8]) -> std:
 
 #[cfg(test)]
 mod tests {
-    use super::has_room;
+    use super::{has_room, version_mismatch};
+    use cchub_protocol::PROTOCOL_VERSION;
+
+    #[test]
+    fn only_the_current_protocol_is_served() {
+        assert_eq!(version_mismatch(Some(PROTOCOL_VERSION)), None);
+        assert!(version_mismatch(None).unwrap().contains("客户端"));
+        assert!(version_mismatch(Some(0)).unwrap().contains("客户端"));
+        assert!(version_mismatch(Some(PROTOCOL_VERSION + 1))
+            .unwrap()
+            .contains("服务器"));
+    }
 
     #[test]
     fn rejects_only_when_known_to_be_short() {

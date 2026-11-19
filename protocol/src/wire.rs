@@ -7,7 +7,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::envelope::EventClass;
 
-pub const PROTOCOL_VERSION: u32 = 0;
+/// 协议 1 起不兼容旧版（2026-11-19）：客户端连接地址带 `v=1`，`hubd` 第一帧发 `Hello`，
+/// 所有输入带 `id` 并有回执。版本不一致时双方都不再收发会话消息，界面提示升级。
+pub const PROTOCOL_VERSION: u32 = 1;
+
+/// 客户端连接地址里表示协议版本的查询参数名。
+pub const VERSION_QUERY: &str = "v";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -34,6 +39,9 @@ pub enum ClientMsg {
         /// 新会话第一条消息的原文。给出时 `hubd` 在后台概括成标题，替换 `title`。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prompt: Option<String>,
+        /// 启动时用的模型，拼成 `--model`。进程已在运行时忽略（要用 `set_model`）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
     },
     /// 列出服务器上的会话。
     List,
@@ -43,8 +51,13 @@ pub enum ClientMsg {
         #[cfg_attr(feature = "ts", ts(type = "number"))]
         after: u64,
     },
-    /// 一行发给 `claude` 的 stream-json。
-    Input { session: String, line: String },
+    /// 一行发给 `claude` 的 stream-json。`id` 由客户端生成，`hubd` 按它回 `Ack` 并去重：
+    /// 同一个 `id` 重发（如断线重连后补发）只回执，不再写入。
+    Input {
+        session: String,
+        id: String,
+        line: String,
+    },
     /// 结束会话进程。
     Stop { session: String },
     /// 关闭会话：从侧边栏移走，进程在运行就一起结束；`archived: false` 时恢复。再次 `Start` 也会恢复。
@@ -97,10 +110,34 @@ pub struct SessionInfo {
     pub active: Option<u64>,
 }
 
+/// 输入没有写给进程的原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum AckError {
+    /// 进程不在运行，没有写入。
+    NotRunning,
+    /// 进程一直不读输入，等了一段时间仍写不进去，没有写入。
+    Stalled,
+    /// 输入本身不合法（含换行、超过管道容量），没有写入。
+    Invalid,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMsg {
+    /// 连接建立后的第一帧，在任何其他消息之前。
+    Hello {
+        version: String,
+        protocol_version: u32,
+    },
+    /// 回复 `Input`：`error` 为空表示已完整写给进程（是否被处理看 CLI 的回传）。
+    Ack {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<AckError>,
+    },
     Event {
         #[cfg_attr(feature = "ts", ts(type = "number"))]
         seq: u64,
@@ -190,6 +227,17 @@ pub enum UiEvent {
     Connection {
         state: ConnectionState,
     },
+    /// 和 `hubd` 的协议版本不一致，客户端已停止收发。`server` 为空表示对方是不发 `Hello` 的旧版。
+    Version {
+        server: Option<u32>,
+        client: u32,
+    },
+    /// `Input` 的回执，见 `ServerMsg::Ack`。
+    Ack {
+        session: String,
+        id: String,
+        error: Option<AckError>,
+    },
     Event {
         session: String,
         class: EventClass,
@@ -252,9 +300,66 @@ pub struct Frame {
     pub msg: ServerMsg,
 }
 
+/// 给连接地址加上协议版本参数；已有同名参数时替换。
+pub fn with_version_query(url: &str) -> String {
+    let (base, query) = url.split_once('?').unwrap_or((url, ""));
+    let prefix = format!("{VERSION_QUERY}=");
+    let mut parts: Vec<String> = query
+        .split('&')
+        .filter(|part| !part.is_empty() && !part.starts_with(&prefix))
+        .map(str::to_string)
+        .collect();
+    parts.push(format!("{prefix}{PROTOCOL_VERSION}"));
+    let authority = base.split_once("://").map_or(base, |(_, rest)| rest);
+    let slash = if authority.contains('/') { "" } else { "/" };
+    format!("{base}{slash}?{}", parts.join("&"))
+}
+
+/// 请求的查询串里客户端声明的协议版本；没带表示协议 1 之前的旧版。
+pub fn client_version(query: Option<&str>) -> Option<u32> {
+    let prefix = format!("{VERSION_QUERY}=");
+    query?
+        .split('&')
+        .find_map(|part| part.strip_prefix(&prefix)?.parse().ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_query_round_trips() {
+        assert_eq!(with_version_query("ws://h:7878/ws"), "ws://h:7878/ws?v=1");
+        assert_eq!(with_version_query("ws://h"), "ws://h/?v=1");
+        assert_eq!(
+            with_version_query("ws://h/ws?z=deflate&v=0"),
+            "ws://h/ws?z=deflate&v=1"
+        );
+        assert_eq!(client_version(Some("z=deflate&v=1")), Some(1));
+        assert_eq!(client_version(Some("z=deflate")), None);
+        assert_eq!(client_version(Some("v=x")), None);
+        assert_eq!(client_version(None), None);
+    }
+
+    #[test]
+    fn ack_omits_error_when_written() {
+        let ok = ServerMsg::Ack {
+            id: "a".into(),
+            error: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&ok).unwrap(),
+            serde_json::json!({"type": "ack", "id": "a"})
+        );
+        let refused = ServerMsg::Ack {
+            id: "a".into(),
+            error: Some(AckError::NotRunning),
+        };
+        assert_eq!(
+            serde_json::to_value(&refused).unwrap()["error"],
+            "not_running"
+        );
+    }
 
     #[test]
     fn frame_flattens_message_next_to_session() {

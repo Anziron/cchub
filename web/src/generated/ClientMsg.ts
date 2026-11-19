@@ -12,4 +12,8 @@ title?: string | null,
 /**
  * 新会话第一条消息的原文。给出时 `hubd` 在后台概括成标题，替换 `title`。
  */
-prompt?: string | null, } | { "type": "list" } | { "type": "attach", session: string, after: number, } | { "type": "input", session: string, line: string, } | { "type": "stop", session: string, } | { "type": "archive", session: string, archived: boolean, } | { "type": "browse", device?: string | null, path?: string | null, } | { "type": "mount", device: string, path: string, } | { "type": "task_output", path: string, } | { "type": "usage", tz_offset: number, } | { "type": "devices" };
+prompt?: string | null, 
+/**
+ * 启动时用的模型，拼成 `--model`。进程已在运行时忽略（要用 `set_model`）。
+ */
+model?: string | null, } | { "type": "list" } | { "type": "attach", session: string, after: number, } | { "type": "input", session: string, id: string, line: string, } | { "type": "stop", session: string, } | { "type": "archive", session: string, archived: boolean, } | { "type": "browse", device?: string | null, path?: string | null, } | { "type": "mount", device: string, path: string, } | { "type": "task_output", path: string, } | { "type": "usage", tz_offset: number, } | { "type": "devices" };

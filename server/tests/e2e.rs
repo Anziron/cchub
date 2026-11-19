@@ -6,9 +6,13 @@ use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use cchub_protocol::{classify, ClientMsg, EventClass, Frame, Inbound, InboundAction, ServerMsg};
+use cchub_protocol::{
+    classify, AckError, ClientMsg, EventClass, Frame, Inbound, InboundAction, ServerMsg,
+    PROTOCOL_VERSION,
+};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -70,7 +74,17 @@ async fn spawn_replay(state: &Path, scenario: &str) -> (Child, String) {
 }
 
 async fn spawn_hubd_with(state: &Path, host: &str, cmd: &str) -> (Child, String) {
+    spawn_hubd_env(state, host, cmd, &[]).await
+}
+
+async fn spawn_hubd_env(
+    state: &Path,
+    host: &str,
+    cmd: &str,
+    env: &[(&str, &str)],
+) -> (Child, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_hubd"))
+        .envs(env.iter().copied())
         .env("HUBD_LISTEN", "127.0.0.1:0")
         .env("HUBD_HOST", host)
         .env("HUBD_STATE_DIR", state)
@@ -87,7 +101,32 @@ async fn spawn_hubd_with(state: &Path, host: &str, cmd: &str) -> (Child, String)
 }
 
 async fn connect(addr: &str) -> Socket {
-    connect_async(format!("ws://{addr}/ws")).await.unwrap().0
+    connect_url(&format!("ws://{addr}/ws?v=1")).await
+}
+
+/// 连上后先收 `Hello`，之后才是其他消息。
+async fn connect_url(url: &str) -> Socket {
+    let mut socket = connect_async(url).await.unwrap().0;
+    let first = tokio::time::timeout(TIMEOUT, socket.next())
+        .await
+        .expect("等待 Hello 超时")
+        .expect("连接意外关闭")
+        .unwrap();
+    let Message::Text(text) = first else {
+        panic!("第一帧不是文本：{first:?}");
+    };
+    let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
+    assert!(
+        matches!(frame.msg, ServerMsg::Hello { protocol_version, .. } if protocol_version == PROTOCOL_VERSION),
+        "第一帧不是 Hello：{text}"
+    );
+    socket
+}
+
+/// 每条输入一个新 id。
+fn next_id() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    format!("in-{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
 async fn send(socket: &mut Socket, msg: ClientMsg) {
@@ -177,6 +216,7 @@ async fn replay_survives_hubd_kill_and_matches_transcript() {
             session: session.clone(),
             title: None,
             prompt: None,
+            model: None,
             resume: None,
             cwd: None,
         },
@@ -195,6 +235,7 @@ async fn replay_survives_hubd_kill_and_matches_transcript() {
         &mut socket,
         ClientMsg::Input {
             session: session.clone(),
+            id: next_id(),
             line: user.into(),
         },
     )
@@ -238,6 +279,7 @@ async fn replay_survives_hubd_kill_and_matches_transcript() {
         &mut socket,
         ClientMsg::Input {
             session: session.clone(),
+            id: next_id(),
             line: reply.to_string(),
         },
     )
@@ -296,6 +338,7 @@ async fn real_claude_under_systemd_survives_hubd_kill() {
             session: session.clone(),
             title: None,
             prompt: None,
+            model: None,
             resume: None,
             cwd: None,
         },
@@ -315,6 +358,7 @@ async fn real_claude_under_systemd_survives_hubd_kill() {
         &mut socket,
         ClientMsg::Input {
             session: session.clone(),
+            id: next_id(),
             line: user.to_string(),
         },
     )
@@ -350,6 +394,7 @@ async fn real_claude_under_systemd_survives_hubd_kill() {
         &mut socket,
         ClientMsg::Input {
             session: session.clone(),
+            id: next_id(),
             line: reply.to_string(),
         },
     )
@@ -396,6 +441,7 @@ async fn idle_subscription_does_not_poll() {
             session: "s1".into(),
             title: None,
             prompt: None,
+            model: None,
             resume: None,
             cwd: None,
         },
@@ -439,6 +485,7 @@ async fn reports_device_online_for_project_dir() {
             session: "s1".into(),
             title: None,
             prompt: None,
+            model: None,
             resume: None,
             cwd: Some(project.display().to_string()),
         },
@@ -473,7 +520,7 @@ async fn reports_device_online_for_project_dir() {
 }
 
 #[tokio::test]
-async fn failed_start_keeps_cwd_and_drops_input() {
+async fn failed_start_keeps_cwd_and_rejects_input() {
     let temp = Temp::new("failed-start");
     // 把目录位置占成普通文件，探测会失败，效果和挂载断开相同。
     let project = temp.0.join("project");
@@ -484,6 +531,7 @@ async fn failed_start_keeps_cwd_and_drops_input() {
         session: "s1".into(),
         title: None,
         prompt: None,
+        model: None,
         resume: None,
         cwd,
     };
@@ -493,6 +541,7 @@ async fn failed_start_keeps_cwd_and_drops_input() {
         &mut socket,
         ClientMsg::Input {
             session: "s1".into(),
+            id: next_id(),
             line: "不该留下".into(),
         },
     )
@@ -500,16 +549,24 @@ async fn failed_start_keeps_cwd_and_drops_input() {
     // 重试不带目录，也不能退回会话目录启动。
     send(&mut socket, start(None)).await;
     let errors = async {
-        let mut count = 0;
-        while count < 2 {
+        let (mut count, mut refused) = (0, false);
+        while count < 2 || !refused {
             let message = socket.next().await.expect("连接断开").unwrap();
             let Message::Text(text) = message else {
                 continue;
             };
             let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
-            if let ServerMsg::Error { message } = frame.msg {
-                assert!(message.contains("设备离线"), "{message}");
-                count += 1;
+            match frame.msg {
+                ServerMsg::Error { message } => {
+                    assert!(message.contains("设备离线"), "{message}");
+                    count += 1;
+                }
+                // 进程没起来：输入被拒，没有写进 FIFO 留到下次启动。
+                ServerMsg::Ack { error, .. } => {
+                    assert_eq!(error, Some(AckError::NotRunning));
+                    refused = true;
+                }
+                _ => {}
             }
         }
     };
@@ -564,6 +621,7 @@ async fn attach_reports_where_history_ends() {
         session: "s1".into(),
         title: None,
         prompt: None,
+        model: None,
         resume: None,
         cwd: None,
     };
@@ -576,6 +634,7 @@ async fn attach_reports_where_history_ends() {
     let user = r#"{"type":"user","message":{"role":"user","content":"go"}}"#;
     let input = ClientMsg::Input {
         session: "s1".into(),
+        id: next_id(),
         line: user.into(),
     };
     send(&mut socket, input).await;
@@ -615,6 +674,7 @@ async fn attach_beyond_log_end_reports_error() {
             session: "s1".into(),
             title: None,
             prompt: None,
+            model: None,
             resume: None,
             cwd: None,
         },
@@ -673,6 +733,7 @@ async fn replay_scenario(scenario: &str, expected: EventClass) {
             session: session.clone(),
             title: None,
             prompt: None,
+            model: None,
             resume: None,
             cwd: None,
         },
@@ -691,6 +752,7 @@ async fn replay_scenario(scenario: &str, expected: EventClass) {
         &mut socket,
         ClientMsg::Input {
             session: session.clone(),
+            id: next_id(),
             line: user.into(),
         },
     )
@@ -720,6 +782,7 @@ async fn replay_scenario(scenario: &str, expected: EventClass) {
             &mut socket,
             ClientMsg::Input {
                 session: session.clone(),
+                id: next_id(),
                 line: reply.to_string(),
             },
         )
@@ -734,6 +797,7 @@ async fn replay_scenario(scenario: &str, expected: EventClass) {
                 &mut socket,
                 ClientMsg::Input {
                     session: session.clone(),
+                    id: next_id(),
                     line: interrupt.to_string(),
                 },
             )
@@ -792,6 +856,7 @@ async fn lists_started_sessions_with_title_and_memory() {
             session: "s1".into(),
             title: Some("修登录".into()),
             prompt: None,
+            model: None,
             resume: None,
             cwd: None,
         },
@@ -916,6 +981,7 @@ async fn invalid_session_id_is_rejected() {
             session: "../x".into(),
             title: None,
             prompt: None,
+            model: None,
             resume: None,
             cwd: None,
         },
@@ -1008,10 +1074,7 @@ async fn deflate_connection_replays_the_same_events_in_binary_batches() {
     let (expected, binary) = collect_replay(&mut plain, target).await;
     assert_eq!(binary, 0, "没要求压缩的连接不能收到二进制消息");
 
-    let mut socket = connect_async(format!("ws://{addr}/ws?z=deflate"))
-        .await
-        .unwrap()
-        .0;
+    let mut socket = connect_url(&format!("ws://{addr}/ws?z=deflate&v=1")).await;
     send(&mut socket, attach).await;
     let (got, binary) = collect_replay(&mut socket, target).await;
     assert!(binary > 0, "要求压缩的连接应收到二进制批次");
@@ -1021,4 +1084,187 @@ async fn deflate_connection_replays_the_same_events_in_binary_batches() {
         got.len()
     );
     assert_eq!(got, expected);
+}
+
+/// 等某条输入的回执。
+async fn ack_for(socket: &mut Socket, id: &str) -> Option<AckError> {
+    let wait = async {
+        loop {
+            let message = socket.next().await.expect("连接断开").unwrap();
+            let Message::Text(text) = message else {
+                continue;
+            };
+            let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
+            match frame.msg {
+                ServerMsg::Ack { id: got, error } if got == id => return error,
+                ServerMsg::Error { message } => panic!("hubd 报错：{message}"),
+                _ => {}
+            }
+        }
+    };
+    tokio::time::timeout(TIMEOUT, wait)
+        .await
+        .expect("等待回执超时")
+}
+
+fn start_plain(session: &str) -> ClientMsg {
+    ClientMsg::Start {
+        session: session.into(),
+        resume: None,
+        cwd: None,
+        title: None,
+        prompt: None,
+        model: None,
+    }
+}
+
+fn input(id: &str, line: &str) -> ClientMsg {
+    ClientMsg::Input {
+        session: "s1".into(),
+        id: id.into(),
+        line: line.into(),
+    }
+}
+
+/// 不带协议版本的旧客户端只收到一条 `Error`，然后连接被关闭。
+#[tokio::test]
+async fn old_client_is_told_to_upgrade_and_disconnected() {
+    let temp = Temp::new("old-client");
+    let (_hubd, addr) = spawn_hubd(&temp.0).await;
+    let mut socket = connect_async(format!("ws://{addr}/ws?z=deflate"))
+        .await
+        .unwrap()
+        .0;
+    let first = socket.next().await.unwrap().unwrap();
+    let Message::Text(text) = first else {
+        panic!("第一帧不是文本：{first:?}");
+    };
+    let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
+    assert!(
+        matches!(&frame.msg, ServerMsg::Error { message } if message.contains("客户端版本过旧")),
+        "{text}"
+    );
+    let rest = tokio::time::timeout(TIMEOUT, async {
+        while let Some(Ok(message)) = socket.next().await {
+            if matches!(message, Message::Text(_) | Message::Binary(_)) {
+                panic!("拒绝后还收到了消息：{message:?}");
+            }
+        }
+    });
+    rest.await.expect("连接没有关闭");
+}
+
+/// 进程不在：输入不写进 FIFO，回执 `not_running`。
+#[tokio::test]
+async fn input_is_refused_when_process_is_not_running() {
+    let temp = Temp::new("not-running");
+    let (_hubd, addr) = spawn_hubd_with(&temp.0, "direct", "true").await;
+    let mut socket = connect(&addr).await;
+    send(&mut socket, start_plain("s1")).await;
+    // `true` 马上退出；等它真的不在了再发。
+    let pid: i32 = loop {
+        if let Ok(pid) = std::fs::read_to_string(temp.0.join("s1/pid")) {
+            break pid.trim().parse().unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    while Path::new(&format!("/proc/{pid}/cmdline")).exists()
+        && !std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .unwrap_or_default()
+            .contains(") Z")
+    {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    send(&mut socket, input("a", r#"{"type":"user"}"#)).await;
+    assert_eq!(ack_for(&mut socket, "a").await, Some(AckError::NotRunning));
+
+    let mut fifo = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(temp.0.join("s1").join("in"))
+        .unwrap();
+    let error = fifo.read(&mut [0; 64]).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+}
+
+/// 同一个 id 重发（含换一条连接补发）只写一次，回执照常是成功。
+#[tokio::test]
+async fn duplicate_input_is_written_once() {
+    let temp = Temp::new("dedupe");
+    // `cat` 把读到的输入原样写进日志，日志里出现几次就是写了几次。
+    let (_hubd, addr) = spawn_hubd_with(&temp.0, "direct", "cat").await;
+    let mut socket = connect(&addr).await;
+    send(&mut socket, start_plain("s1")).await;
+    let attach = ClientMsg::Attach {
+        session: "s1".into(),
+        after: 0,
+    };
+    send(&mut socket, attach.clone()).await;
+    let first = r#"{"type":"user","n":1}"#;
+    send(&mut socket, input("a", first)).await;
+    assert_eq!(ack_for(&mut socket, "a").await, None);
+    send(&mut socket, input("a", first)).await;
+    assert_eq!(ack_for(&mut socket, "a").await, None);
+
+    let mut other = connect(&addr).await;
+    send(&mut other, input("a", first)).await;
+    assert_eq!(ack_for(&mut other, "a").await, None);
+    let last = r#"{"type":"user","n":2}"#;
+    send(&mut other, input("b", last)).await;
+    assert_eq!(ack_for(&mut other, "b").await, None);
+
+    send(&mut other, attach).await;
+    let mut inbound = Inbound::new(0);
+    let mut applied = Vec::new();
+    read_until(&mut other, &mut inbound, &mut applied, |line| line == last).await;
+    assert_eq!(applied, [first, last]);
+}
+
+/// 进程一直不读输入：写满后等超时回执 `stalled`，FIFO 里只有完整的行。
+#[tokio::test]
+async fn stalled_input_times_out_without_half_lines() {
+    let temp = Temp::new("stalled");
+    let env = [("HUBD_INPUT_TIMEOUT_MS", "300")];
+    let (_hubd, addr) = spawn_hubd_env(&temp.0, "direct", "sleep 600", &env).await;
+    let mut socket = connect(&addr).await;
+    send(&mut socket, start_plain("s1")).await;
+    let line = format!(r#"{{"type":"user","pad":"{}"}}"#, "z".repeat(200 * 1024));
+    let mut written = 0;
+    loop {
+        let id = format!("big-{written}");
+        send(&mut socket, input(&id, &line)).await;
+        match ack_for(&mut socket, &id).await {
+            None => written += 1,
+            Some(error) => {
+                assert_eq!(error, AckError::Stalled);
+                break;
+            }
+        }
+        assert!(written < 100, "一直写得进去");
+    }
+    assert!(written > 0);
+    // 停掉进程前读出 FIFO：只能有完整的行。
+    let mut fifo = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(temp.0.join("s1").join("in"))
+        .unwrap();
+    let mut data = Vec::new();
+    let mut buffer = vec![0; 64 * 1024];
+    loop {
+        match fifo.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => data.extend_from_slice(&buffer[..count]),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("{error}"),
+        }
+    }
+    assert_eq!(data.len(), written * (line.len() + 1));
+    send(
+        &mut socket,
+        ClientMsg::Stop {
+            session: "s1".into(),
+        },
+    )
+    .await;
 }

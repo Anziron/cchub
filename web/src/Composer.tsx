@@ -244,7 +244,7 @@ function QueueList({ store, session, onEdit }: { store: Store; session: Session;
     <ul className="queue">
       {session.queue.map((q) => (
         <li key={q.id} className={q.mode}>
-          <span className="queue-tag">{q.mode === "insert" ? "待插入" : "等结束"}</span>
+          <span className="queue-tag">{q.mode === "insert" ? (q.delivered ? "已送达" : "待插入") : "等结束"}</span>
           <span className="queue-text" title={q.text}>{q.text}</span>
           {actions(q)}
         </li>
@@ -261,6 +261,13 @@ export function Composer({ store, session }: { store: Store; session: Session })
   /** 空闲时直接发；一轮进行中按 `mode` 排队（回车等结束，Ctrl+Enter 插入）。 */
   const submit = (message: string, mode: "wait" | "insert" = "wait") => {
     if (!message.trim() && !input.files.length) return;
+    // 有卡片等回复时，输入框里的话直接当卡片的回复（`/` 命令和带文件的消息照旧当普通消息发）。
+    const ask = firstAsk(thread);
+    if (ask && message.trim() && !message.trimStart().startsWith("/") && !input.files.length) {
+      setText("");
+      store.deny(session, ask, `用户没有选选项，而是回复：${message}`, message.trim());
+      return;
+    }
     const full = input.take(message);
     if (busy) store.enqueue(session, full, mode);
     else store.sendText(session, full);
@@ -296,7 +303,7 @@ export function Composer({ store, session }: { store: Store; session: Session })
             ref={ref}
             rows={1}
             aria-label="输入消息"
-            placeholder={busy ? (isTouch ? "补充内容，这一轮结束后发送" : "补充内容：Enter 等这一轮结束后发送，Ctrl+Enter 插入这一轮") : "继续补充，输入 / 查看命令，可以拖入文件"}
+            placeholder={firstAsk(thread) ? "回复上面的问题…" : busy ? (isTouch ? "补充内容，这一轮结束后发送" : "补充内容：Enter 等这一轮结束后发送，Ctrl+Enter 插入这一轮") : "继续补充，输入 / 查看命令，可以拖入文件"}
             value={text}
             onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {
@@ -310,7 +317,7 @@ export function Composer({ store, session }: { store: Store; session: Session })
           <div className="tools">
             <ModeLabel mode={thread.permissionMode} />
             <span className="grow" />
-            <ModelMenu models={store.models} model={thread.model} effort={thread.effort} onChange={(value) => store.setModel(session, value)} onEffort={(value) => store.setEffort(session, value)} />
+            <ModelMenu models={store.models} model={thread.model} nextModel={!!thread.nextModel} effort={thread.effort} onChange={(value) => store.setModel(session, value)} onEffort={(value) => store.setEffort(session, value)} />
             <UsageRing store={store} session={session} />
             {busy && !input.hasContent ? (
               <button type="button" className="send stop" aria-label="中断" title="中断（Esc）" onClick={() => store.interrupt(session)}><Icon name="stop" size={14} /></button>

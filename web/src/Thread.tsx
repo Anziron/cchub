@@ -2,7 +2,7 @@ import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } fr
 import { AskCard } from "./AskCard";
 import { Icon } from "./Icon";
 import { linkify, Markdown, WebLink } from "./Markdown";
-import { groupTools, searchLinks, type Item, type RenderBlock, type ToolItem } from "./model";
+import { groupTools, searchLinks, type Ask, type Item, type RenderBlock, type ToolItem } from "./model";
 import { formatDuration, formatTokens } from "./Common";
 import { isTouch } from "./platform";
 import type { Session, Store } from "./store";
@@ -184,16 +184,19 @@ const ToolGroup = memo(function ToolGroup({ tools, cwd, active }: { tools: ToolI
  * 条目按引用比较（model 里是替换而不是原地改）。session 和 store 是原地修改的稳定对象，
  * 不能直接当依据：审批卡的 `sent` 是原地改的，所以单独作为 prop 传入；cwd 同理。
  */
-const ItemView = memo(function ItemView({ item, store, session, askSent }: { item: Item; store: Store; session: Session; askSent?: boolean }) {
+const askKey = (ask?: Ask): string | undefined => (ask ? `${ask.sent}|${ask.expired ?? ""}|${ask.error ?? ""}` : undefined);
+
+const ItemView = memo(function ItemView({ item, store, session, askSent }: { item: Item; store: Store; session: Session; askSent?: string }) {
   switch (item.kind) {
     case "user":
       return (
         <>
           <div className="user" data-turn={item.id}><div>{item.text}</div></div>
           {item.state === "sending" ? <div className="sent">发送中…</div> : null}
+          {item.state === "delivered" ? <div className="sent">已送达</div> : null}
           {item.state === "failed" ? (
             <div className="sent failed">
-              没有发送成功
+              {item.error ? `没有发送成功：${item.error}` : "没有发送成功"}
               <button onClick={() => store.retry(session, item.id, item.text)}>重试</button>
             </div>
           ) : null}
@@ -207,7 +210,7 @@ const ItemView = memo(function ItemView({ item, store, session, askSent }: { ite
       return <Tool tool={item} cwd={session.cwd} />;
     case "ask": {
       const ask = session.thread.asks.get(item.requestId);
-      // askSent 只用来让 memo 在 `sent` 变化时重画。
+      // askSent 只用来让 memo 在卡片的 `sent` / 失效 / 错误变化时重画。
       return ask ? <AskCard key={String(askSent)} ask={ask} session={session} store={store} /> : null;
     }
     case "interrupted":
@@ -459,7 +462,7 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
               item={block.item}
               store={store}
               session={session}
-              askSent={block.item.kind === "ask" ? session.thread.asks.get(block.item.requestId)?.sent : undefined}
+              askSent={block.item.kind === "ask" ? askKey(session.thread.asks.get(block.item.requestId)) : undefined}
             />
           ))}
         </div>

@@ -43,6 +43,8 @@ pub struct Config {
     pub title_memory_max_mb: u64,
     /// 统计整体用量的命令，协议见 `usage.rs`；为空时关闭。
     pub usage_cmd: String,
+    /// 进程一直不读输入时，写一行最多等这么久，超过就回执 `stalled`。
+    pub input_timeout: Duration,
 }
 
 impl Config {
@@ -90,6 +92,7 @@ impl Config {
         let min_available_mb = megabytes("HUBD_MIN_AVAILABLE_MB", "100")?;
         let idle_minutes = megabytes("HUBD_IDLE_MINUTES", "10")?;
         let title_memory_max_mb = megabytes("HUBD_TITLE_MEMORY_MAX_MB", "300")?;
+        let input_timeout_ms = megabytes("HUBD_INPUT_TIMEOUT_MS", "10000")?;
 
         let host = match var("HUBD_HOST", "systemd").as_str() {
             "systemd" => HostKind::Systemd,
@@ -111,6 +114,7 @@ impl Config {
             session_memory_max_mb,
             min_available_mb,
             idle: Duration::from_secs(idle_minutes * 60),
+            input_timeout: Duration::from_millis(input_timeout_ms),
         })
     }
 }

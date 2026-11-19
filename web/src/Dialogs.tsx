@@ -261,9 +261,11 @@ export function useMenuFit(anchor: RefObject<HTMLElement | null>, open: boolean,
  * 模型和推理强度：上面一行是当前模型，点开换成模型列表；下面是强度滑块和档位名。
  * 拖滑块、点档位都不关菜单；设过强度时标题行右边可以恢复默认。
  */
-export function ModelMenu({ models, model, effort, onChange, onEffort }: {
+export function ModelMenu({ models, model, nextModel, effort, onChange, onEffort }: {
   models: ModelOption[];
   model?: string;
+  /** 一轮进行中选的模型，下一轮才生效。 */
+  nextModel?: boolean;
   effort?: string;
   onChange: (value: string) => void;
   onEffort: (effort?: string) => void;
@@ -303,6 +305,7 @@ export function ModelMenu({ models, model, effort, onChange, onEffort }: {
     >
       <button type="button" className="model" aria-haspopup="menu" aria-expanded={open} onClick={() => (open ? close() : setOpen(true))}>
         <span>{modelName}</span>
+        {nextModel ? <em title="这一轮剩下的回复仍用旧模型">下一轮生效</em> : null}
         {effortLabel ? <em>{effortLabel}</em> : null}
         <Icon name="down" size={12} />
       </button>

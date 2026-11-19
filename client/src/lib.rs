@@ -9,8 +9,9 @@ use std::time::Duration;
 
 use attention::Attention;
 use cchub_protocol::{
-    is_user_message, with_deflate_query, ClientMsg, ConnectionState, EventClass, Frame,
-    FrameDecoder, Inbound, InboundAction, ServerMsg, SessionInfo, UiEvent,
+    is_user_message, with_deflate_query, with_version_query, ClientMsg, ConnectionState,
+    EventClass, Frame, FrameDecoder, Inbound, InboundAction, Outbox, ServerMsg, SessionInfo,
+    UiEvent, PROTOCOL_VERSION,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -66,6 +67,8 @@ impl HubClient {
 enum Ended {
     Lost,
     Closed,
+    /// 协议版本不一致：等最长的退避时间再试，期间服务器可能已经升级。
+    Mismatch,
 }
 
 async fn run(
@@ -81,20 +84,27 @@ async fn run(
         ..State::default()
     };
     let mut backoff = initial_backoff;
-    // 要求压缩：长会话回放时传输量约为原来的四分之一。旧版 hubd 不认这个参数，照旧发文本。
-    let url = with_deflate_query(&url);
+    // 要求压缩：长会话回放时传输量约为原来的四分之一。带上协议版本，`hubd` 据此拒绝旧客户端。
+    let url = with_version_query(&with_deflate_query(&url));
 
     loop {
         on_event(UiEvent::Connection {
             state: ConnectionState::Connecting,
         });
-        if let Ok((socket, _)) = connect_async(url.as_str()).await {
-            backoff = initial_backoff;
-            on_event(UiEvent::Connection {
-                state: ConnectionState::Connected,
-            });
-            match connected(socket, &mut rx, &mut state, &on_event, &on_attention).await {
+        if let Ok((mut socket, _)) = connect_async(url.as_str()).await {
+            let ended = match handshake(&mut socket, &on_event).await {
+                Ok(()) => {
+                    backoff = initial_backoff;
+                    on_event(UiEvent::Connection {
+                        state: ConnectionState::Connected,
+                    });
+                    connected(socket, &mut rx, &mut state, &on_event, &on_attention).await
+                }
+                Err(ended) => ended,
+            };
+            match ended {
                 Ended::Closed => return,
+                Ended::Mismatch => backoff = MAX_BACKOFF,
                 Ended::Lost => {}
             }
         }
@@ -118,6 +128,47 @@ async fn run(
     }
 }
 
+/// 等 `hubd` 的第一帧。新版第一帧是 `Hello`；旧版不发，先到的是心跳或别的消息。
+async fn handshake<S>(socket: &mut S, on_event: &impl Fn(UiEvent)) -> Result<(), Ended>
+where
+    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    let mismatch = |server| {
+        on_event(UiEvent::Version {
+            server,
+            client: PROTOCOL_VERSION,
+        });
+        Ended::Mismatch
+    };
+    let first = tokio::time::timeout(IDLE_TIMEOUT, socket.next()).await;
+    let Ok(Some(Ok(message))) = first else {
+        return Err(Ended::Lost);
+    };
+    let Message::Text(text) = message else {
+        return Err(mismatch(None));
+    };
+    let Ok(frame) = serde_json::from_str::<Frame>(text.as_str()) else {
+        return Err(mismatch(None));
+    };
+    match frame.msg {
+        ServerMsg::Hello {
+            protocol_version, ..
+        } if protocol_version == PROTOCOL_VERSION => Ok(()),
+        ServerMsg::Hello {
+            protocol_version, ..
+        } => Err(mismatch(Some(protocol_version))),
+        // 更新的 `hubd` 拒绝了这个客户端，原因在消息里（“客户端版本过旧”）。
+        ServerMsg::Error { message } => {
+            on_event(UiEvent::Error {
+                session: None,
+                message,
+            });
+            Err(Ended::Mismatch)
+        }
+        _ => Err(mismatch(None)),
+    }
+}
+
 async fn connected<S>(
     mut socket: S,
     rx: &mut mpsc::UnboundedReceiver<ClientMsg>,
@@ -136,6 +187,13 @@ where
             after: inbound.expected(),
         };
         if send(&mut socket, &attach).await.is_err() {
+            return Ended::Lost;
+        }
+    }
+    // 上一条连接上发出、没收到回执的输入：按原 id 补发，`hubd` 去重，写过的只回执。
+    let unacked: Vec<ClientMsg> = state.outbox.unacked().cloned().collect();
+    for msg in &unacked {
+        if send(&mut socket, msg).await.is_err() {
             return Ended::Lost;
         }
     }
@@ -191,6 +249,7 @@ where
                             state.pending.push(msg);
                             return Ended::Lost;
                         }
+                        state.outbox.sent(&msg);
                     }
                 }
             }
@@ -203,6 +262,8 @@ struct State {
     sessions: HashMap<String, Inbound>,
     /// 断线期间的消息，重连后再发。
     pending: Vec<ClientMsg>,
+    /// 已经发出、还没收到回执的输入，重连后补发。
+    outbox: Outbox,
     offline: HashSet<String>,
     /// 设备离线期间的用户消息，恢复后再发。
     held: Vec<ClientMsg>,
@@ -227,13 +288,15 @@ impl State {
             self.attention.insert(session.clone(), Attention::default());
             self.watched.remove(session);
         }
-        if let ClientMsg::Input { session, line } = &msg {
+        if let ClientMsg::Input { session, line, .. } = &msg {
             if self.offline.contains(session) && is_user_message(line) {
                 self.held.push(msg);
                 return Ok(());
             }
         }
-        send(socket, &msg).await
+        send(socket, &msg).await?;
+        self.outbox.sent(&msg);
+        Ok(())
     }
 
     /// 返回要发回服务器的消息。
@@ -327,6 +390,15 @@ impl State {
                 on_event(UiEvent::Error { session, message });
                 Vec::new()
             }
+            ServerMsg::Ack { id, error } => {
+                if let Some(session) = session {
+                    self.outbox.ack(&session, &id);
+                    on_event(UiEvent::Ack { session, id, error });
+                }
+                Vec::new()
+            }
+            // 握手时已经处理过。
+            ServerMsg::Hello { .. } => Vec::new(),
             ServerMsg::Attached { live } => {
                 let Some(id) = session else {
                     return Vec::new();
@@ -462,6 +534,27 @@ mod tests {
         .unwrap()
     }
 
+    fn hello() -> String {
+        serde_json::to_string(&Frame {
+            session: None,
+            msg: ServerMsg::Hello {
+                version: "test".into(),
+                protocol_version: PROTOCOL_VERSION,
+            },
+        })
+        .unwrap()
+    }
+
+    /// 接受连接并像新版 `hubd` 一样先发 `Hello`。
+    async fn accept_hub(
+        listener: &TcpListener,
+    ) -> tokio_tungstenite::WebSocketStream<tokio::net::TcpStream> {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut server = accept_async(stream).await.unwrap();
+        server.send(Message::Text(hello().into())).await.unwrap();
+        server
+    }
+
     async fn next_client_msg<S>(socket: &mut S) -> ClientMsg
     where
         S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
@@ -507,8 +600,7 @@ mod tests {
             after: 0,
         };
         client.send(attach.clone()).unwrap();
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut server = accept_async(stream).await.unwrap();
+        let mut server = accept_hub(&listener).await;
         next_client_msg(&mut server).await;
 
         let mut next_payload = async || loop {
@@ -549,8 +641,7 @@ mod tests {
                 after: 0,
             })
             .unwrap();
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut server = accept_async(stream).await.unwrap();
+        let mut server = accept_hub(&listener).await;
         next_client_msg(&mut server).await;
 
         let ask = r#"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_use_id":"t1"}}"#;
@@ -604,7 +695,8 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(query_rx.recv().unwrap().as_deref(), Some("z=deflate"));
+        server.send(Message::Text(hello().into())).await.unwrap();
+        assert_eq!(query_rx.recv().unwrap().as_deref(), Some("z=deflate&v=1"));
         next_client_msg(&mut server).await;
 
         let mut encoder = cchub_protocol::FrameEncoder::new();
@@ -647,8 +739,7 @@ mod tests {
             },
         );
         tokio::spawn(task);
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut server = accept_async(stream).await.unwrap();
+        let mut server = accept_hub(&listener).await;
         assert_eq!(next_client_msg(&mut server).await, ClientMsg::List);
 
         let info = |id: &str, running| SessionInfo {
@@ -722,8 +813,7 @@ mod tests {
                 after: 0,
             })
             .unwrap();
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut server = accept_async(stream).await.unwrap();
+        let mut server = accept_hub(&listener).await;
         next_client_msg(&mut server).await;
 
         let device = |online| {
@@ -748,6 +838,7 @@ mod tests {
 
         let input = |line: &str| ClientMsg::Input {
             session: "s1".into(),
+            id: line.into(),
             line: line.into(),
         };
         let user = r#"{"type":"user"}"#;
@@ -794,8 +885,7 @@ mod tests {
         };
 
         // 第一条连接：发一条，再发一条有缺口的，客户端要从缺口处重新订阅。
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut server = accept_async(stream).await.unwrap();
+        let mut server = accept_hub(&listener).await;
         assert!(matches!(
             next_client_msg(&mut server).await,
             ClientMsg::Attach { after: 0, .. }
@@ -816,8 +906,7 @@ mod tests {
         drop(server);
 
         // 断线重连：不用调用方操作，自动从收到的位置接着订阅。
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut server = accept_async(stream).await.unwrap();
+        let mut server = accept_hub(&listener).await;
         assert!(matches!(
             next_client_msg(&mut server).await,
             ClientMsg::Attach { after: 5, .. }
@@ -827,5 +916,94 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(next_payload().await, "second");
+    }
+
+    /// 旧版 `hubd` 不发 `Hello`，先到的是心跳：报版本不符，不报已连接。
+    #[tokio::test]
+    async fn reports_old_server_that_sends_no_hello() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (events_tx, mut events) = mpsc::unbounded_channel();
+        let (_client, task) = HubClient::new(
+            url,
+            Duration::from_millis(10),
+            move |event| {
+                let _ = events_tx.send(event);
+            },
+            |_, _, _| {},
+        );
+        tokio::spawn(task);
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut server = accept_async(stream).await.unwrap();
+        server.send(Message::Ping(Vec::new().into())).await.unwrap();
+        loop {
+            let received = tokio::time::timeout(Duration::from_secs(5), events.recv());
+            match received.await.unwrap().unwrap() {
+                UiEvent::Version { server, client } => {
+                    assert_eq!((server, client), (None, PROTOCOL_VERSION));
+                    break;
+                }
+                UiEvent::Connection {
+                    state: ConnectionState::Connected,
+                } => panic!("没有 Hello 不能算已连接"),
+                _ => {}
+            }
+        }
+    }
+
+    /// 发出后没收到回执的输入，重连后按原 id 补发；收到回执的不再补发，回执转给界面。
+    #[tokio::test]
+    async fn resends_unacked_inputs_after_reconnect() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (events_tx, mut events) = mpsc::unbounded_channel();
+        let (client, task) = HubClient::new(
+            url,
+            Duration::from_millis(10),
+            move |event| {
+                let _ = events_tx.send(event);
+            },
+            |_, _, _| {},
+        );
+        tokio::spawn(task);
+        let input = |id: &str| ClientMsg::Input {
+            session: "s1".into(),
+            id: id.into(),
+            line: format!("line-{id}"),
+        };
+        let ack = |id: &str| {
+            frame(ServerMsg::Ack {
+                id: id.into(),
+                error: None,
+            })
+        };
+        let mut server = accept_hub(&listener).await;
+        client.send(input("a")).unwrap();
+        client.send(input("b")).unwrap();
+        assert_eq!(next_client_msg(&mut server).await, input("a"));
+        assert_eq!(next_client_msg(&mut server).await, input("b"));
+        server.send(Message::Text(ack("a").into())).await.unwrap();
+        loop {
+            let received = tokio::time::timeout(Duration::from_secs(5), events.recv());
+            if let UiEvent::Ack { session, id, error } = received.await.unwrap().unwrap() {
+                assert_eq!((session.as_str(), id.as_str(), error), ("s1", "a", None));
+                break;
+            }
+        }
+        drop(server);
+
+        // 断线期间又发了一条：先补发没回执的 b，再发 c。
+        client.send(input("c")).unwrap();
+        let mut server = accept_hub(&listener).await;
+        assert_eq!(next_client_msg(&mut server).await, input("b"));
+        assert_eq!(next_client_msg(&mut server).await, input("c"));
+        server.send(Message::Text(ack("b").into())).await.unwrap();
+        server.send(Message::Text(ack("c").into())).await.unwrap();
+        drop(server);
+
+        // 都回执了：再重连时没有要补发的。
+        let mut server = accept_hub(&listener).await;
+        client.send(ClientMsg::List).unwrap();
+        assert_eq!(next_client_msg(&mut server).await, ClientMsg::List);
     }
 }

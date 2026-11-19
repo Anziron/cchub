@@ -7,11 +7,32 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+/// 启动参数里的会话 ID、模型。会话 ID 已由 `valid_id` 校验。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Launch<'a> {
+    pub resume: Option<&'a str>,
+    /// 用 `--model` 启动，第一轮就是这个模型（启动后再发 `set_model` 偶尔没赶上第一轮）。
+    pub model: Option<&'a str>,
+}
+
+/// 模型名只允许别名和模型 ID 里会出现的字符，如 `opus`、`claude-opus-5-5`、`sonnet[1m]`。
+pub fn valid_model(model: &str) -> bool {
+    (1..=64).contains(&model.len())
+        && model
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.:[]".contains(&b))
+}
+
 /// 用 `<>` 打开 FIFO，进程自己持有写端，所以永远读不到 EOF。
-fn shell_command(claude_cmd: &str, dir: &Path, resume: Option<&str>) -> String {
+fn shell_command(claude_cmd: &str, dir: &Path, launch: Launch) -> String {
     let dir = shell_quote(&dir.to_string_lossy());
-    let resume = resume.map_or(String::new(), |id| format!(" --resume {id}"));
-    format!("exec {claude_cmd}{resume} <>{dir}/in >>{dir}/out 2>>{dir}/err")
+    let resume = launch
+        .resume
+        .map_or(String::new(), |id| format!(" --resume {id}"));
+    let model = launch.model.map_or(String::new(), |model| {
+        format!(" --model {}", shell_quote(model))
+    });
+    format!("exec {claude_cmd}{resume}{model} <>{dir}/in >>{dir}/out 2>>{dir}/err")
 }
 
 fn shell_quote(text: &str) -> String {
@@ -20,7 +41,7 @@ fn shell_quote(text: &str) -> String {
 
 pub trait ProcessHost: Send + Sync {
     /// `cwd` 是进程的工作目录，`dir` 是会话目录。
-    fn start(&self, session: &str, dir: &Path, cwd: &Path, resume: Option<&str>) -> io::Result<()>;
+    fn start(&self, session: &str, dir: &Path, cwd: &Path, launch: Launch) -> io::Result<()>;
     fn is_running(&self, session: &str, dir: &Path) -> bool;
     fn stop(&self, session: &str, dir: &Path) -> io::Result<()>;
 }
@@ -49,7 +70,7 @@ fn cgroup_running(slice: &Path, unit: &str) -> Option<bool> {
 }
 
 impl ProcessHost for SystemdHost {
-    fn start(&self, session: &str, dir: &Path, cwd: &Path, resume: Option<&str>) -> io::Result<()> {
+    fn start(&self, session: &str, dir: &Path, cwd: &Path, launch: Launch) -> io::Result<()> {
         let mut command = Command::new("systemd-run");
         command
             .args(["-q", "--collect", "--unit"])
@@ -69,7 +90,7 @@ impl ProcessHost for SystemdHost {
         }
         let status = command
             .args(["/bin/sh", "-c"])
-            .arg(shell_command(&self.claude_cmd, dir, resume))
+            .arg(shell_command(&self.claude_cmd, dir, launch))
             .status()?;
         if status.success() {
             Ok(())
@@ -123,16 +144,10 @@ fn pid_alive(pid: i32) -> bool {
 }
 
 impl ProcessHost for DirectHost {
-    fn start(
-        &self,
-        _session: &str,
-        dir: &Path,
-        cwd: &Path,
-        resume: Option<&str>,
-    ) -> io::Result<()> {
+    fn start(&self, _session: &str, dir: &Path, cwd: &Path, launch: Launch) -> io::Result<()> {
         let mut child = Command::new("/bin/sh")
             .arg("-c")
-            .arg(shell_command(&self.claude_cmd, dir, resume))
+            .arg(shell_command(&self.claude_cmd, dir, launch))
             .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -166,11 +181,38 @@ mod tests {
 
     #[test]
     fn shell_command_opens_fifo_read_write_and_appends_output() {
-        let command = shell_command("claude -p", Path::new("/s/a"), Some("id1"));
+        let launch = Launch {
+            resume: Some("id1"),
+            model: None,
+        };
+        let command = shell_command("claude -p", Path::new("/s/a"), launch);
         assert_eq!(
             command,
             "exec claude -p --resume id1 <>'/s/a'/in >>'/s/a'/out 2>>'/s/a'/err"
         );
+    }
+
+    #[test]
+    fn shell_command_passes_model() {
+        let launch = Launch {
+            resume: Some("id1"),
+            model: Some("sonnet[1m]"),
+        };
+        let command = shell_command("claude -p", Path::new("/s/a"), launch);
+        assert_eq!(
+            command,
+            "exec claude -p --resume id1 --model 'sonnet[1m]' <>'/s/a'/in >>'/s/a'/out 2>>'/s/a'/err"
+        );
+    }
+
+    #[test]
+    fn model_rejects_shell_characters() {
+        for good in ["opus", "claude-opus-5-5", "sonnet[1m]", "us.anthropic.x:1"] {
+            assert!(valid_model(good), "{good}");
+        }
+        for bad in ["", "a b", "x;rm", "$(x)", "a'b", &"x".repeat(65)] {
+            assert!(!valid_model(bad), "{bad}");
+        }
     }
 
     #[test]

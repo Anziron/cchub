@@ -65,8 +65,14 @@ class Reader:
 
 def run(host, port, session, target, deflate, idle):
     t0 = time.monotonic()
-    s, rest = ws_connect(host, port, "/ws?z=deflate" if deflate else "/ws")
+    s, rest = ws_connect(host, port, "/ws?z=deflate&v=1" if deflate else "/ws?v=1")
     r = Reader(s, rest)
+    # 协议 1 起第一帧是 Hello（文本），不算进回放。
+    op, data = r.frame()
+    hello = json.loads(data) if op == 1 else {}
+    if hello.get("type") != "hello":
+        s.close()
+        sys.exit("hubd 没有先发 Hello：" + str(hello.get("message", "版本过旧？")))
     if idle:
         time.sleep(idle)
         t0 = time.monotonic()

@@ -40,10 +40,12 @@ import websockets
 
 async def main(port, cwd):
     session = str(uuid.uuid4())
-    async with websockets.connect(f"ws://127.0.0.1:{port}/ws", origin=None) as ws:
+    async with websockets.connect(f"ws://127.0.0.1:{port}/ws?v=1", origin=None) as ws:
+        hello = json.loads(await ws.recv())
+        assert hello["type"] == "hello", hello
         await ws.send(json.dumps({"type": "start", "session": session, "cwd": cwd, "title": "冒烟测试"}))
         line = json.dumps({"type": "user", "message": {"role": "user", "content": "test"}})
-        await ws.send(json.dumps({"type": "input", "session": session, "line": line}))
+        await ws.send(json.dumps({"type": "input", "session": session, "id": str(uuid.uuid4()), "line": line}))
         await asyncio.sleep(2)
     print(session)
 

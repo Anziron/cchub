@@ -8,7 +8,9 @@ import {
   apply,
   addSending,
   effortsFor,
+  ackReason,
   failSending,
+  failUser,
   findModel,
   firstAsk,
   hubHost,
@@ -16,7 +18,9 @@ import {
   isSending,
   isTranscript,
   isWaiting,
+  markDelivered,
   markInterrupting,
+  modelDisplayName,
   newThread,
   onProcessExit,
   matchCommands,
@@ -26,11 +30,13 @@ import {
   parseRateLimits,
   parseTranscript,
   runningTasks,
+  sameModel,
   searchLinks,
   setEffortLine,
   taskOutputPath,
   turnTokens,
   userLine,
+  userState,
   type Thread,
 } from "../src/model.ts";
 
@@ -423,20 +429,118 @@ test("中断状态：空闲时不记，重复按不重置时间，一轮结束�
   assert.equal(thread.interruptAt, undefined);
 });
 
-test("切换模型时 CLI 回显的本地命令输出显示成提示，不当成用户消息，也不进入思考", () => {
+test("切换模型时 CLI 的回显不显示，也不当成用户消息、不进入思考", () => {
   const thread = newThread();
-  apply(thread, JSON.stringify({ type: "user", uuid: "x1", isReplay: true, message: { role: "user", content: "<local-command-stdout>Set model to `opus (claude-opus-5-5)`</local-command-stdout>" } }));
-  assert.deepEqual(thread.items, [{ kind: "notice", id: "x1", text: "已切换模型：opus (claude-opus-5-5)" }]);
+  apply(thread, JSON.stringify({ type: "user", uuid: "x1", isReplay: true, message: { role: "user", content: "<local-command-stdout>Set model to `fable (claude-fable-5-2)`</local-command-stdout>" } }));
+  assert.deepEqual(thread.items, []);
   assert.equal(thread.phase, "idle");
   // 会话记录里的形式：命令和输出合在一条里。
   const history = newThread();
   apply(history, JSON.stringify({ type: "user", uuid: "x2", message: { role: "user", content: "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>\n<local-command-stdout>Set model to `sonnet (claude-sonnet-5-5)`</local-command-stdout>" } }));
-  assert.deepEqual(history.items, [{ kind: "notice", id: "x2", text: "已切换模型：sonnet (claude-sonnet-5-5)" }]);
+  assert.deepEqual(history.items, []);
   assert.equal(history.phase, "idle");
   // 其他本地命令的输出原样作为提示。
   const other = newThread();
   apply(other, JSON.stringify({ type: "user", uuid: "x3", message: { role: "user", content: "<local-command-stdout>Done</local-command-stdout>" } }));
   assert.deepEqual(other.items, [{ kind: "notice", id: "x3", text: "Done" }]);
+});
+
+const MODELS = [
+  { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)" },
+  { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5" },
+  { value: "fable", resolvedModel: "claude-fable-5-2", displayName: "Fable 5.2" },
+];
+const ev = (o: object) => JSON.stringify(o);
+const reply = (model: string) => ev({ type: "assistant", message: { id: "m1", model, content: [{ type: "text", text: "好" }] } });
+const init = (model: string) => ev({ type: "system", subtype: "init", session_id: "s", model, cwd: "/p" });
+
+test("一轮中切换模型：回复不会把它改回去，下个 init 清掉标记；和所选相符不提示", () => {
+  const thread = newThread();
+  apply(thread, init("claude-opus-5-5"), MODELS);
+  addSending(thread, "u1", "干活");
+  thread.nextModel = "fable"; // store.setModel 在一轮中做的
+  thread.model = "fable";
+  apply(thread, reply("claude-opus-5-5"), MODELS);
+  assert.equal(thread.model, "fable");
+  assert.equal(thread.nextModel, "fable");
+  apply(thread, init("claude-fable-5-2"), MODELS);
+  assert.equal(thread.nextModel, undefined);
+  assert.equal(thread.model, "claude-fable-5-2");
+  assert.equal(thread.items.filter((i) => i.kind === "notice").length, 0);
+  // 没有标记时回复照常更新模型。
+  apply(thread, reply("claude-opus-5-5"), MODELS);
+  assert.equal(thread.model, "claude-opus-5-5");
+});
+
+test("下个 init 的模型和所选的对不上时插提示；列表里找不到所选的就不提示", () => {
+  const thread = newThread();
+  thread.nextModel = "fable";
+  apply(thread, init("claude-opus-5-5"), MODELS);
+  assert.deepEqual(thread.items.map((i) => (i.kind === "notice" ? i.text : "")), ["所选模型 Fable 5.2 没有生效，当前是 Opus 5.5"]);
+  const unknown = newThread();
+  unknown.nextModel = "mystery";
+  apply(unknown, init("claude-opus-5-5"), MODELS);
+  assert.equal(unknown.items.length, 0);
+  assert.equal(sameModel(MODELS, "opus", "claude-opus-5-5"), true);
+  assert.equal(sameModel(MODELS, "opus", "claude-fable-5-2"), false);
+  assert.equal(sameModel([], "opus", "claude-fable-5-2"), true);
+});
+
+test("自动降级：插提示（含原因），模型换成备用的并清掉标记", () => {
+  const thread = newThread();
+  thread.nextModel = "fable";
+  apply(thread, ev({ type: "system", subtype: "model_refusal_fallback", trigger: "refusal", direction: "retry", scope: "session", original_model: "claude-opus-5-5", fallback_model: "claude-opus-4-8", api_refusal_category: "cyber", api_refusal_explanation: "Cyber safeguards flagged this message.", content: "Opus 5.5's safeguards flagged this session." }));
+  assert.equal(thread.model, "claude-opus-4-8");
+  assert.equal(thread.nextModel, undefined);
+  assert.deepEqual(thread.items.map((i) => (i.kind === "notice" ? i.text : "")), ["Opus 5.5 的安全机制拦下了回复，本会话已自动换成 Opus 4.8。Cyber safeguards flagged this message."]);
+  // 没有 api_refusal_explanation 时用 content。
+  const other = newThread();
+  apply(other, ev({ type: "system", subtype: "model_refusal_fallback", original_model: "claude-opus-5-5", fallback_model: "claude-opus-4-8", content: "原因在这里" }));
+  assert.match((other.items[0] as { text: string }).text, /。原因在这里$/);
+  assert.equal(modelDisplayName("claude-fable-5-2"), "Fable 5.2");
+  assert.equal(modelDisplayName("something-else"), "something-else");
+});
+
+test("切换提示由 set_model 的成功回复生成，一次切换只有一条，CLI 回显不再显示", () => {
+  const thread = newThread();
+  const ok = ev({ type: "control_response", response: { subtype: "success", request_id: "cchub-set_model-1794907909192", response: { model: "claude-fable-5-2" } } });
+  const echo = ev({ type: "user", uuid: "e1", isReplay: true, message: { role: "user", content: "<local-command-stdout>Set model to `fable (claude-fable-5-2)`</local-command-stdout>" } });
+  apply(thread, ok);
+  apply(thread, echo);
+  apply(thread, ok); // 重放时再来一遍
+  assert.deepEqual(thread.items.map((i) => (i.kind === "notice" ? i.text : "?")), ["已切换模型：Fable 5.2"]);
+  // 一轮进行中加“下一轮生效”。
+  const busy = newThread();
+  addSending(busy, "u1", "干活");
+  apply(busy, ok);
+  assert.equal((busy.items[1] as { text: string }).text, "已切换模型：Fable 5.2（下一轮生效）");
+  // 失败；别的控制回复不产生提示。
+  const failed = newThread();
+  apply(failed, ev({ type: "control_response", response: { subtype: "error", request_id: "cchub-set_model-2", error: "Unknown model" } }));
+  apply(failed, ev({ type: "control_response", response: { subtype: "success", request_id: "cchub-init-1", response: {} } }));
+  assert.deepEqual(failed.items.map((i) => (i.kind === "notice" ? i.text : "?")), ["切换模型失败：Unknown model"]);
+});
+
+test("用户消息：发送中 → 已送达 → 回传后没有状态；失败带原因", () => {
+  const thread = newThread();
+  addSending(thread, "u1", "你好");
+  assert.equal(userState(thread, "u1"), "sending");
+  markDelivered(thread, "u1");
+  assert.equal(userState(thread, "u1"), "delivered");
+  assert.equal(isSending(thread), true);
+  apply(thread, ev({ type: "user", uuid: "u1", message: { role: "user", content: "你好" } }));
+  assert.equal(userState(thread, "u1"), undefined);
+  // 回传先到、回执后到：不能倒退成已送达。
+  markDelivered(thread, "u1");
+  assert.equal(userState(thread, "u1"), undefined);
+  // 失败：带原因，结束“思考中”；已回传的不会被标失败。
+  addSending(thread, "u2", "再来");
+  failUser(thread, "u2", ackReason("stalled"));
+  assert.deepEqual(thread.items[thread.items.length - 1], { kind: "user", id: "u2", text: "再来", state: "failed", error: "Claude 没有读取输入，进程可能卡住了" });
+  assert.equal(thread.phase, "idle");
+  failUser(thread, "u1", "x");
+  assert.equal(userState(thread, "u1"), undefined);
+  assert.equal(ackReason("invalid"), "消息太长或格式不对，没有发出");
 });
 
 test("子代理的工具结果不改变主线程状态", () => {

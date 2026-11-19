@@ -5,6 +5,7 @@
 pub mod codec;
 pub mod envelope;
 pub mod sync;
+pub mod uplink;
 pub mod wire;
 
 pub use codec::{
@@ -15,7 +16,8 @@ pub use envelope::{
     EventClass,
 };
 pub use sync::{Inbound, InboundAction, LineSplitter, Outbound, OutboundLimits};
+pub use uplink::{Dedupe, Outbox};
 pub use wire::{
-    ClientMsg, ConnectionState, DeviceInfo, Frame, Health, ServerMsg, SessionInfo, UiEvent,
-    PROTOCOL_VERSION,
+    client_version, with_version_query, AckError, ClientMsg, ConnectionState, DeviceInfo, Frame,
+    Health, ServerMsg, SessionInfo, UiEvent, PROTOCOL_VERSION,
 };

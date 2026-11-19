@@ -202,7 +202,9 @@ impl Inbound {
             ServerMsg::Skipped { seq, next } => {
                 Some(self.advance(seq, next).unwrap_or(InboundAction::Skipped))
             }
-            ServerMsg::Attached { .. }
+            ServerMsg::Hello { .. }
+            | ServerMsg::Ack { .. }
+            | ServerMsg::Attached { .. }
             | ServerMsg::Status { .. }
             | ServerMsg::Device { .. }
             | ServerMsg::Sessions { .. }

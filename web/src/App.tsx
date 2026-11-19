@@ -82,6 +82,19 @@ function HomeMain({ store }: { store: Store }) {
   );
 }
 
+/** 协议版本不一致：连接层已停止收发，哪一边旧了就升级哪一边。 */
+function VersionBlock({ store, problem }: { store: Store; problem: { server: number | null; client: number } }) {
+  const serverOld = problem.server == null || problem.server < problem.client;
+  return (
+    <section className="version-block">
+      <Icon name="alert" size={28} />
+      <h2>{serverOld ? "服务器版本过旧，请升级服务器上的 hubd" : "客户端版本过旧，请升级 cchub"}</h2>
+      <p>协议版本：服务器 {problem.server ?? "未知"}，客户端 {problem.client}。版本对不上时已停止收发，避免消息丢失或错乱。</p>
+      <button type="button" className="btn solid" onClick={() => store.openSettings()}>打开连接设置</button>
+    </section>
+  );
+}
+
 /** 图标栏的视图。以后加插件、定时任务：各加一项（会话栏内容 + 主区域内容）。 */
 const VIEWS: ViewDef[] = [
   { id: "home", label: "新会话", icon: "home", side: SessionsPane, main: HomeMain, activate: (store) => store.goHome() },
@@ -210,7 +223,7 @@ export function App({ store }: { store: Store }) {
         <Resizer sizing={SIDE_SIZING} target="prev" label="调整会话栏宽度" />
         {floating && store.sideFloatOpen ? <div className="side-scrim" onMouseDown={() => store.closeSideFloat()} /> : null}
         <main className="main">
-          <Main store={store} />
+          {store.versionProblem ? <VersionBlock store={store} problem={store.versionProblem} /> : <Main store={store} />}
         </main>
       </div>
       {store.showSettings ? <ConnectDialog store={store} /> : null}

@@ -142,7 +142,10 @@ export function AskCard(props: Props) {
   return (
     <>
       {ask.kind === "plan" ? <Plan {...props} /> : ask.kind === "question" ? <Questions {...props} /> : <Approval {...props} />}
-      {ask.sent ? <div className="sent"><Icon name="up" size={12} />已发送，等它继续</div> : null}
+      {ask.expired ? <div className="sent failed"><Icon name="alert" size={12} />已失效：进程已结束</div> : null}
+      {ask.sent && !ask.expired ? <div className="sent"><Icon name="up" size={12} />已发送，等它继续</div> : null}
+      {ask.sent && ask.reply ? <div className="sent">你回复：{ask.reply}</div> : null}
+      {ask.error ? <div className="sent failed"><Icon name="alert" size={12} />没有发出：{ask.error}</div> : null}
     </>
   );
 }

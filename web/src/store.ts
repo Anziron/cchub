@@ -1,3 +1,4 @@
+import type { AckError } from "./generated/AckError";
 import type { ConnectionState } from "./generated/ConnectionState";
 import type { SessionInfo } from "./generated/SessionInfo";
 import type { UiEvent } from "./generated/UiEvent";
@@ -15,7 +16,10 @@ import {
   apply,
   cancelInsertLine,
   denyLine,
+  ackReason,
   failSending,
+  failUser,
+  markDelivered,
   mergeRateLimits,
   initializeLine,
   interruptLine,
@@ -32,6 +36,7 @@ import {
   setModelLine,
   stopTaskLine,
   userLine,
+  userState,
   type Ask,
   type ModelOption,
   type RateLimits,
@@ -54,7 +59,7 @@ export interface Session {
   thread: Thread;
   /** 这个项目的 `/` 命令。不同项目的技能不同。 */
   commands?: SlashCommand[];
-  /** 进程没在运行时选的模型：写进 FIFO 会丢，等下次启动时在用户消息之前补发。 */
+  /** 进程没在运行时选的模型：写进 FIFO 会丢，等下次启动时带在 `--model` 上。 */
   pendingModel?: string;
   /** 已关闭：不在侧边栏显示，用 `/resume` 找回。 */
   archived: boolean;
@@ -106,6 +111,12 @@ function loadModels(): ModelOption[] {
   const saved = loadJson<ModelOption[]>(MODELS_KEY, []);
   return Array.isArray(saved) && saved.length ? saved : FALLBACK_MODELS;
 }
+
+/** 回执结果：hubd 说的原因，`send` 是消息根本没发到 hubd（连接层报错）。 */
+type AckResult = AckError | "send";
+
+/** 新会话页选“默认”就不带 `--model`，让 CLI 自己选。 */
+const startModel = (model?: string): string | undefined => (model && model !== "default" ? model : undefined);
 
 export interface BrowseState {
   device: string | null;
@@ -164,6 +175,8 @@ export class Store {
   /** 草稿被界面以外的逻辑改写（排队消息放回输入框）时加一，输入框据此重读。 */
   draftRev = 0;
   version = 0;
+  /** 协议版本不一致时连接层已停止收发，界面整个主区域换成阻断页，握手成功后清掉。 */
+  versionProblem: { server: number | null; client: number } | null = null;
 
   private listeners = new Set<() => void>();
   private frame = 0;
@@ -172,6 +185,8 @@ export class Store {
   private initRequests = new Map<string, Session>();
   /** 撤回插入消息的请求：request_id → 会话、消息 uuid、撤回后是否放回输入框。 */
   private cancelRequests = new Map<string, { session: Session; id: string; edit: boolean }>();
+  /** 等 hubd 回执的 input：id → 回执到了怎么办。回执只处理一次。 */
+  private acks = new Map<string, (error: AckResult | null) => void>();
   private initialized = new Set<string>();
   private drafts = loadJson<Record<string, string>>(DRAFTS_KEY, {});
   private attached: Record<string, DropRef[]> = {};
@@ -215,6 +230,11 @@ export class Store {
     this.changed();
   }
 
+  openSettings(): void {
+    this.showSettings = true;
+    this.changed();
+  }
+
   toggleSettings(): void {
     this.showSettings = !this.showSettings;
     this.changed();
@@ -223,6 +243,7 @@ export class Store {
   private setConnection(state: ConnectionState): void {
     this.connection = state;
     if (state === "connected") {
+      this.versionProblem = null;
       this.showSettings = false;
       this.refresh();
       this.requestDevices();
@@ -237,6 +258,30 @@ export class Store {
     return this.hub.send(msg).catch((error) => {
       this.error = String(error);
       this.changed();
+    });
+  }
+
+  /**
+   * 所有 input 都从这里发：带 id，hubd 按 id 回执（`ack` 事件）。`onAck` 收到回执结果，
+   * `null` 是已写给进程；连接层发送失败时收到 `send`，错误已记进 `this.error`。
+   */
+  private input(session: Session, line: string, onAck?: (error: AckResult | null) => void, id: string = crypto.randomUUID()): void {
+    if (onAck) this.acks.set(id, onAck);
+    this.hub.send({ type: "input", session: session.id, id, line }).catch((error) => {
+      this.acks.delete(id);
+      this.error = String(error);
+      onAck?.("send");
+      this.changed();
+    });
+  }
+
+  /** 控制消息：失败就在顶部提示；连接层发送失败时 `input` 已经提示过。 */
+  private control(session: Session, line: string, label: string): void {
+    this.input(session, line, (error) => {
+      if (error && error !== "send") {
+        this.error = `${label}失败：${ackReason(error)}`;
+        this.changed();
+      }
     });
   }
 
@@ -267,6 +312,17 @@ export class Store {
       case "connection":
         this.setConnection(event.state);
         break;
+      case "version":
+        this.versionProblem = { server: event.server, client: event.client };
+        break;
+      case "ack": {
+        const onAck = this.acks.get(event.id);
+        // 断线重连后补发的回执可能重复，没人等就忽略。
+        if (!onAck) return false;
+        this.acks.delete(event.id);
+        onAck(event.error);
+        break;
+      }
       case "sessions":
         this.memAvailableMb = event.mem_available_mb;
         for (const info of event.sessions) {
@@ -295,7 +351,7 @@ export class Store {
           this.takeCancel(event.payload);
           this.takeLimits(session, event.seq, event.payload);
           const interrupting = session.thread.interruptAt != null;
-          apply(session.thread, event.payload);
+          apply(session.thread, event.payload, this.models);
           this.stampTasks(session, event.payload);
           // 不改 active：事件到达不能影响侧边栏顺序。
           session.updated = Math.floor(Date.now() / 1000);
@@ -434,7 +490,12 @@ export class Store {
     this.initialized.add(session.id);
     const requestId = `cchub-init-${crypto.randomUUID()}`;
     this.initRequests.set(requestId, session);
-    void this.send({ type: "input", session: session.id, line: initializeLine(requestId) });
+    this.input(session, initializeLine(requestId), (error) => {
+      // 失败可以静默，下次再问。
+      if (!error) return;
+      this.initRequests.delete(requestId);
+      this.initialized.delete(session.id);
+    });
   }
 
   draft(key: string): string {
@@ -693,11 +754,43 @@ export class Store {
     const id = crypto.randomUUID();
     addSending(session.thread, id, text);
     session.updated = session.active = Math.floor(Date.now() / 1000);
-    void this.hub.send({ type: "input", session: session.id, line: userLine(text, id) }).catch((error) => {
-      failSending(session.thread);
-      this.error = String(error);
+    this.deliverUser(session, id, userLine(text, id), false);
+  }
+
+  /**
+   * 发用户消息并处理回执：成功 → 已送达；进程不在 → 自动恢复进程后用同一个 id 重发一次（`retried`）；
+   * 其他失败标成 failed 并给出原因。启动失败时 `error` 事件已经标过 failed，不再重试。
+   */
+  private deliverUser(session: Session, id: string, line: string, retried: boolean): void {
+    this.input(session, line, (error) => {
+      const thread = session.thread;
+      if (!error) markDelivered(thread, id);
+      else if (userState(thread, id) === "failed") return;
+      else if (error === "not_running" && !retried && userState(thread, id) === "sending") {
+        this.resume(session);
+        this.deliverUser(session, id, line, true);
+      } else {
+        failUser(thread, id, error === "send" ? undefined : ackReason(error));
+        if (error === "stalled" || error === "invalid") this.error = ackReason(error);
+      }
       this.changed();
+    }, id);
+  }
+
+  /** 进程已回收：用记录的 ID 恢复。模型带在 `--model` 上，强度每次恢复都要重发。 */
+  private resume(session: Session): void {
+    void this.send({
+      type: "start",
+      session: session.id,
+      resume: session.thread.claudeSessionId,
+      model: startModel(session.pendingModel),
     });
+    session.pendingModel = undefined;
+    session.running = true;
+    this.initialized.delete(session.id);
+    this.requestInit(session);
+    // 强度只存在进程的 flag 设置层里，`--resume` 后会回到默认。
+    if (session.thread.effort) this.control(session, setEffortLine(session.thread.effort), "设置推理强度");
   }
 
   newSession(text: string, cwd: string, model: string, effort?: string): void {
@@ -712,17 +805,14 @@ export class Store {
     this.showDrawer = false;
     // 第一条消息交给 hubd 在后台概括成标题（`/` 命令不概括），几秒后刷新列表拿到。
     const prompt = text.trimStart().startsWith("/") ? undefined : text;
-    void this.send({ type: "start", session: id, cwd, title, prompt });
+    void this.send({ type: "start", session: id, cwd, title, prompt, model: startModel(model) });
     if (prompt) for (const delay of TITLE_REFRESH_MS) setTimeout(() => this.refresh(), delay);
     void this.send({ type: "attach", session: id, after: 0 });
     this.requestInit(session);
-    if (model) {
-      session.thread.model = model;
-      void this.send({ type: "input", session: id, line: setModelLine(model) });
-    }
+    if (model) session.thread.model = model;
     if (effort) {
       session.thread.effort = effort;
-      void this.send({ type: "input", session: id, line: setEffortLine(effort) });
+      this.control(session, setEffortLine(effort), "设置推理强度");
     }
     this.sendUser(session, text);
     this.refresh();
@@ -734,23 +824,8 @@ export class Store {
       this.openResume();
       return;
     }
-    if (!session.running) {
-      // 进程已回收：用记录的 ID 恢复，消息写进 FIFO 等它读。
-      void this.send({
-        type: "start",
-        session: session.id,
-        resume: session.thread.claudeSessionId,
-      });
-      session.running = true;
-      this.initialized.delete(session.id);
-      this.requestInit(session);
-      if (session.pendingModel) {
-        void this.send({ type: "input", session: session.id, line: setModelLine(session.pendingModel) });
-        session.pendingModel = undefined;
-      }
-      // 强度只存在进程的 flag 设置层里，`--resume` 后会回到默认，每次恢复都要重发。
-      if (session.thread.effort) void this.send({ type: "input", session: session.id, line: setEffortLine(session.thread.effort) });
-    }
+    // 进程已回收：先恢复，消息写进 FIFO 等它读。
+    if (!session.running) this.resume(session);
     // `/model` 回复成功但不生效，要走控制消息。其他命令都原样交给 CLI。
     const model = /^\/model\s+(\S+)\s*$/.exec(text)?.[1];
     if (model) {
@@ -770,12 +845,16 @@ export class Store {
     if (mode === "insert" && !text.trimStart().startsWith("/")) {
       session.queue = [...session.queue, { id, text, mode }];
       session.updated = session.active = Math.floor(Date.now() / 1000);
-      void this.hub.send({ type: "input", session: session.id, line: userLine(text, id) }).catch((error) => {
-        // 没写进去：转成等结束，留着让用户改或删。
-        session.queue = session.queue.map((q) => (q.id === id ? { ...q, mode: "wait" } : q));
-        this.error = String(error);
+      this.input(session, userLine(text, id), (error) => {
+        if (!error) {
+          session.queue = session.queue.map((q) => (q.id === id ? { ...q, delivered: true } : q));
+        } else {
+          // 没写进去：转成等结束，留着让用户改或删。进程不在时 status 事件会把队列放回输入框，不另外提示。
+          session.queue = session.queue.map((q) => (q.id === id ? { ...q, mode: "wait" } : q));
+          if (error === "stalled" || error === "invalid") this.error = ackReason(error);
+        }
         this.changed();
-      });
+      }, id);
     } else {
       session.queue = [...session.queue, { id, text, mode: "wait" }];
     }
@@ -813,10 +892,11 @@ export class Store {
     const requestId = `cchub-cancel-${crypto.randomUUID()}`;
     this.cancelRequests.set(requestId, { session, id, edit });
     session.queue = session.queue.map((q) => (q === item ? { ...q, cancelling: true } : q));
-    void this.hub.send({ type: "input", session: session.id, line: cancelInsertLine(requestId, id) }).catch((error) => {
+    this.input(session, cancelInsertLine(requestId, id), (error) => {
+      if (!error) return;
       this.cancelRequests.delete(requestId);
       session.queue = session.queue.map((q) => (q.id === id ? { ...q, cancelling: false } : q));
-      this.error = String(error);
+      if (error !== "send") this.error = `撤回失败：${ackReason(error)}`;
       this.changed();
     });
     this.changed();
@@ -843,24 +923,40 @@ export class Store {
     this.sendText(session, text);
   }
 
-  private reply(session: Session, ask: Ask, line: string): void {
+  /**
+   * 回复卡片。进程已不在：卡片标成失效，不能重试；卡住 / 不合法：解锁并写上原因，可以再点。
+   * `shown` 是用户在输入框里打的原文，卡片结束后显示；没发出去时放回输入框。
+   */
+  private reply(session: Session, ask: Ask, line: string, shown?: string): void {
     ask.sent = true;
-    void this.send({ type: "input", session: session.id, line });
+    ask.error = undefined;
+    ask.reply = shown;
+    this.input(session, line, (error) => {
+      if (!error) return;
+      if (error === "not_running") ask.expired = true;
+      else {
+        ask.sent = false;
+        ask.reply = undefined;
+        ask.error = error === "send" ? "没有发出，可以再试一次" : ackReason(error);
+        if (shown) this.appendDraft(session.id, shown);
+      }
+      this.changed();
+    });
     this.changed();
   }
 
   allow = (session: Session, ask: Ask, always = false) =>
     this.reply(session, ask, allowLine(ask, always));
 
-  deny = (session: Session, ask: Ask, message: string) =>
-    this.reply(session, ask, denyLine(ask, message));
+  deny = (session: Session, ask: Ask, message: string, shown?: string) =>
+    this.reply(session, ask, denyLine(ask, message), shown);
 
   answer = (session: Session, ask: Ask, answers: Record<string, string>) =>
     this.reply(session, ask, answerLine(ask, answers));
 
   interrupt(session: Session): void {
     markInterrupting(session.thread);
-    void this.send({ type: "input", session: session.id, line: interruptLine() });
+    this.control(session, interruptLine(), "中断");
     this.changed();
   }
 
@@ -971,7 +1067,7 @@ export class Store {
   }
 
   stopTask(session: Session, taskId: string): void {
-    void this.send({ type: "input", session: session.id, line: stopTaskLine(taskId) });
+    this.control(session, stopTaskLine(taskId), "停止任务");
   }
 
   requestUsage(): void {
@@ -996,15 +1092,28 @@ export class Store {
   setModel(session: Session, model: string): void {
     // `/model` 回复成功但不生效，必须走控制消息；它不进会话记录，模型看不到。
     // 进程已回收时写进 FIFO 会丢，先记下，下次发消息恢复进程时补发。
-    if (session.running) void this.send({ type: "input", session: session.id, line: setModelLine(model) });
-    else session.pendingModel = model;
+    const previous = session.thread.model;
+    // 一轮进行中：这一轮剩下的回复仍是旧模型，下个 `system/init` 才生效。
+    if (session.thread.phase !== "idle") session.thread.nextModel = model;
+    if (session.running) {
+      this.input(session, setModelLine(model), (error) => {
+        if (!error) return;
+        session.thread.nextModel = undefined;
+        if (error === "not_running") session.pendingModel = model;
+        else {
+          session.thread.model = previous;
+          if (error !== "send") this.error = `切换模型失败：${ackReason(error)}`;
+        }
+        this.changed();
+      });
+    } else session.pendingModel = model;
     session.thread.model = model;
     this.changed();
   }
 
   /** `undefined` 恢复模型默认。进程没在运行时只记下，恢复时重发。 */
   setEffort(session: Session, effort?: string): void {
-    if (session.running) void this.send({ type: "input", session: session.id, line: setEffortLine(effort ?? null) });
+    if (session.running) this.control(session, setEffortLine(effort ?? null), "设置推理强度");
     session.thread.effort = effort;
     this.changed();
   }
