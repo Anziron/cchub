@@ -18,8 +18,52 @@ const PROBE_EVERY: Duration = Duration::from_secs(30);
 const PROBE_RETRY: Duration = Duration::from_secs(5);
 const FAILURES_BEFORE_OFFLINE: u32 = 2;
 
+/// `/mnt` 下的项目目录必须被某个 `/mnt/...` 挂载覆盖：sshfs 掉了以后挂载点只是本地的空目录，
+/// 查新文件名同样答复“不存在”，会被当成在线。`mounts` 是 `/proc/self/mounts` 的内容，读它不经网络。
+fn covered_by_mount(mounts: &str, dir: &Path) -> bool {
+    let devices = Path::new("/mnt");
+    if !dir.starts_with(devices) {
+        return true;
+    }
+    mounts
+        .lines()
+        .filter_map(|line| line.split(' ').nth(1))
+        .map(unescape_mount_point)
+        .any(|point| {
+            let point = Path::new(&point);
+            point != devices && point.starts_with(devices) && dir.starts_with(point)
+        })
+}
+
+/// `/proc/self/mounts` 把空格、制表符、换行和反斜杠写成三位八进制转义（如 `\040`）。
+fn unescape_mount_point(field: &str) -> String {
+    let bytes = field.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let octal = bytes
+            .get(i + 1..i + 4)
+            .filter(|digits| bytes[i] == b'\\' && digits.iter().all(|d| (b'0'..=b'7').contains(d)));
+        match octal {
+            Some(digits) => {
+                out.push(digits.iter().fold(0u32, |n, d| n * 8 + u32::from(d - b'0')) as u8);
+                i += 4;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// 在线则返回 `true`。查一个新的、不存在的文件名，请求一定会到达设备。
 fn probe_main(dir: &Path) -> bool {
+    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    if !covered_by_mount(&mounts, dir) {
+        return false;
+    }
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_nanos());
@@ -171,6 +215,23 @@ impl DeviceMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_dirs_must_be_covered_by_a_mount() {
+        let mounts = "/dev/vda1 / ext4 rw 0 0\n\
+            host:/d/proj /mnt/pc/d/proj fuse.sshfs rw 0 0\n\
+            host:/x /mnt/pc/my\\040docs fuse.sshfs rw 0 0\n";
+        assert!(covered_by_mount(mounts, Path::new("/mnt/pc/d/proj")));
+        assert!(covered_by_mount(mounts, Path::new("/mnt/pc/d/proj/sub")));
+        assert!(covered_by_mount(mounts, Path::new("/mnt/pc/my docs/a")));
+        // sshfs 掉了以后挂载点只是本地的空目录，查新文件名同样答复“不存在”。
+        assert!(!covered_by_mount(mounts, Path::new("/mnt/pc/d/other")));
+        assert!(!covered_by_mount(mounts, Path::new("/mnt/pc/d/proj2")));
+        assert!(
+            covered_by_mount(mounts, Path::new("/root/work")),
+            "服务器本机目录"
+        );
+    }
 
     #[test]
     fn one_failure_is_not_offline_and_one_success_recovers() {

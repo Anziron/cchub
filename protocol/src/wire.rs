@@ -117,6 +117,12 @@ pub enum ServerMsg {
         #[cfg_attr(feature = "ts", ts(type = "number"))]
         next: u64,
     },
+    /// 订阅已开始，先于这次订阅的任何事件发出。偏移小于 `live` 的是订阅时日志里已有的内容
+    /// （历史回放），从 `live` 起是实时写入的。客户端据此判断审批是不是早就处理过了。
+    Attached {
+        #[cfg_attr(feature = "ts", ts(type = "number"))]
+        live: u64,
+    },
     /// 项目目录所在设备是否在线。
     Device {
         online: bool,

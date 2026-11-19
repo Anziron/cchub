@@ -1,10 +1,13 @@
 //! 桌面端的连接逻辑，放在 Rust 进程里，窗口关闭后也能维持连接和通知。
 //! 不依赖 Tauri，所以 Linux 上也能测试。
 
+mod attention;
+
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::time::Duration;
 
+use attention::Attention;
 use cchub_protocol::{
     is_user_message, with_deflate_query, ClientMsg, ConnectionState, EventClass, Frame,
     FrameDecoder, Inbound, InboundAction, ServerMsg, SessionInfo, UiEvent,
@@ -29,28 +32,29 @@ impl HubClient {
         url: String,
         backoff: Duration,
         on_event: impl Fn(UiEvent) + Send + Sync + 'static,
+        on_attention: impl Fn(&str, u64, EventClass) + Send + Sync + 'static,
     ) -> (Self, impl Future<Output = ()> + Send) {
         let (tx, rx) = mpsc::unbounded_channel();
         (
             Self { tx },
-            run(url, backoff, None, rx, on_event, |_, _, _| {}),
+            run(url, backoff, None, rx, on_event, on_attention),
         )
     }
 
     /// 界面可能不在时用：定时取会话列表，自己订阅运行中的会话，这样别处新开的会话也能发通知。
-    /// `hubd` 不主动推送列表，所以只能取。这些事件交给 `on_watched`，不进界面；
+    /// `hubd` 不主动推送列表，所以只能取。这些事件不进界面，只用来提醒；
     /// 界面之后自己订阅时会从头重放，不会显示两遍。
     pub fn watching(
         url: String,
         backoff: Duration,
         interval: Duration,
         on_event: impl Fn(UiEvent) + Send + Sync + 'static,
-        on_watched: impl Fn(&str, u64, EventClass) + Send + Sync + 'static,
+        on_attention: impl Fn(&str, u64, EventClass) + Send + Sync + 'static,
     ) -> (Self, impl Future<Output = ()> + Send) {
         let (tx, rx) = mpsc::unbounded_channel();
         (
             Self { tx },
-            run(url, backoff, Some(interval), rx, on_event, on_watched),
+            run(url, backoff, Some(interval), rx, on_event, on_attention),
         )
     }
 
@@ -70,7 +74,7 @@ async fn run(
     watch: Option<Duration>,
     mut rx: mpsc::UnboundedReceiver<ClientMsg>,
     on_event: impl Fn(UiEvent),
-    on_watched: impl Fn(&str, u64, EventClass),
+    on_attention: impl Fn(&str, u64, EventClass),
 ) {
     let mut state = State {
         watch,
@@ -89,7 +93,7 @@ async fn run(
             on_event(UiEvent::Connection {
                 state: ConnectionState::Connected,
             });
-            match connected(socket, &mut rx, &mut state, &on_event, &on_watched).await {
+            match connected(socket, &mut rx, &mut state, &on_event, &on_attention).await {
                 Ended::Closed => return,
                 Ended::Lost => {}
             }
@@ -119,7 +123,7 @@ async fn connected<S>(
     rx: &mut mpsc::UnboundedReceiver<ClientMsg>,
     state: &mut State,
     on_event: &impl Fn(UiEvent),
-    on_watched: &impl Fn(&str, u64, EventClass),
+    on_attention: &impl Fn(&str, u64, EventClass),
 ) -> Ended
 where
     S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
@@ -182,7 +186,7 @@ where
                 };
                 for text in texts {
                     let Ok(frame) = serde_json::from_str::<Frame>(&text) else { continue };
-                    for msg in state.on_frame(frame, on_event, on_watched) {
+                    for msg in state.on_frame(frame, on_event, on_attention) {
                         if send(&mut socket, &msg).await.is_err() {
                             state.pending.push(msg);
                             return Ended::Lost;
@@ -206,6 +210,8 @@ struct State {
     watch: Option<Duration>,
     /// 自动订阅、界面还没要的会话。
     watched: HashSet<String>,
+    /// 每个会话哪些需要人决定的事件该提醒。
+    attention: HashMap<String, Attention>,
 }
 
 impl State {
@@ -218,6 +224,7 @@ impl State {
             // 窗口重建后要从头重放，所以这里按调用方给的偏移重置。
             // 重连和缺口补齐走 `send`，不经过这里，用的是 `Inbound` 记录的偏移。
             self.sessions.insert(session.clone(), Inbound::new(*after));
+            self.attention.insert(session.clone(), Attention::default());
             self.watched.remove(session);
         }
         if let ClientMsg::Input { session, line } = &msg {
@@ -234,7 +241,7 @@ impl State {
         &mut self,
         frame: Frame,
         on_event: &impl Fn(UiEvent),
-        on_watched: &impl Fn(&str, u64, EventClass),
+        on_attention: &impl Fn(&str, u64, EventClass),
     ) -> Vec<ClientMsg> {
         let session = frame.session;
         match frame.msg {
@@ -320,22 +327,40 @@ impl State {
                 on_event(UiEvent::Error { session, message });
                 Vec::new()
             }
+            ServerMsg::Attached { live } => {
+                let Some(id) = session else {
+                    return Vec::new();
+                };
+                if let Some(expected) = self.sessions.get(&id).map(Inbound::expected) {
+                    let alerts = self.attention.entry(id.clone()).or_default();
+                    for (seq, class) in alerts.attached(live, expected) {
+                        on_attention(&id, seq, class);
+                    }
+                }
+                Vec::new()
+            }
             msg => {
                 let Some(id) = session else {
                     return Vec::new();
                 };
-                let Some(action) = self.sessions.get_mut(&id).and_then(|i| i.on_message(msg))
-                else {
+                let Some(inbound) = self.sessions.get_mut(&id) else {
                     return Vec::new();
                 };
+                let Some(action) = inbound.on_message(msg) else {
+                    return Vec::new();
+                };
+                let expected = inbound.expected();
+                let alerts = self.attention.entry(id.clone()).or_default();
                 match action {
                     InboundAction::Apply {
                         class,
                         seq,
                         payload,
                     } => {
+                        for (seq, class) in alerts.event(seq, class, &payload, expected) {
+                            on_attention(&id, seq, class);
+                        }
                         if self.watched.contains(&id) {
-                            on_watched(&id, seq, class);
                             return Vec::new();
                         }
                         on_event(UiEvent::Event {
@@ -349,7 +374,13 @@ impl State {
                     InboundAction::Resync { after } => {
                         vec![ClientMsg::Attach { session: id, after }]
                     }
-                    InboundAction::Skipped | InboundAction::Duplicate => Vec::new(),
+                    InboundAction::Skipped => {
+                        for (seq, class) in alerts.advanced(expected) {
+                            on_attention(&id, seq, class);
+                        }
+                        Vec::new()
+                    }
+                    InboundAction::Duplicate => Vec::new(),
                 }
             }
         }
@@ -366,6 +397,8 @@ impl State {
         for session in sessions {
             if session.running && !self.sessions.contains_key(&session.id) {
                 self.sessions.insert(session.id.clone(), Inbound::new(0));
+                self.attention
+                    .insert(session.id.clone(), Attention::default());
                 self.watched.insert(session.id.clone());
                 attach.push(ClientMsg::Attach {
                     session: session.id.clone(),
@@ -409,14 +442,22 @@ mod tests {
     use tokio_tungstenite::accept_async;
 
     fn event(seq: u64, next: u64, payload: &str) -> String {
+        framed(seq, next, EventClass::Durable, payload)
+    }
+
+    fn framed(seq: u64, next: u64, class: EventClass, payload: &str) -> String {
+        frame(ServerMsg::Event {
+            seq,
+            next,
+            class,
+            payload: payload.into(),
+        })
+    }
+
+    fn frame(msg: ServerMsg) -> String {
         serde_json::to_string(&Frame {
             session: Some("s1".into()),
-            msg: ServerMsg::Event {
-                seq,
-                next,
-                class: EventClass::Durable,
-                payload: payload.into(),
-            },
+            msg,
         })
         .unwrap()
     }
@@ -452,9 +493,14 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
         let (events_tx, mut events) = mpsc::unbounded_channel();
-        let (client, task) = HubClient::new(url, Duration::from_millis(10), move |event| {
-            let _ = events_tx.send(event);
-        });
+        let (client, task) = HubClient::new(
+            url,
+            Duration::from_millis(10),
+            move |event| {
+                let _ = events_tx.send(event);
+            },
+            |_, _, _| {},
+        );
         tokio::spawn(task);
         let attach = ClientMsg::Attach {
             session: "s1".into(),
@@ -482,6 +528,50 @@ mod tests {
         assert_eq!(next_payload().await, "first");
     }
 
+    /// 第一次打开一个会话：历史里已经回答过的审批不提醒，之后实时来的照常提醒。
+    #[tokio::test]
+    async fn alerts_only_for_open_or_live_approvals() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (alerts_tx, mut alerts) = mpsc::unbounded_channel();
+        let (client, task) = HubClient::new(
+            url,
+            Duration::from_millis(10),
+            |_| {},
+            move |session, seq, class| {
+                let _ = alerts_tx.send((session.to_string(), seq, class));
+            },
+        );
+        tokio::spawn(task);
+        client
+            .send(ClientMsg::Attach {
+                session: "s1".into(),
+                after: 0,
+            })
+            .unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut server = accept_async(stream).await.unwrap();
+        next_client_msg(&mut server).await;
+
+        let ask = r#"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_use_id":"t1"}}"#;
+        let answered =
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]}}"#;
+        for message in [
+            frame(ServerMsg::Attached { live: 30 }),
+            framed(0, 10, EventClass::Approval, ask),
+            event(10, 20, answered),
+            event(20, 30, r#"{"type":"result"}"#),
+            framed(30, 40, EventClass::Question, "{}"),
+        ] {
+            server.send(Message::Text(message.into())).await.unwrap();
+        }
+        let received = tokio::time::timeout(Duration::from_secs(5), alerts.recv());
+        assert_eq!(
+            received.await.unwrap().unwrap(),
+            ("s1".to_string(), 30, EventClass::Question)
+        );
+    }
+
     #[tokio::test]
     #[allow(clippy::result_large_err)] // 握手回调的签名由 tungstenite 规定
     async fn requests_deflate_and_decodes_binary_batches() {
@@ -491,9 +581,14 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}/ws", listener.local_addr().unwrap());
         let (events_tx, mut events) = mpsc::unbounded_channel();
-        let (client, task) = HubClient::new(url, Duration::from_millis(10), move |event| {
-            let _ = events_tx.send(event);
-        });
+        let (client, task) = HubClient::new(
+            url,
+            Duration::from_millis(10),
+            move |event| {
+                let _ = events_tx.send(event);
+            },
+            |_, _, _| {},
+        );
         tokio::spawn(task);
         client
             .send(ClientMsg::Attach {
@@ -583,10 +678,12 @@ mod tests {
 
         let first = Message::Text(event(0, 5, "first").into());
         server.send(first.clone()).await.unwrap();
+        let ask = framed(5, 9, EventClass::Approval, "{}");
+        server.send(Message::Text(ask.into())).await.unwrap();
         let received = tokio::time::timeout(Duration::from_secs(5), watched.recv());
         assert_eq!(
             received.await.unwrap().unwrap(),
-            ("s1".to_string(), 0, EventClass::Durable)
+            ("s1".to_string(), 5, EventClass::Approval)
         );
 
         // 同一个会话不重复订阅：下一条客户端消息是界面发的，不是自动的。
@@ -603,7 +700,6 @@ mod tests {
                 break;
             }
         }
-        assert!(watched.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -611,9 +707,14 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
         let (events_tx, mut events) = mpsc::unbounded_channel();
-        let (client, task) = HubClient::new(url, Duration::from_millis(10), move |event| {
-            let _ = events_tx.send(event);
-        });
+        let (client, task) = HubClient::new(
+            url,
+            Duration::from_millis(10),
+            move |event| {
+                let _ = events_tx.send(event);
+            },
+            |_, _, _| {},
+        );
         tokio::spawn(task);
         client
             .send(ClientMsg::Attach {
@@ -669,9 +770,14 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
         let (events_tx, mut events) = mpsc::unbounded_channel();
-        let (client, task) = HubClient::new(url, Duration::from_millis(10), move |event| {
-            let _ = events_tx.send(event);
-        });
+        let (client, task) = HubClient::new(
+            url,
+            Duration::from_millis(10),
+            move |event| {
+                let _ = events_tx.send(event);
+            },
+            |_, _, _| {},
+        );
         tokio::spawn(task);
         client
             .send(ClientMsg::Attach {

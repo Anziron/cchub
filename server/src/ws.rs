@@ -41,6 +41,8 @@ pub struct App {
     pub sessions: Sessions,
     pub host: Box<dyn ProcessHost>,
     pub allowed_users: Vec<String>,
+    /// 监听地址。监听 Tailscale 地址时，来自本机的连接一律拒绝（见 `auth`）。
+    pub listen: SocketAddr,
     pub min_available_mb: u64,
     pub workspace_cmd: String,
     pub title_cmd: String,
@@ -68,9 +70,10 @@ pub async fn upgrade(
         return StatusCode::FORBIDDEN.into_response();
     }
     let users = app.clone();
-    let allowed = spawn_blocking(move || auth::is_allowed(peer, &users.allowed_users))
-        .await
-        .unwrap_or(false);
+    let allowed =
+        spawn_blocking(move || auth::is_allowed(peer, users.listen, &users.allowed_users))
+            .await
+            .unwrap_or(false);
     if !allowed {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -565,6 +568,12 @@ async fn follow(app: Arc<App>, session: String, after: u64, tx: mpsc::Sender<Fra
             return;
         }
     };
+
+    // 先于这次订阅的任何事件：告诉客户端历史到哪里为止。
+    let attached = ServerMsg::Attached { live: replay_until };
+    if tx.send(frame(attached)).await.is_err() {
+        return;
+    }
 
     let mut splitter = LineSplitter::new(after);
     let mut queue = Outbound::new(OutboundLimits::default());

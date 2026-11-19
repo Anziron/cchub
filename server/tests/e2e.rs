@@ -554,6 +554,56 @@ async fn failed_start_keeps_cwd_and_drops_input() {
     let _ = hubd.kill().await;
 }
 
+/// 订阅先回 `Attached`，`live` 是订阅时日志的长度：之前的是历史，之后的是实时。
+#[tokio::test]
+async fn attach_reports_where_history_ends() {
+    let temp = Temp::new("attached");
+    let (_hubd, addr) = spawn_hubd(&temp.0).await;
+    let mut socket = connect(&addr).await;
+    let start = ClientMsg::Start {
+        session: "s1".into(),
+        title: None,
+        prompt: None,
+        resume: None,
+        cwd: None,
+    };
+    send(&mut socket, start).await;
+    let attach = ClientMsg::Attach {
+        session: "s1".into(),
+        after: 0,
+    };
+    send(&mut socket, attach.clone()).await;
+    let user = r#"{"type":"user","message":{"role":"user","content":"go"}}"#;
+    let input = ClientMsg::Input {
+        session: "s1".into(),
+        line: user.into(),
+    };
+    send(&mut socket, input).await;
+    let (mut inbound, mut applied) = (Inbound::new(0), Vec::new());
+    // 停在审批上：fake-claude 等回复，日志不再增长。
+    read_until(&mut socket, &mut inbound, &mut applied, |line| {
+        classify(line) == EventClass::Approval
+    })
+    .await;
+    let length = std::fs::metadata(temp.0.join("s1/out")).unwrap().len();
+
+    let mut other = connect(&addr).await;
+    send(&mut other, attach).await;
+    let first = async {
+        loop {
+            if let Message::Text(text) = other.next().await.unwrap().unwrap() {
+                let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
+                if frame.session.as_deref() == Some("s1") {
+                    return frame.msg;
+                }
+            }
+        }
+    };
+    let first = tokio::time::timeout(TIMEOUT, first).await.unwrap();
+    assert_eq!(first, ServerMsg::Attached { live: length });
+    assert!(length >= inbound.expected());
+}
+
 #[tokio::test]
 async fn attach_beyond_log_end_reports_error() {
     let temp = Temp::new("beyond");

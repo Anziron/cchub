@@ -112,36 +112,26 @@ fn hub_connect(app: AppHandle, hub: State<'_, Hub>, url: String) -> ConnectionSt
     #[cfg(desktop)]
     let handle = app.clone();
     let state = hub.state.clone();
-    let notifications = Arc::new(Notifications::load(&app));
-    #[cfg(mobile)]
-    let on_watched = {
-        let notifications = notifications.clone();
+    // 提醒哪些事件由连接逻辑决定（历史里已经处理过的审批不提醒），这里只按水位去重后弹通知。
+    let on_attention = {
+        let notifications = Notifications::load(&app);
+        #[cfg(desktop)]
+        let handle = app.clone();
         move |session: &str, seq: u64, class: EventClass| {
             if notifications.observe(session, seq, class) {
+                #[cfg(desktop)]
+                desktop::notify(&handle, class);
+                #[cfg(mobile)]
                 mobile::notify(session, class);
             }
         }
     };
     let batcher = Mutex::new(spawn_batcher(app.clone()));
     let on_event = move |event: UiEvent| {
-        match &event {
-            UiEvent::Connection { state: current } => {
-                *lock(&state) = Some(*current);
-                #[cfg(mobile)]
-                mobile::connection_changed(*current);
-            }
-            UiEvent::Event {
-                session,
-                class,
-                seq,
-                ..
-            } if notifications.observe(session, *seq, *class) => {
-                #[cfg(desktop)]
-                desktop::notify(&handle, *class);
-                #[cfg(mobile)]
-                mobile::notify(session, *class);
-            }
-            _ => {}
+        if let UiEvent::Connection { state: current } = &event {
+            *lock(&state) = Some(*current);
+            #[cfg(mobile)]
+            mobile::connection_changed(*current);
         }
         #[cfg(mobile)]
         if !mobile::ui_alive() {
@@ -156,14 +146,14 @@ fn hub_connect(app: AppHandle, hub: State<'_, Hub>, url: String) -> ConnectionSt
         let _ = lock(&batcher).send(event);
     };
     #[cfg(desktop)]
-    let (client, task) = HubClient::new(url.clone(), INITIAL_BACKOFF, on_event);
+    let (client, task) = HubClient::new(url.clone(), INITIAL_BACKOFF, on_event, on_attention);
     #[cfg(mobile)]
     let (client, task) = HubClient::watching(
         url.clone(),
         INITIAL_BACKOFF,
         mobile::WATCH_INTERVAL,
         on_event,
-        on_watched,
+        on_attention,
     );
     tauri::async_runtime::spawn(task);
     // 换掉旧句柄后，旧的连接循环会自己结束。
