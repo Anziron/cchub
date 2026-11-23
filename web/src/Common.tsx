@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useMenuFit } from "./Dialogs";
 import { Icon } from "./Icon";
-import { firstAsk, isSending, isWaiting, runningTasks, type Ask } from "./model";
+import { commandStatus, firstAsk, isSending, isWaiting, runningTasks, type Ask } from "./model";
 import { pageVisible } from "./platform";
 import { formatAgo } from "./sidebar";
 import type { Session, Store } from "./store";
@@ -37,11 +37,7 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds / 60) % 60}m`;
 }
 
-export function formatTokens(tokens: number): string {
-  if (tokens < 1000) return String(tokens);
-  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
-  return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-}
+export { formatTokens } from "./model";
 
 /** 只含用时文本的小组件：每秒刷新只重渲染它自己，窗口看不见时不刷新（失去焦点照常刷新）。 */
 export function Elapsed({ since }: { since: number }) {
@@ -67,6 +63,8 @@ export function Ago({ time }: { time: number }) {
 export function sessionStatus(session: Session): string {
   const thread = session.thread;
   const ask = firstAsk(thread);
+  const command = ask ? null : commandStatus(thread);
+  if (command) return command;
   if (!ask && isSending(thread)) return session.deviceOnline ? (thread.claudeSessionId ? "正在发送" : "正在启动会话") : "设备离线，恢复后发送";
   if (ask) return ask.kind === "plan" ? "等待你确认方案" : ask.kind === "question" ? "等待你回答" : "等待你批准";
   if (thread.phase === "thinking") return "思考中";

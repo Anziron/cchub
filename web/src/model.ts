@@ -104,6 +104,10 @@ export interface Thread {
   tasks: Map<string, Task>;
   /** 上下文已用 token 和上限。 */
   context?: { used: number; max?: number };
+  /** CLI 正在压缩上下文（`system/status: compacting`），压缩可能要几分钟，期间没有别的事件。 */
+  compacting?: boolean;
+  /** 压缩失败或被中断：CLI 接着发一条 `<synthetic>` 回复说明原因，要显示成提示。 */
+  compactFailed?: boolean;
   lastTurn?: { durationMs?: number; outputTokens?: number };
   /** `system/init` 带的权限模式（default、acceptEdits、plan、auto、bypassPermissions）。 */
   permissionMode?: string;
@@ -265,6 +269,8 @@ function localNotice(content: string): string | null {
   if (command && !command.startsWith("/model")) return null;
   // 切换提示由 `set_model` 的成功回复生成（见 `onControlResponse`），回显不再显示。
   if (/^Set model to /.test(output)) return "";
+  // `/compact` 完成的提示由 `compact_boundary` 生成（带前后 token 数），这句英文不再显示。
+  if (/^Compacted\b/.test(output)) return "";
   return output;
 }
 
@@ -532,11 +538,21 @@ function onUser(thread: Thread, event: Json): void {
   }
 }
 
+/** 本地命令（`/context`、`/compact` 等）的输出是 CLI 合成的回复，不是模型说的。 */
+const SYNTHETIC_MODEL = "<synthetic>";
+
 function onAssistant(thread: Thread, event: Json): void {
   const message: Json = event.message ?? {};
   const parent: string | null = event.parent_tool_use_id ?? null;
-  // 一轮中切了模型：CLI 这一轮不回显新模型，回复里还是旧的，不能改回去。
-  if (message.model && !parent && !thread.nextModel) thread.model = message.model;
+  if (thread.compactFailed && !parent && message.model === SYNTHETIC_MODEL) {
+    thread.compactFailed = false;
+    const reason = ((message.content ?? []) as Json[]).map((block) => (block.type === "text" ? block.text : "")).join("").trim();
+    const text = !reason || /^Compaction canceled\.?$/.test(reason) ? "已取消压缩，上下文没有变" : `压缩失败：${reason}`;
+    pushNotice(thread, `compact:${message.id ?? event.uuid ?? thread.items.length}`, text);
+    return;
+  }
+  // 一轮中切了模型：CLI 这一轮不回显新模型，回复里还是旧的，不能改回去。合成回复不是模型，不算。
+  if (message.model && message.model !== SYNTHETIC_MODEL && !parent && !thread.nextModel) thread.model = message.model;
   if (typeof event.effort === "string" && !parent && !event.isSidechain) thread.effort = event.effort;
   const usage: Json | undefined = message.usage;
   if (usage && !parent) {
@@ -626,6 +642,8 @@ function onStreamEvent(thread: Thread, outer: Json): void {
 function onResult(thread: Thread, event: Json): void {
   clearAsks(thread);
   thread.interruptAt = undefined;
+  thread.compacting = false;
+  thread.compactFailed = false;
   const models: Json = event.modelUsage ?? {};
   const max = (models[thread.model ?? ""] ?? (Object.values(models)[0] as Json | undefined))?.contextWindow;
   if (thread.context && max) thread.context.max = max;
@@ -696,6 +714,31 @@ function onInitModel(thread: Thread, actual: unknown, models: ModelOption[]): vo
   thread.items.push({ kind: "notice", id: `nm${thread.items.length}`, text: `所选模型 ${name} 没有生效，当前是 ${modelDisplayName(actual)}` });
 }
 
+/** `system/status`：只关心压缩的开始和结束，其他状态（`requesting` 等）不影响显示。 */
+function onStatus(thread: Thread, event: Json): void {
+  if (event.status === "compacting") {
+    thread.compacting = true;
+    return;
+  }
+  if (!thread.compacting) return;
+  thread.compacting = false;
+  if (event.compact_result === "failed") thread.compactFailed = true;
+}
+
+/** 压缩完成（手动 `/compact` 或自动压缩）：一行前后 token 数，上下文用量换成压缩后的。 */
+function onCompactBoundary(thread: Thread, event: Json): void {
+  thread.compacting = false;
+  const meta: Json = event.compact_metadata ?? {};
+  const head = meta.trigger === "auto" ? "自动压缩了上下文" : "已压缩上下文";
+  const sizes = typeof meta.pre_tokens === "number" && typeof meta.post_tokens === "number"
+    ? `：${formatTokens(meta.pre_tokens)} → ${formatTokens(meta.post_tokens)} tokens`
+    : "";
+  const seconds = typeof meta.duration_ms === "number" ? meta.duration_ms / 1000 : 0;
+  const took = !seconds ? "" : seconds < 60 ? `，用时 ${seconds.toFixed(1)} 秒` : `，用时 ${Math.floor(seconds / 60)} 分 ${Math.round(seconds % 60)} 秒`;
+  pushNotice(thread, event.uuid ?? `compact${thread.items.length}`, head + sizes + took);
+  if (typeof meta.post_tokens === "number") thread.context = { ...thread.context, used: meta.post_tokens };
+}
+
 /** 安全机制拦下回复后 CLI 自动换了模型。 */
 function onModelFallback(thread: Thread, event: Json): void {
   const from = typeof event.original_model === "string" ? modelDisplayName(event.original_model) : "原模型";
@@ -711,11 +754,23 @@ function onModelFallback(thread: Thread, event: Json): void {
 function onControlResponse(thread: Thread, event: Json): void {
   const response: Json = event.response ?? {};
   const requestId: unknown = response.request_id;
-  if (typeof requestId !== "string" || !requestId.startsWith(SET_MODEL_PREFIX)) return;
+  if (typeof requestId !== "string") return;
+  // 强度：CLI 的回复不带值，按 request_id 里记的值恢复（刷新后重放 `out` 也能拿回来）。
+  const effort = EFFORT_REQUEST.exec(requestId)?.[1];
+  if (effort) {
+    if (response.subtype === "success") thread.effort = effort === "default" ? undefined : effort;
+    return;
+  }
+  if (!requestId.startsWith(SET_MODEL_PREFIX)) return;
   const id = `model:${requestId}`;
   if (response.subtype === "success") {
     const model = response.response?.model;
     const name = typeof model === "string" ? modelDisplayName(model) : "新模型";
+    // 回复带完整模型 ID：空闲时立即生效；一轮进行中到下一个 `system/init` 才生效。
+    if (typeof model === "string") {
+      if (thread.phase === "idle") thread.model = model;
+      else thread.nextModel = model;
+    }
     pushNotice(thread, id, `已切换模型：${name}${thread.phase !== "idle" ? "（下一轮生效）" : ""}`);
   } else if (response.subtype === "error") {
     pushNotice(thread, id, `切换模型失败：${response.error ?? "未知错误"}`);
@@ -738,6 +793,10 @@ export function apply(thread: Thread, line: string, models: ModelOption[] = []):
         onInitModel(thread, event.model, models);
         thread.cwd = event.cwd;
         if (typeof event.permissionMode === "string") thread.permissionMode = event.permissionMode;
+      } else if (event.subtype === "status") {
+        onStatus(thread, event);
+      } else if (event.subtype === "compact_boundary") {
+        onCompactBoundary(thread, event);
       } else if (event.subtype === "model_refusal_fallback") {
         onModelFallback(thread, event);
       } else if (["task_started", "task_updated", "task_notification", "background_tasks_changed"].includes(event.subtype)) {
@@ -761,6 +820,11 @@ export function apply(thread: Thread, line: string, models: ModelOption[] = []):
       break;
     case "control_cancel_request":
       removeAsk(thread, event.request_id);
+      break;
+    case "conversation_reset":
+      // `/clear`：CLI 换了新的会话 ID（随后的 `system/init` 带上），旧对话留在界面上可回看。
+      pushNotice(thread, event.uuid ?? `reset${thread.items.length}`, "已清空上下文，下面是新的对话");
+      thread.context = undefined;
       break;
     case "result":
       onResult(thread, event);
@@ -802,6 +866,22 @@ export function addSending(thread: Thread, id: string, text: string): void {
 /** 还没被 CLI 回传确认的消息（发送中或已送达）。 */
 export const isSending = (thread: Thread): boolean =>
   thread.items.some((item) => item.kind === "user" && (item.state === "sending" || item.state === "delivered"));
+
+/**
+ * 执行 `/` 命令时状态行显示什么。压缩期间、以及本地命令回显之前（回显排在输出后面，`/insights`
+ * 这类可能跑好几分钟）都没有别的事件，不能显示成“正在发送”或“思考中”。没有要说的返回 null。
+ */
+export function commandStatus(thread: Thread): string | null {
+  if (thread.compacting) return "正在压缩上下文，大会话可能要几分钟";
+  const pending = thread.items.find((item) => item.kind === "user" && item.state === "delivered" && item.text.trimStart().startsWith("/"));
+  return pending?.kind === "user" ? `正在执行 ${pending.text.trim().split(/\s+/)[0]}` : null;
+}
+
+export function formatTokens(tokens: number): string {
+  if (tokens < 1000) return String(tokens);
+  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
+  return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+}
 
 /** hubd 回执成功：写给进程了，等 CLI 回传。只有还在“发送中”的才变，回传早于回执时不倒退。 */
 export function markDelivered(thread: Thread, id: string): void {
@@ -962,8 +1042,8 @@ export function answerLine(ask: Ask, answers: Record<string, string>): string {
   });
 }
 
-function controlRequest(request: Json): string {
-  const id = `cchub-${request.subtype}-${Date.now()}`;
+function controlRequest(request: Json, tag: string = request.subtype): string {
+  const id = `cchub-${tag}-${Date.now()}`;
   return JSON.stringify({ type: "control_request", request_id: id, request });
 }
 
@@ -981,8 +1061,13 @@ export function cancelInsertLine(requestId: string, uuid: string): string {
 }
 const SET_MODEL_PREFIX = "cchub-set_model-";
 export const setModelLine = (model: string) => controlRequest({ subtype: "set_model", model });
-/** 设推理强度：合并进 CLI 的 flag 设置层，只在当前进程有效，`--resume` 后要重发。`null` 恢复默认。 */
-export const setEffortLine = (effort: string | null) => controlRequest({ subtype: "apply_flag_settings", settings: { effortLevel: effort } });
+/**
+ * 设推理强度：合并进 CLI 的 flag 设置层，只在当前进程有效，`--resume` 后要重发。`null` 恢复默认。
+ * CLI 的回复只有 request_id，所以把值记在 request_id 里（`cchub-effort-high-<时间>`），重放 `out` 时据此恢复。
+ */
+export const setEffortLine = (effort: string | null) =>
+  controlRequest({ subtype: "apply_flag_settings", settings: { effortLevel: effort } }, `effort-${effort ?? "default"}`);
+const EFFORT_REQUEST = /^cchub-effort-([a-z]+)-\d+$/;
 
 // 本会话经工具写入的改动，按文件汇总（不含 Bash 等命令产生的改动）。
 

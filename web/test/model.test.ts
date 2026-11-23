@@ -25,6 +25,7 @@ import {
   onProcessExit,
   matchCommands,
   cachedLimits,
+  commandStatus,
   limitRank,
   mergeRateLimits,
   parseCommands,
@@ -757,4 +758,93 @@ test("网页搜索结果：取出每次搜索的链接，其余文字保留；�
   assert.equal(parsed.rest, "Web search results for query: \"x\"\n\n\n摘要见 https://a.example");
   assert.equal(searchLinks("没有链接"), null);
   assert.equal(searchLinks("Links: [坏的"), null);
+});
+
+const notices = (thread: Thread) => thread.items.flatMap((item) => (item.kind === "notice" ? [item.text] : []));
+const COMMAND_UUID = "00000000-0000-4000-8000-000000000001";
+
+test("/compact：压缩中状态行说在压缩（不是“正在发送”或“思考中”），完成后一行前后 token 数，用量更新", () => {
+  const thread = newThread();
+  const all = lines("compact");
+  const rest = replayUntil(thread, all, (line) => line.includes('"type": "result"'));
+  addSending(thread, COMMAND_UUID, "/compact");
+  markDelivered(thread, COMMAND_UUID);
+  const after = replayUntil(thread, rest, (line) => line.includes('"status": "compacting"'));
+  assert.match(commandStatus(thread) ?? "", /正在压缩上下文/);
+  replayUntil(thread, after, (line) => line.includes('"type": "result"'));
+  assert.equal(commandStatus(thread), null);
+  assert.equal(thread.phase, "idle");
+  assert.deepEqual(notices(thread), ["已压缩上下文：29k → 7.5k tokens，用时 6.6 秒"]);
+  assert.equal(thread.context?.used, 7541);
+  assert.deepEqual(thread.items.filter((item) => item.kind === "user").map((item) => item.kind === "user" && item.text), ["Reply with just: ok", "/compact"]);
+});
+
+test("/compact 中途中断：显示成提示，不当作模型回复", () => {
+  const thread = newThread();
+  for (const line of lines("compact-cancel")) apply(thread, line);
+  assert.ok(!texts(thread).some((text) => text.includes("Compaction canceled")));
+  assert.deepEqual(notices(thread), ["已取消压缩，上下文没有变"]);
+  assert.equal(commandStatus(thread), null);
+  assert.equal(thread.phase, "idle");
+});
+
+test("/clear：插一条“已清空上下文”，用量清零，换成新的会话 ID", () => {
+  const thread = newThread();
+  const all = lines("clear");
+  const rest = replayUntil(thread, all, (line) => line.includes('"type": "result"'));
+  const before = thread.claudeSessionId;
+  assert.ok(thread.context?.used);
+  replayUntil(thread, rest, (line) => line.includes('"type": "result"'));
+  assert.deepEqual(notices(thread), ["已清空上下文，下面是新的对话"]);
+  assert.equal(thread.context, undefined);
+  assert.notEqual(thread.claudeSessionId, before);
+});
+
+test("本地命令回显之前：状态行说正在执行这个命令，还没写进进程时仍是发送中", () => {
+  const thread = newThread();
+  addSending(thread, "u1", "/insights");
+  assert.equal(commandStatus(thread), null);
+  markDelivered(thread, "u1");
+  assert.equal(commandStatus(thread), "正在执行 /insights");
+  const plain = newThread();
+  addSending(plain, "u2", "你好");
+  markDelivered(plain, "u2");
+  assert.equal(commandStatus(plain), null);
+});
+
+test("本地命令的合成回复（model 是 <synthetic>）不改当前模型", () => {
+  const thread = newThread();
+  apply(thread, JSON.stringify({ type: "system", subtype: "init", session_id: "s", model: "claude-opus-5-5", cwd: "/work" }));
+  apply(thread, JSON.stringify({ type: "assistant", message: { id: "m", model: "<synthetic>", content: [{ type: "text", text: "## Context Usage" }] } }));
+  assert.equal(thread.model, "claude-opus-5-5");
+  assert.deepEqual(texts(thread), ["## Context Usage"]);
+});
+
+test("刷新后重放 out：set_model 的成功回复就是当前模型，一轮进行中则下一轮生效", () => {
+  const init = ev({ type: "system", subtype: "init", session_id: "s", model: "claude-haiku-5-5", cwd: "/work" });
+  const ok = ev({ type: "control_response", response: { subtype: "success", request_id: "cchub-set_model-1", response: { model: "claude-sonnet-5-5" } } });
+  const idle = newThread();
+  apply(idle, init);
+  apply(idle, ok);
+  assert.equal(idle.model, "claude-sonnet-5-5");
+  const busy = newThread();
+  apply(busy, init);
+  addSending(busy, "u1", "干活");
+  apply(busy, ok);
+  assert.equal(busy.nextModel, "claude-sonnet-5-5");
+  apply(busy, ev({ type: "system", subtype: "init", session_id: "s", model: "claude-sonnet-5-5", cwd: "/work" }));
+  assert.equal(busy.model, "claude-sonnet-5-5");
+  assert.equal(busy.items.filter((item) => item.kind === "notice" && item.text.includes("没有生效")).length, 0);
+});
+
+test("刷新后重放 out：强度从 apply_flag_settings 的成功回复恢复（CLI 的回复不带强度，靠 request_id）", () => {
+  const thread = newThread();
+  const reply = (line: string, subtype = "success") =>
+    ev({ type: "control_response", response: { subtype, request_id: JSON.parse(line).request_id } });
+  apply(thread, reply(setEffortLine("high")));
+  assert.equal(thread.effort, "high");
+  apply(thread, reply(setEffortLine("max"), "error"));
+  assert.equal(thread.effort, "high");
+  apply(thread, reply(setEffortLine(null)));
+  assert.equal(thread.effort, undefined);
 });

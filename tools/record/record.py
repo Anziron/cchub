@@ -3,6 +3,8 @@
 
 用法：python3 -I tools/record/record.py <场景> <输出目录>
 会调用真实 claude，消耗少量额度。运行结束后删除这次产生的会话记录。
+多步场景（`steps`）按顺序发消息，每条等到 `result` 再发下一条；消息带固定 uuid，
+加 `--replay-user-messages`，和 hubd 启动的进程一样会回显。
 """
 import glob
 import json
@@ -41,11 +43,29 @@ SCENARIOS = {
         "setup": ("long.py", "import time\ntime.sleep(59)\n"),
         "interrupt_after": 4,
     },
+    "compact": {
+        "mode": "default",
+        "steps": [{"prompt": "Reply with just: ok"}, {"prompt": "/compact"}, {"prompt": "Reply with just: ok2"}],
+    },
+    "compact-cancel": {
+        "mode": "default",
+        "steps": [
+            {"prompt": "Write about 300 words about rivers."},
+            {"prompt": "/compact ", "interrupt_after_send": 1.5},
+        ],
+    },
+    "clear": {
+        "mode": "default",
+        "steps": [{"prompt": "Reply with just: ok"}, {"prompt": "/clear"}, {"prompt": "Reply with just: ok2"}],
+    },
 }
 DROP_LISTS = {
     "tools", "mcp_servers", "slash_commands", "terminal_slash_commands", "agents",
     "skills", "plugins", "capabilities", "memory_paths", "additional_directories",
 }
+# 压缩摘要会转述用户的全局 CLAUDE.md 等私人配置，正文只留第一段。
+SUMMARY_PREFIX = "This session is being continued from a previous conversation"
+SUMMARY_PLACEHOLDER = SUMMARY_PREFIX + " that ran out of context.\n\nSummary:\n(omitted in recording)"
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 TAILNET_IP = re.compile(r"\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
 
@@ -64,8 +84,10 @@ def scrub(value, cwd):
         for key, item in value.items():
             if key in DROP_LISTS and isinstance(item, (list, dict)):
                 out[key] = [] if isinstance(item, list) else {}
-            elif key == "signature":
+            elif key in ("signature", "messaging_socket_path"):
                 out[key] = ""
+            elif key == "content" and isinstance(item, str) and item.startswith(SUMMARY_PREFIX):
+                out[key] = SUMMARY_PLACEHOLDER
             else:
                 out[key] = scrub(item, cwd)
         return out
@@ -108,40 +130,53 @@ def main():
         with open(f"{work}/{scenario['setup'][0]}", "w") as f:
             f.write(scenario["setup"][1])
     command = CMD.format(mode=scenario["mode"])
+    steps = scenario.get("steps")
+    if steps:
+        command += " --replay-user-messages"
+    else:
+        steps = [{"prompt": scenario["prompt"]}]
     proc = subprocess.Popen(
         ["sh", "-c", f"exec {command} <>{fifo} >>{out} 2>>{work}/err"], cwd=work,
     )
     send = lambda obj: os.write(hold, (json.dumps(obj) + "\n").encode())
-    send({"type": "user", "message": {"role": "user", "content": scenario["prompt"]}})
 
     pos, buf, stream, session = 0, "", [], None
-    deadline = time.time() + 150
-    done = False
-    interrupt_at = None
-    while not done and time.time() < deadline:
-        with open(out, encoding="utf-8") as f:
-            f.seek(pos)
-            buf += f.read()
-            pos = f.tell()
-        *lines, buf = buf.split("\n")
-        for line in filter(str.strip, lines):
-            event = json.loads(line)
-            stream.append(event)
-            session = session or event.get("session_id")
-            if event.get("type") == "control_request":
-                send(reply(event))
-                if "interrupt_after" in scenario:
-                    interrupt_at = time.time() + scenario["interrupt_after"]
-            done = done or event.get("type") == "result"
-        if interrupt_at and time.time() >= interrupt_at:
-            interrupt_at = None
-            send({"type": "control_request", "request_id": "interrupt-1",
-                  "request": {"subtype": "interrupt"}})
-        time.sleep(0.1)
+    for index, step in enumerate(steps):
+        message = {"type": "user", "message": {"role": "user", "content": step["prompt"]}}
+        if scenario.get("steps"):
+            message["uuid"] = f"00000000-0000-4000-8000-{index:012d}"
+        send(message)
+        deadline = time.time() + 150
+        done = False
+        interrupt_at = None
+        if "interrupt_after_send" in step:
+            interrupt_at = time.time() + step["interrupt_after_send"]
+        while not done and time.time() < deadline:
+            with open(out, encoding="utf-8") as f:
+                f.seek(pos)
+                buf += f.read()
+                pos = f.tell()
+            *lines, buf = buf.split("\n")
+            for line in filter(str.strip, lines):
+                event = json.loads(line)
+                stream.append(event)
+                session = session or event.get("session_id")
+                if event.get("type") == "control_request":
+                    send(reply(event))
+                    if "interrupt_after" in scenario:
+                        interrupt_at = time.time() + scenario["interrupt_after"]
+                done = done or event.get("type") == "result"
+            if interrupt_at and time.time() >= interrupt_at:
+                interrupt_at = None
+                send({"type": "control_request", "request_id": "interrupt-1",
+                      "request": {"subtype": "interrupt"}})
+            time.sleep(0.1)
+        if not done:
+            proc.terminate()
+            proc.wait()
+            sys.exit("录制超时：没有等到 result")
     proc.terminate()
     proc.wait()
-    if not done:
-        sys.exit("录制超时：没有等到 result")
 
     found = glob.glob(os.path.expanduser(f"~/.claude/projects/*/{session}.jsonl"))
     if len(found) != 1:
