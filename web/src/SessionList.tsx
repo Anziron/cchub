@@ -89,8 +89,8 @@ function Group({ store, id, label, sub, sessions, collapsed, toggle, withProject
 
 type QuotaWindow = Store["limits"]["fiveHour"];
 
+/** 没有数据时也占一行、显示 “—”，几行额度始终对齐（Fable 额度要等 Fable 回复后才有）。 */
 function QuotaLine({ label, window }: { label: string; window: QuotaWindow }) {
-  if (!window) return null;
   const value = quotaPercent(window);
   return (
     <div className="quota-line">

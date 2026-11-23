@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { CommandMenu, ModelMenu } from "./Dialogs";
-import { Dropdown, Elapsed, formatDuration, formatTokens, Meter, Quota, quotaPercent, sessionStatus } from "./Common";
+import { Dropdown, Elapsed, FABLE_EMPTY, formatDuration, formatTokens, Meter, Quota, quotaPercent, sessionStatus } from "./Common";
 import { Icon } from "./Icon";
 import { firstAsk, matchCommands, runningTasks, turnTokens, type SlashCommand } from "./model";
 import { mentionText, type DropRef } from "./paths";
@@ -122,7 +122,7 @@ function UsageRing({ store, session }: { store: Store; session?: Session }) {
           <div className="menu-title">额度</div>
           <Quota label="5 小时" window={store.limits.fiveHour} />
           <Quota label="本周" window={store.limits.sevenDay} />
-          {store.limits.fable ? <Quota label="Fable" window={store.limits.fable} /> : null}
+          <Quota label="Fable" window={store.limits.fable} empty={FABLE_EMPTY} />
           {session ? (
             <>
               <div className="menu-title">这个会话</div>

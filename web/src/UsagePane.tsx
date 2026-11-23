@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
-import { formatTokens, quotaPercent, resetText, resetWhen } from "./Common";
+import { FABLE_EMPTY, formatTokens, quotaPercent, resetText, resetWhen } from "./Common";
 import { Icon } from "./Icon";
 import type { Store } from "./store";
 import { addDays, dailySeries, heatmap, hourlySeries, localDate, modelLabel, OTHER, quotaPace, summarize, type Bar, type TokenParts, type UsageDay, type UsageMetric, type UsageRange, type UsageSummary } from "./usage";
@@ -40,7 +40,7 @@ function ago(seconds: number): string {
 }
 
 /** 额度卡片里的一行：名称、重置时间、百分比，下面是按用量变色的进度条。用到 80% 以上变成强调色。 */
-function QuotaRow({ label, window, length }: { label: string; window?: { utilization: number; resetsAt: number }; length: number }) {
+function QuotaRow({ label, window, length, empty = "下一轮回复后更新" }: { label: string; window?: { utilization: number; resetsAt: number }; length: number; empty?: string }) {
   const value = quotaPercent(window);
   const pct = value == null ? null : Math.round(value * 100);
   const level = value == null ? "" : value >= 0.8 ? " high" : value >= 0.5 ? " mid" : "";
@@ -48,7 +48,7 @@ function QuotaRow({ label, window, length }: { label: string; window?: { utiliza
   const pace = window && value != null ? quotaPace(window, length, now) : null;
   const warn = pace?.runsOut == null ? "" : pace.runsOut <= now ? "已用完" : `照这个速度约${runsOutText(pace.runsOut, now)}用完`;
   return (
-    <div className={`quota-row${level}`} title={`${resetText(window)}${pace ? "\n竖线：按时间算现在应该用到的位置" : ""}`}>
+    <div className={`quota-row${level}`} title={`${resetText(window, empty)}${pace ? "\n竖线：按时间算现在应该用到的位置" : ""}`}>
       <span className="quota-label">{label}</span>
       <span className="quota-bar">
         <i style={{ width: `${Math.min(100, pct ?? 0)}%` }} />
@@ -56,7 +56,7 @@ function QuotaRow({ label, window, length }: { label: string; window?: { utiliza
       </span>
       <b>{pct == null ? "—" : `${pct}%`}</b>
       <span className="quota-reset">
-        {window ? resetWhen(window) : "下一轮回复后更新"}
+        {window ? resetWhen(window) : empty}
         {warn ? <em> · {warn}</em> : null}
       </span>
     </div>
@@ -373,7 +373,7 @@ export function UsagePane({ store }: { store: Store }) {
       <div className="quota-card">
         <QuotaRow label="5 小时" window={fiveHour} length={5 * 3600} />
         <QuotaRow label="本周" window={sevenDay} length={7 * 86400} />
-        {fable ? <QuotaRow label="Fable" window={fable} length={7 * 86400} /> : null}
+        <QuotaRow label="Fable" window={fable} length={7 * 86400} empty={FABLE_EMPTY} />
       </div>
 
       <div className="usage-head">

@@ -104,15 +104,18 @@ export function resetWhen(window?: QuotaWindow): string | undefined {
   return `${when}重置`;
 }
 
-export function resetText(window?: QuotaWindow): string {
-  if (!window) return "还没有数据，下一轮回复后更新";
+/** Fable 额度只跟着 Fable 的回复下发，别的模型回复不带。 */
+export const FABLE_EMPTY = "用 Fable 回复后更新";
+
+export function resetText(window?: QuotaWindow, empty = "下一轮回复后更新"): string {
+  if (!window) return `还没有数据，${empty}`;
   return `${resetWhen(window)}（${new Date(window.resetsAt * 1000).toLocaleString()}）`;
 }
 
-export function Quota({ label, window }: { label: string; window?: QuotaWindow }) {
+export function Quota({ label, window, empty }: { label: string; window?: QuotaWindow; empty?: string }) {
   const value = quotaPercent(window);
   return (
-    <div className="stat-row" title={resetText(window)}>
+    <div className="stat-row" title={resetText(window, empty)}>
       <span>{label}</span>
       <Meter value={value} />
       <span className="num">{value != null ? `${Math.round(value * 100)}%` : "—"}</span>
