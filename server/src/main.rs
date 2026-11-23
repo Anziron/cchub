@@ -92,12 +92,12 @@ async fn run(config: config::Config) -> std::io::Result<()> {
         allowed_users: config.allowed_users,
         listen: config.listen,
         min_available_mb: config.min_available_mb,
+        probes: device::Probes::new(&config.workspace_cmd),
         workspace_cmd: config.workspace_cmd,
         title_cmd: config.title_cmd,
         title_memory_mb,
         usage_cmd: config.usage_cmd,
         usage_lock: Default::default(),
-        probes: device::Probes::default(),
         devices_cache: Default::default(),
         input_timeout: config.input_timeout,
     });

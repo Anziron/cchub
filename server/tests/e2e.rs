@@ -519,6 +519,112 @@ async fn reports_device_online_for_project_dir() {
     .await;
 }
 
+/// 老会话的项目目录没挂上（被空闲卸载）：打开会话时 hubd 自己补挂，不等发消息或重选文件夹；
+/// 补挂失败时报错带上挂载脚本说的原因。
+#[tokio::test]
+async fn unmounted_project_is_remounted_when_the_session_is_open() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = Temp::new("remount");
+    let calls = temp.0.join("calls");
+    let script = temp.0.join("cc-workspace");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> {}\necho '挂载失败：测试设备没开机' >&2\nexit 1\n",
+            calls.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let project = temp.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let cmd = format!(
+        "{} {} 1",
+        env!("CARGO_BIN_EXE_fake-claude"),
+        recording_in("approval", "stream.jsonl").display()
+    );
+    let env = [("HUBD_WORKSPACE_CMD", script.to_str().unwrap())];
+    let (mut hubd, addr) = spawn_hubd_env(&temp.0, "direct", &cmd, &env).await;
+    let mut socket = connect(&addr).await;
+    let start = |session: &str, cwd: String| ClientMsg::Start {
+        session: session.into(),
+        title: None,
+        prompt: None,
+        model: None,
+        resume: None,
+        cwd: Some(cwd),
+    };
+
+    // 设备上的目录启动失败：报错里是脚本给的原因，不是笼统的“设备离线”。
+    let unique = format!("/mnt/cchub-e2e-{}", std::process::id());
+    send(&mut socket, start("s2", format!("{unique}/other"))).await;
+    let error = tokio::time::timeout(TIMEOUT, async {
+        loop {
+            if let Message::Text(text) = socket.next().await.unwrap().unwrap() {
+                let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
+                if let ServerMsg::Error { message } = frame.msg {
+                    return message;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(error.contains("挂载失败：测试设备没开机"), "{error}");
+
+    // 会话在本机目录正常启动并打开，之后把它的目录改成没挂上的设备目录，相当于挂载被卸掉。
+    send(&mut socket, start("s1", project.display().to_string())).await;
+    send(
+        &mut socket,
+        ClientMsg::Attach {
+            session: "s1".into(),
+            after: 0,
+        },
+    )
+    .await;
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            if let Message::Text(text) = socket.next().await.unwrap().unwrap() {
+                let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
+                if matches!(frame.msg, ServerMsg::Attached { .. }) {
+                    return;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let unmounted = format!("{unique}/project");
+    std::fs::write(temp.0.join("s1").join("cwd"), &unmounted).unwrap();
+    let expected = format!("ensure {unmounted}");
+    let remounted = tokio::time::timeout(TIMEOUT, async {
+        loop {
+            // 订阅保持着，探测才会继续。
+            while let Ok(Some(_)) =
+                tokio::time::timeout(Duration::from_millis(200), socket.next()).await
+            {}
+            let called = std::fs::read_to_string(&calls).unwrap_or_default();
+            if called.lines().any(|line| line == expected) {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(
+        remounted.is_ok(),
+        "没有补挂：{}",
+        std::fs::read_to_string(&calls).unwrap_or_default()
+    );
+    send(
+        &mut socket,
+        ClientMsg::Stop {
+            session: "s1".into(),
+        },
+    )
+    .await;
+    let _ = hubd.kill().await;
+}
+
 #[tokio::test]
 async fn failed_start_keeps_cwd_and_rejects_input() {
     let temp = Temp::new("failed-start");

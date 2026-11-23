@@ -1,4 +1,4 @@
-//! 探测项目目录所在设备是否在线。
+//! 探测项目目录所在设备是否在线，`/mnt` 下的目录没挂上时自动补挂。
 //!
 //! sshfs 缓存文件属性，查已有文件可能在断网后仍然成功，所以每次查一个新的、不存在的文件名，
 //! 请求一定会到达设备。设备答复“不存在”就说明在线。
@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::watch;
 use tokio::task::{spawn_blocking, JoinHandle};
@@ -17,6 +17,12 @@ const PROBE_EVERY: Duration = Duration::from_secs(30);
 /// 刚失败时缩短间隔，尽快确认是否真的离线。
 const PROBE_RETRY: Duration = Duration::from_secs(5);
 const FAILURES_BEFORE_OFFLINE: u32 = 2;
+/// 补挂失败后依次等这么久再试，之后一直用最后一个。
+const REMOUNT_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(15),
+    Duration::from_secs(60),
+    Duration::from_secs(300),
+];
 
 /// `/mnt` 下的项目目录必须被某个 `/mnt/...` 挂载覆盖：sshfs 掉了以后挂载点只是本地的空目录，
 /// 查新文件名同样答复“不存在”，会被当成在线。`mounts` 是 `/proc/self/mounts` 的内容，读它不经网络。
@@ -117,6 +123,8 @@ pub fn probe(dir: &Path) -> bool {
 #[derive(Default)]
 pub struct Probes {
     shared: Mutex<HashMap<PathBuf, Weak<SharedProbe>>>,
+    /// 工作区命令（`cc-workspace`），探测失败时用它的 `ensure` 补挂；没有就只探测。
+    workspace_cmd: Option<Arc<str>>,
 }
 
 struct SharedProbe {
@@ -152,6 +160,13 @@ impl Subscription {
 }
 
 impl Probes {
+    pub fn new(workspace_cmd: &str) -> Self {
+        Self {
+            shared: Mutex::default(),
+            workspace_cmd: Some(workspace_cmd.into()),
+        }
+    }
+
     /// 必须在 tokio 运行时里调用。
     pub fn subscribe(&self, dir: &Path) -> Subscription {
         let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -160,7 +175,8 @@ impl Probes {
             Some(probe) => probe,
             None => {
                 let (tx, online) = watch::channel(None);
-                let task = tokio::spawn(run_probe(dir.to_path_buf(), tx));
+                let task =
+                    tokio::spawn(run_probe(dir.to_path_buf(), self.workspace_cmd.clone(), tx));
                 let probe = Arc::new(SharedProbe { online, task });
                 shared.insert(dir.to_path_buf(), Arc::downgrade(&probe));
                 probe
@@ -173,17 +189,68 @@ impl Probes {
     }
 }
 
-async fn run_probe(dir: PathBuf, state: watch::Sender<Option<bool>>) {
+async fn probe_async(dir: &Path) -> bool {
+    let target = dir.to_path_buf();
+    spawn_blocking(move || probe(&target))
+        .await
+        .unwrap_or(false)
+}
+
+/// 订阅期间一直探测。`/mnt` 下的目录探测失败时先补挂（被 `cc-mount-gc` 空闲卸载、sshfs 退出、
+/// 第一次挂载超时都会这样），补挂成功立即重探，打开老会话不用重新选择文件夹。
+/// 补挂按 [`Remount`] 退避，设备真的离线时不会一直起挂载脚本。
+async fn run_probe(
+    dir: PathBuf,
+    workspace_cmd: Option<Arc<str>>,
+    state: watch::Sender<Option<bool>>,
+) {
     let mut monitor = DeviceMonitor::default();
+    let mut remount = Remount::default();
     loop {
-        let target = dir.clone();
-        let success = spawn_blocking(move || probe(&target))
-            .await
-            .unwrap_or(false);
+        let mut success = probe_async(&dir).await;
+        if let Some(program) = workspace_cmd.as_ref().filter(|_| !success) {
+            if dir.starts_with("/mnt") && remount.due(Instant::now()) {
+                let (program, target) = (program.clone(), dir.clone());
+                let mounted =
+                    spawn_blocking(move || crate::workspace::ensure(&program, &target).is_ok())
+                        .await
+                        .unwrap_or(false);
+                success = mounted && probe_async(&dir).await;
+                if !success {
+                    remount.failed(Instant::now());
+                }
+            }
+        }
+        if success {
+            remount.reset();
+        }
         if let Some(online) = monitor.observe(success) {
             state.send_replace(Some(online));
         }
         tokio::time::sleep(if success { PROBE_EVERY } else { PROBE_RETRY }).await;
+    }
+}
+
+/// 补挂的退避：第一次失败立即补挂，之后按 [`REMOUNT_BACKOFF`] 间隔重试；探测成功清零。
+#[derive(Debug, Default)]
+struct Remount {
+    failures: usize,
+    next: Option<Instant>,
+}
+
+impl Remount {
+    fn due(&self, now: Instant) -> bool {
+        self.next.is_none_or(|next| now >= next)
+    }
+
+    fn failed(&mut self, now: Instant) {
+        let wait = REMOUNT_BACKOFF[self.failures.min(REMOUNT_BACKOFF.len() - 1)];
+        self.failures += 1;
+        self.next = Some(now + wait);
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
     }
 }
 
@@ -231,6 +298,31 @@ mod tests {
             covered_by_mount(mounts, Path::new("/root/work")),
             "服务器本机目录"
         );
+    }
+
+    #[test]
+    fn remount_backs_off_and_resets_on_success() {
+        let t0 = Instant::now();
+        let mut remount = Remount::default();
+        assert!(remount.due(t0), "第一次探测失败立即补挂");
+        remount.failed(t0);
+        assert!(!remount.due(t0 + Duration::from_secs(14)));
+        assert!(remount.due(t0 + Duration::from_secs(15)));
+        let t1 = t0 + Duration::from_secs(15);
+        remount.failed(t1);
+        assert!(!remount.due(t1 + Duration::from_secs(59)));
+        assert!(remount.due(t1 + Duration::from_secs(60)));
+        let t2 = t1 + Duration::from_secs(60);
+        remount.failed(t2);
+        assert!(remount.due(t2 + Duration::from_secs(300)));
+        let t3 = t2 + Duration::from_secs(300);
+        remount.failed(t3);
+        assert!(
+            !remount.due(t3 + Duration::from_secs(299)),
+            "之后一直是 5 分钟"
+        );
+        remount.reset();
+        assert!(remount.due(t3));
     }
 
     #[test]

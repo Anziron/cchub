@@ -18,7 +18,8 @@ use cchub_protocol::{is_conversation_line, DeviceInfo};
 use crate::runner;
 
 const BROWSE_TIMEOUT: Duration = Duration::from_secs(15);
-const MOUNT_TIMEOUT: Duration = Duration::from_secs(30);
+/// 要长于 `cc-mount` 等锁的 60 秒，再留出 ssh 建连的时间；超时整个进程组一起结束。
+const MOUNT_TIMEOUT: Duration = Duration::from_secs(75);
 /// 查看任务输出只看末尾，日志再大也不占内存。
 const TASK_OUTPUT_TAIL: u64 = 64 * 1024;
 /// 子代理任务的输出文件链接到它的完整记录 `.jsonl`，夹着大量内部记录，单行可达几十 KB：
@@ -91,21 +92,54 @@ fn parse_status(output: &str) -> Vec<DeviceInfo> {
 }
 
 pub fn mount(program: &str, device: &str, path: &str) -> Result<String, String> {
-    let output = run(program, &["mount", device, path], MOUNT_TIMEOUT)
-        .map_err(|_| "挂载失败：设备离线，或这个目录下已有挂载的项目".to_string())?;
-    match output.trim() {
-        "" => Err("挂载命令没有返回路径".to_string()),
-        cwd => Ok(cwd.to_string()),
+    let mut command = Command::new(program);
+    command.args(["mount", device, path]);
+    match runner::run_detailed(command, MOUNT_TIMEOUT) {
+        runner::Outcome::Exited {
+            success: true,
+            stdout,
+            ..
+        } => match String::from_utf8_lossy(&stdout).trim() {
+            "" => Err("挂载命令没有返回路径".to_string()),
+            cwd => Ok(cwd.to_string()),
+        },
+        other => Err(mount_error(
+            &other,
+            "挂载失败：设备离线，或这个目录下已有挂载的项目",
+        )),
     }
 }
 
-/// 启动会话前确认项目目录还挂着，没挂上就补挂。挂载会因服务器重启、sshfs 退出而消失，
-/// 不补的话目录只是个空文件夹，探测也会当成在线，会话就在空目录里启动。
+/// 确认项目目录还挂着，没挂上就补挂。挂载会因空闲卸载、服务器重启、sshfs 退出而消失，
+/// 不补的话目录只是个空文件夹。启动会话前和设备探测发现没挂上时调用。
 pub fn ensure(program: &str, path: &Path) -> Result<(), String> {
     let path = path.to_str().ok_or("项目目录不是 UTF-8")?;
-    run(program, &["ensure", path], MOUNT_TIMEOUT)
-        .map(drop)
-        .map_err(|_| "项目目录没有挂载，补挂失败：设备离线？".to_string())
+    let mut command = Command::new(program);
+    command.args(["ensure", path]);
+    match runner::run_detailed(command, MOUNT_TIMEOUT) {
+        runner::Outcome::Exited { success: true, .. } => Ok(()),
+        other => Err(format!(
+            "项目目录没有挂载，补挂失败：{}",
+            mount_error(&other, "设备离线？")
+        )),
+    }
+}
+
+/// 挂载失败的原因：超时；否则用脚本 stderr 的最后一行（`cc-mount` 会写明原因），没有就用 `fallback`。
+fn mount_error(outcome: &runner::Outcome, fallback: &str) -> String {
+    match outcome {
+        runner::Outcome::TimedOut => format!(
+            "挂载超时（{} 秒），设备响应太慢，可以再试一次",
+            MOUNT_TIMEOUT.as_secs()
+        ),
+        runner::Outcome::Failed => "挂载命令没能启动".to_string(),
+        runner::Outcome::Exited { stderr, .. } => String::from_utf8_lossy(stderr)
+            .lines()
+            .map(str::trim)
+            .rfind(|line| !line.is_empty())
+            .unwrap_or(fallback)
+            .to_string(),
+    }
 }
 
 /// 只放行 CLI 写的后台任务输出，别的路径都不读，这个接口不能变成任意读文件。
@@ -228,6 +262,28 @@ fn parse_listing(output: &str) -> Listing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mount_errors_say_why() {
+        let exited = |stderr: &str| runner::Outcome::Exited {
+            success: false,
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
+        };
+        // 脚本的报错以最后一行为准（前面可能是 sshfs 自己的输出）。
+        let failed =
+            exited("read: Connection reset by peer\n挂载失败：pc 是否开机并连着 Tailscale？\n\n");
+        assert_eq!(
+            mount_error(&failed, "默认"),
+            "挂载失败：pc 是否开机并连着 Tailscale？"
+        );
+        assert_eq!(mount_error(&exited(""), "默认"), "默认");
+        let timeout = mount_error(&runner::Outcome::TimedOut, "默认");
+        assert!(
+            timeout.contains("超时") && timeout.contains("75"),
+            "{timeout}"
+        );
+    }
 
     #[test]
     fn server_device_lists_local_directories_without_the_command() {
