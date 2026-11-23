@@ -20,6 +20,8 @@ import {
   failSending,
   failUser,
   markDelivered,
+  cachedLimits,
+  limitRank,
   mergeRateLimits,
   initializeLine,
   interruptLine,
@@ -54,6 +56,8 @@ export interface Session {
   active: number | null;
   /** 服务器报的日志最后更新时间（Unix 秒），重放时不会变，用来判断额度事件的新旧。 */
   logUpdated: number;
+  /** 最近一次订阅时 hubd 报的日志长度：偏移更小的事件是重放的历史。旧版 hubd 不报。 */
+  live?: number;
   deviceOnline: boolean;
   attached: boolean;
   thread: Thread;
@@ -137,7 +141,7 @@ export class Store {
   showSettings = this.url === "";
   models = loadModels();
   commands = loadJson<SlashCommand[]>(COMMANDS_KEY, []);
-  limits = loadJson<RateLimits>(LIMITS_KEY, {});
+  limits = cachedLimits(loadJson<RateLimits>(LIMITS_KEY, {}));
   /** 右侧窗格：改动、后台任务、待办、方案、会话信息。记在本地，切换会话时保留。 */
   pane: PaneId | null = isNarrow() ? null : storedPane();
   /** 详细档：工具调用逐条展开显示，不合并（Ctrl+O 切换）。 */
@@ -375,6 +379,11 @@ export class Store {
         if (session) session.deviceOnline = event.online;
         break;
       }
+      case "attached": {
+        const session = this.sessions.get(event.session);
+        if (session) session.live = event.live;
+        break;
+      }
       case "browse":
         this.browsesInFlight = Math.max(0, this.browsesInFlight - 1);
         // 连点时只显示最后一次的结果。
@@ -452,7 +461,7 @@ export class Store {
   }
 
   private takeLimits(session: Session, seq: number, line: string): void {
-    const rank = session.running ? Number.MAX_SAFE_INTEGER : session.logUpdated;
+    const rank = limitRank(session.running, session.logUpdated, seq, session.live);
     const next = parseRateLimits(line, { session: session.id, seq, rank });
     if (!next) return;
     this.limits = mergeRateLimits(this.limits, next);

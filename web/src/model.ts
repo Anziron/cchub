@@ -400,6 +400,21 @@ export interface RateLimits {
   fable?: LimitWindow;
 }
 
+/**
+ * 额度事件的新旧等级。运行中会话的实时事件最新；订阅时从头重放的历史（偏移小于 hubd `attached` 给的 `live`）
+ * 和已结束的会话一样按日志更新时间算，否则打开会话时历史里的旧额度会一条条盖掉实时数据，界面来回跳。
+ * 旧版 hubd 不发 `live`，全部按实时处理。
+ */
+export function limitRank(running: boolean, logUpdated: number, seq: number, live?: number): number {
+  return running && (live === undefined || seq >= live) ? Number.MAX_SAFE_INTEGER : logUpdated;
+}
+
+/** 本地缓存读出来的额度去掉来源：上次运行时记下的“运行中”等级不能压住这次的任何数据。 */
+export function cachedLimits(saved: RateLimits): RateLimits {
+  const strip = (window?: LimitWindow) => (window ? { utilization: window.utilization, resetsAt: window.resetsAt } : undefined);
+  return { fiveHour: strip(saved.fiveHour), sevenDay: strip(saved.sevenDay), fable: strip(saved.fable) };
+}
+
 /** 从 `rate_limit_event` 取额度。 */
 export function parseRateLimits(line: string, source?: LimitSource): RateLimits | null {
   if (!line.includes("rate_limit_event")) return null;

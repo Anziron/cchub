@@ -24,6 +24,8 @@ import {
   newThread,
   onProcessExit,
   matchCommands,
+  cachedLimits,
+  limitRank,
   mergeRateLimits,
   parseCommands,
   parseModels,
@@ -332,6 +334,32 @@ test("额度合并：同一窗口官方提前清零也要更新，按来源判�
   assert.equal(mergeRateLimits(ended, parseRateLimits(line(0.4), { session: "c", seq: 5, rank: 1700000000 })!).sevenDay?.utilization, 0.2);
   assert.equal(mergeRateLimits(ended, parseRateLimits(line(0.05), { session: "c", seq: 5, rank: 1700000200 })!).sevenDay?.utilization, 0.05);
   assert.equal(parseRateLimits("{\"type\":\"user\"}"), null);
+});
+
+test("订阅运行中的会话时重放的历史额度，不能盖掉另一个会话的实时额度", () => {
+  const line = (utilization: number) => JSON.stringify({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { seven_day: { utilization, resetsAt: 500 } } } });
+  const event = (session: string, seq: number, utilization: number, running: boolean, logUpdated: number, live?: number) =>
+    parseRateLimits(line(utilization), { session, seq, rank: limitRank(running, logUpdated, seq, live) })!;
+  // 会话 a 正在运行，实时报 30%。
+  let limits = mergeRateLimits({}, event("a", 9000, 0.3, true, 1700000300, 8000));
+  // 打开同样在运行的会话 b：它的历史从头重放（偏移小于订阅时的 live），里面是早先的 10%、20%。
+  limits = mergeRateLimits(limits, event("b", 10, 0.1, true, 1700000200, 5000));
+  limits = mergeRateLimits(limits, event("b", 900, 0.2, true, 1700000200, 5000));
+  assert.equal(limits.sevenDay?.utilization, 0.3, "重放的历史不跳动");
+  // b 之后的实时事件照常采用。
+  limits = mergeRateLimits(limits, event("b", 6000, 0.31, true, 1700000200, 5000));
+  assert.equal(limits.sevenDay?.utilization, 0.31);
+  // 旧版 hubd 不发 live：仍按实时处理。
+  assert.equal(limitRank(true, 1700000200, 10, undefined), Number.MAX_SAFE_INTEGER);
+});
+
+test("本地缓存的额度去掉来源，上次运行时的“运行中”等级压不住这次的数据", () => {
+  const line = JSON.stringify({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { seven_day: { utilization: 0.5, resetsAt: 500 } } } });
+  const saved = JSON.parse(JSON.stringify(parseRateLimits(line, { session: "old", seq: 99, rank: Number.MAX_SAFE_INTEGER })!));
+  const cached = cachedLimits(saved);
+  assert.equal(cached.sevenDay?.utilization, 0.5);
+  const fresh = parseRateLimits(line.replace("0.5", "0.6"), { session: "x", seq: 1, rank: 1700000000 })!;
+  assert.equal(mergeRateLimits(cached, fresh).sevenDay?.utilization, 0.6);
 });
 
 test("Fable 额度来自 seven_day_overage_included，合并时保留", () => {

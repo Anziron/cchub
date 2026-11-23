@@ -253,6 +253,12 @@ pub enum UiEvent {
         session: String,
         online: bool,
     },
+    /// 订阅时日志的长度：偏移更小的事件是重放的历史（界面据此不把历史里的旧额度当成最新）。
+    Attached {
+        session: String,
+        #[cfg_attr(feature = "ts", ts(type = "number"))]
+        live: u64,
+    },
     Sessions {
         sessions: Vec<SessionInfo>,
         #[cfg_attr(feature = "ts", ts(type = "number | null"))]

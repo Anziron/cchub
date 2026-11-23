@@ -403,6 +403,10 @@ impl State {
                 let Some(id) = session else {
                     return Vec::new();
                 };
+                on_event(UiEvent::Attached {
+                    session: id.clone(),
+                    live,
+                });
                 if let Some(expected) = self.sessions.get(&id).map(Inbound::expected) {
                     let alerts = self.attention.entry(id.clone()).or_default();
                     for (seq, class) in alerts.attached(live, expected) {
@@ -788,6 +792,44 @@ mod tests {
             let received = tokio::time::timeout(Duration::from_secs(5), events.recv());
             if let UiEvent::Event { payload, .. } = received.await.unwrap().unwrap() {
                 assert_eq!(payload, "first");
+                break;
+            }
+        }
+    }
+
+    /// 界面靠 `live` 区分重放的历史和实时事件（历史里的旧额度不能当成最新的）。
+    #[tokio::test]
+    async fn forwards_history_boundary_to_the_ui() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (events_tx, mut events) = mpsc::unbounded_channel();
+        let (client, task) = HubClient::new(
+            url,
+            Duration::from_millis(10),
+            move |event| {
+                let _ = events_tx.send(event);
+            },
+            |_, _, _| {},
+        );
+        tokio::spawn(task);
+        client
+            .send(ClientMsg::Attach {
+                session: "s1".into(),
+                after: 0,
+            })
+            .unwrap();
+        let mut server = accept_hub(&listener).await;
+        next_client_msg(&mut server).await;
+        let attached = serde_json::to_string(&Frame {
+            session: Some("s1".into()),
+            msg: ServerMsg::Attached { live: 1234 },
+        })
+        .unwrap();
+        server.send(Message::Text(attached.into())).await.unwrap();
+        loop {
+            let received = tokio::time::timeout(Duration::from_secs(5), events.recv());
+            if let UiEvent::Attached { session, live } = received.await.unwrap().unwrap() {
+                assert_eq!((session.as_str(), live), ("s1", 1234));
                 break;
             }
         }
