@@ -62,6 +62,21 @@ curl -fsSL https://github.com/Anziron/cchub/releases/latest/download/install-ser
 | `ls <设备> [路径]` | 第 1 行当前路径，第 2 行上一级，之后每行一个子目录的完整路径 |
 | `status` | 每行 `设备<Tab>系统<Tab>online 或 offline`，系统可留空 |
 | `mount <设备> <路径>` | 服务器上的路径 |
+| `ensure <服务器上的路径>` | 不用输出；确认这个目录还挂着，没挂上就补挂，成功时退出码为 0。启动会话前和打开会话发现目录不通时调用 |
+
+失败时退出码非 0，stderr 的最后一行会作为原因显示给用户。
+
+### 网络慢
+
+服务器在海外、到设备的延迟高且有丢包时，Linux 默认的 cubic 拥塞控制会把速度压得很低，打开长会话要几十秒。改用 BBR 通常能快一个数量级（实测跨洋线路从约 16KB/s 提到约 300KB/s）：
+
+```bash
+echo tcp_bbr > /etc/modules-load.d/bbr.conf
+echo 'net.ipv4.tcp_congestion_control = bbr' > /etc/sysctl.d/90-bbr.conf
+modprobe tcp_bbr && sysctl -p /etc/sysctl.d/90-bbr.conf
+```
+
+已建立的连接不受影响，客户端重连后生效。
 
 ## 许可证
 
