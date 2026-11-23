@@ -1008,6 +1008,22 @@ export function defaultEffortFor(models: ModelOption[], model: string | undefine
   return effortsFor(findModel(models, model)).some((e) => e.value === saved) ? saved : undefined;
 }
 
+/**
+ * 会话进程不在时选的模型 / 强度：写进 FIFO 会丢，存在本地（刷新、重启不丢），恢复进程时带上。
+ * `effort: null` 表示跟随模型；没有这个字段表示没改过强度。
+ */
+export interface PendingChoice {
+  model?: string;
+  effort?: string | null;
+}
+
+/** 重放 `out` 之后套上还没生效的选择：界面显示用户选的，而不是进程上次用的。 */
+export function applyPending(thread: Thread, pending?: PendingChoice): void {
+  if (!pending) return;
+  if (pending.model) thread.model = pending.model;
+  if (pending.effort !== undefined) thread.effort = pending.effort ?? undefined;
+}
+
 /** 当前模型对应哪一项。`thread.model` 可能是别名，也可能是完整模型 ID。 */
 export function findModel(models: ModelOption[], model?: string): ModelOption | undefined {
   if (!model) return undefined;

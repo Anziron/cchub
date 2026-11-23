@@ -30,6 +30,7 @@ import {
   onProcessExit,
   parseCancelled,
   parseCommands,
+  applyPending,
   defaultEffortFor,
   defaultModelFor,
   parseModels,
@@ -43,6 +44,7 @@ import {
   userState,
   type Ask,
   type ModelOption,
+  type PendingChoice,
   type RateLimits,
   type SlashCommand,
   type Thread,
@@ -65,8 +67,6 @@ export interface Session {
   thread: Thread;
   /** 这个项目的 `/` 命令。不同项目的技能不同。 */
   commands?: SlashCommand[];
-  /** 进程没在运行时选的模型：写进 FIFO 会丢，等下次启动时带在 `--model` 上。 */
-  pendingModel?: string;
   /** 已关闭：不在侧边栏显示，用 `/resume` 找回。 */
   archived: boolean;
   /** 一轮进行中发的消息，见 `queue.ts`。 */
@@ -79,6 +79,8 @@ const CWD_KEY = "cchub.cwd";
 const COMMANDS_KEY = "cchub.commands";
 /** 用户自选的默认模型和强度，每台设备各存一份。 */
 const DEFAULTS_KEY = "cchub.defaults";
+/** 会话进程不在时选的模型 / 强度（按会话 ID），恢复进程时带上，见 `PendingChoice`。 */
+const PENDING_KEY = "cchub.pending";
 const LIMITS_KEY = "cchub.limits";
 const DRAFTS_KEY = "cchub.drafts";
 const TASK_TIMES_KEY = "cchub.taskTimes";
@@ -147,6 +149,7 @@ export class Store {
   commands = loadJson<SlashCommand[]>(COMMANDS_KEY, []);
   /** 用户选的默认模型和强度（可能已不在模型列表里，用 `defaultModel` / `defaultEffort` 取有效值）。 */
   defaults = loadJson<{ model?: string; effort?: string }>(DEFAULTS_KEY, {});
+  private pending = loadJson<Record<string, PendingChoice>>(PENDING_KEY, {});
   limits = cachedLimits(loadJson<RateLimits>(LIMITS_KEY, {}));
   /** 右侧窗格：改动、后台任务、待办、方案、会话信息。记在本地，切换会话时保留。 */
   pane: PaneId | null = isNarrow() ? null : storedPane();
@@ -344,6 +347,7 @@ export class Store {
           session.logUpdated = info.updated ?? session.logUpdated;
           session.archived = info.archived ?? false;
           session.running = info.running;
+          if (info.running) this.flushPending(session);
           // 运行中的都订阅，这样才能知道哪个在等人决定。
           if (info.running || info.id === this.selected) this.attach(session);
         }
@@ -362,6 +366,7 @@ export class Store {
           this.takeLimits(session, event.seq, event.payload);
           const interrupting = session.thread.interruptAt != null;
           apply(session.thread, event.payload, this.models);
+          applyPending(session.thread, this.pending[session.id]);
           this.stampTasks(session, event.payload);
           // 不改 active：事件到达不能影响侧边栏顺序。
           session.updated = Math.floor(Date.now() / 1000);
@@ -373,7 +378,8 @@ export class Store {
         const session = this.sessions.get(event.session);
         if (session) {
           session.running = event.running;
-          if (!event.running) {
+          if (event.running) this.flushPending(session);
+          else {
             onProcessExit(session.thread);
             this.restoreQueue(session);
           }
@@ -792,20 +798,44 @@ export class Store {
     }, id);
   }
 
-  /** 进程已回收：用记录的 ID 恢复。模型带在 `--model` 上，强度每次恢复都要重发。 */
+  /** 进程已回收：用记录的 ID 恢复。进程不在时选的模型带在 `--model` 上，强度每次恢复都要重发。 */
   private resume(session: Session): void {
+    const pending = this.takePending(session.id);
     void this.send({
       type: "start",
       session: session.id,
       resume: session.thread.claudeSessionId,
-      model: startModel(session.pendingModel),
+      model: startModel(pending?.model),
     });
-    session.pendingModel = undefined;
     session.running = true;
     this.initialized.delete(session.id);
     this.requestInit(session);
     // 强度只存在进程的 flag 设置层里，`--resume` 后会回到默认。
-    if (session.thread.effort) this.control(session, setEffortLine(session.thread.effort), "设置推理强度");
+    const effort = pending?.effort !== undefined ? pending.effort : session.thread.effort;
+    if (effort) this.control(session, setEffortLine(effort), "设置推理强度");
+  }
+
+  /** 进程不在时选的模型 / 强度存到本地，刷新、重启后照样显示，恢复进程时带上。 */
+  private setPending(session: Session, change: PendingChoice): void {
+    this.pending = { ...this.pending, [session.id]: { ...this.pending[session.id], ...change } };
+    localStorage.setItem(PENDING_KEY, JSON.stringify(this.pending));
+  }
+
+  private takePending(id: string): PendingChoice | undefined {
+    const pending = this.pending[id];
+    if (!pending) return undefined;
+    const { [id]: _, ...rest } = this.pending;
+    this.pending = rest;
+    localStorage.setItem(PENDING_KEY, JSON.stringify(rest));
+    return pending;
+  }
+
+  /** 进程在运行（比如别的设备先拉起来了），本机还有没生效的选择：补发给它。 */
+  private flushPending(session: Session): void {
+    const pending = this.takePending(session.id);
+    if (!pending) return;
+    if (pending.model) this.setModel(session, pending.model);
+    if (pending.effort !== undefined) this.setEffort(session, pending.effort ?? undefined);
   }
 
   newSession(text: string, cwd: string, model: string, effort?: string): void {
@@ -1106,7 +1136,7 @@ export class Store {
 
   setModel(session: Session, model: string): void {
     // `/model` 回复成功但不生效，必须走控制消息；它不进会话记录，模型看不到。
-    // 进程已回收时写进 FIFO 会丢，先记下，下次发消息恢复进程时补发。
+    // 进程已回收时写进 FIFO 会丢，先记在本地，下次发消息恢复进程时带上。
     const previous = session.thread.model;
     // 一轮进行中：这一轮剩下的回复仍是旧模型，下个 `system/init` 才生效。
     if (session.thread.phase !== "idle") session.thread.nextModel = model;
@@ -1114,14 +1144,14 @@ export class Store {
       this.input(session, setModelLine(model), (error) => {
         if (!error) return;
         session.thread.nextModel = undefined;
-        if (error === "not_running") session.pendingModel = model;
+        if (error === "not_running") this.setPending(session, { model });
         else {
           session.thread.model = previous;
           if (error !== "send") this.error = `切换模型失败：${ackReason(error)}`;
         }
         this.changed();
       });
-    } else session.pendingModel = model;
+    } else this.setPending(session, { model });
     session.thread.model = model;
     this.changed();
   }
@@ -1145,9 +1175,17 @@ export class Store {
     this.changed();
   }
 
-  /** `undefined` 恢复模型默认。进程没在运行时只记下，恢复时重发。 */
+  /** `undefined` 跟随模型。进程没在运行时记在本地，恢复时带上。 */
   setEffort(session: Session, effort?: string): void {
-    if (session.running) this.control(session, setEffortLine(effort ?? null), "设置推理强度");
+    if (session.running) {
+      this.input(session, setEffortLine(effort ?? null), (error) => {
+        if (error === "not_running") this.setPending(session, { effort: effort ?? null });
+        else if (error && error !== "send") {
+          this.error = `设置推理强度失败：${ackReason(error)}`;
+          this.changed();
+        }
+      });
+    } else this.setPending(session, { effort: effort ?? null });
     session.thread.effort = effort;
     this.changed();
   }

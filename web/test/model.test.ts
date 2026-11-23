@@ -25,6 +25,7 @@ import {
   onProcessExit,
   matchCommands,
   cachedLimits,
+  applyPending,
   defaultEffortFor,
   defaultModelFor,
   pickableModels,
@@ -875,4 +876,25 @@ test("默认强度：默认模型不支持该强度（或不支持强度）时�
   assert.equal(defaultEffortFor(CLI_MODELS, "sonnet", undefined), undefined);
   assert.equal(defaultEffortFor(CLI_MODELS, "claude-haiku-4-5-20251001", "high"), undefined);
   assert.equal(defaultEffortFor(CLI_MODELS, "opus", "ultra"), undefined);
+});
+
+test("进程不在时选的模型 / 强度：重放 out 之后仍显示用户选的；null 表示跟随模型", () => {
+  const replay = () => {
+    const thread = newThread();
+    apply(thread, ev({ type: "system", subtype: "init", session_id: "s", model: "claude-haiku-5-5", cwd: "/work" }));
+    apply(thread, ev({ type: "control_response", response: { subtype: "success", request_id: JSON.parse(setEffortLine("high")).request_id } }));
+    return thread;
+  };
+  const both = replay();
+  applyPending(both, { model: "sonnet", effort: null });
+  assert.equal(both.model, "sonnet");
+  assert.equal(both.effort, undefined);
+  const effortOnly = replay();
+  applyPending(effortOnly, { effort: "low" });
+  assert.equal(effortOnly.model, "claude-haiku-5-5");
+  assert.equal(effortOnly.effort, "low");
+  const none = replay();
+  applyPending(none, undefined);
+  assert.equal(none.model, "claude-haiku-5-5");
+  assert.equal(none.effort, "high");
 });
