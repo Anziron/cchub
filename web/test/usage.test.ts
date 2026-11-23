@@ -1,7 +1,7 @@
 // 使用情况窗格的统计：解析、按范围截取、汇总、连续天数、排行、每日序列、热力图。运行：node --test web/test/
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addDays, dailySeries, dayTokens, heatmap, hourlySeries, modelCost, modelLabel, nextRenewal, parseUsage, quotaPace, REQUESTS, summarize, type UsageDay } from "../src/usage.ts";
+import { addDays, dailySeries, dayTokens, heatmap, hourlySeries, modelCost, modelLabel, parseUsage, quotaPace, REQUESTS, summarize, type UsageDay } from "../src/usage.ts";
 
 test("费用：按 API 标价估算，缓存写入按 1 小时价（输入的 2 倍）；带日期的 ID 也认；不认识的模型返回 null", () => {
   const M = 1_000_000;
@@ -193,13 +193,4 @@ test("额度节奏：时间进度按窗口长度算；照当前速度在重置�
   assert.equal(quotaPace({ utilization: 0.05, resetsAt: 10 * H }, 5 * H, 5 * H + 60)?.runsOut, null);
   // 窗口已过期：没有数据。
   assert.equal(quotaPace({ utilization: 0.5, resetsAt: 10 * H }, 5 * H, 11 * H), null);
-});
-
-test("续费日期按订阅开始日每月推算：当天算今天续费，小月取月底，之后回到原来的日子", () => {
-  assert.equal(nextRenewal("2026-10-22", "2026-11-23"), "2026-12-22");
-  assert.equal(nextRenewal("2026-10-22", "2026-11-22"), "2026-11-22");
-  assert.equal(nextRenewal("2026-10-22", "2026-10-22"), "2026-11-22", "开始当天不算续费");
-  assert.equal(nextRenewal("2026-01-31", "2026-02-10"), "2026-02-28");
-  assert.equal(nextRenewal("2026-01-31", "2026-03-01"), "2026-03-31");
-  assert.equal(nextRenewal("2025-12-15", "2026-12-20"), "2027-01-15", "跨年");
 });

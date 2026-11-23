@@ -224,7 +224,7 @@ export const demoHub: Hub = {
           } : undefined,
         };
       }).filter((d) => d.messages);
-      setTimeout(() => emit({ type: "usage", stats: JSON.stringify({ version: 2, generatedAt: Math.floor(Date.now() / 1000) - 120, tzOffset: 480, days, subscription: { createdAt: new Date(Date.now() - 40 * 86400000).toISOString(), billingType: "stripe_subscription" } }), error: scene === "usage-error" ? "统计命令没有安装，或运行超时" : null }), 300);
+      setTimeout(() => emit({ type: "usage", stats: JSON.stringify({ version: 2, generatedAt: Math.floor(Date.now() / 1000) - 120, tzOffset: 480, days }), error: scene === "usage-error" ? "统计命令没有安装，或运行超时" : null }), 300);
     } else if (msg.type === "mount") {
       emit({ type: "mounted", device: msg.device, path: msg.path, cwd: `/mnt/${msg.device}/${msg.path[0].toLowerCase()}/${msg.path.slice(3).replaceAll("\\", "/")}`, error: null });
     } else if (msg.type === "input") {

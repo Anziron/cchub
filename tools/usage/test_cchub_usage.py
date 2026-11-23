@@ -46,8 +46,7 @@ class Base(unittest.TestCase):
         import io
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            cu.main(["--root", self.root, "--cache", self.cache, "--tz", str(tz),
-                     "--account", os.path.join(self.tmp, "no-account.json")])
+            cu.main(["--root", self.root, "--cache", self.cache, "--tz", str(tz)])
         out = buf.getvalue()
         self.assertEqual(out.count("\n"), 1)
         return json.loads(out)
@@ -212,32 +211,6 @@ class UsageTest(Base):
 
     def test_empty_root(self):
         self.assertEqual(self.run_tool()["days"], [])
-
-
-class SubscriptionTest(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp()
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp)
-
-    def account(self, data):
-        p = os.path.join(self.tmp, "claude.json")
-        with open(p, "w") as f:
-            f.write(data if isinstance(data, str) else json.dumps(data))
-        return p
-
-    def test_reads_subscription_without_personal_fields(self):
-        p = self.account({"oauthAccount": {
-            "emailAddress": "someone@example.com", "displayName": "x",
-            "subscriptionCreatedAt": "2026-10-22T14:37:35.367902Z", "billingType": "apple_subscription"}})
-        self.assertEqual(cu.read_subscription(p),
-                         {"createdAt": "2026-10-22T14:37:35.367902Z", "billingType": "apple_subscription"})
-
-    def test_missing_or_broken_account_gives_none(self):
-        self.assertIsNone(cu.read_subscription(os.path.join(self.tmp, "nope.json")))
-        self.assertIsNone(cu.read_subscription(self.account("{oops")))
-        self.assertIsNone(cu.read_subscription(self.account({"oauthAccount": {"billingType": "x"}})))
 
 
 if __name__ == "__main__":

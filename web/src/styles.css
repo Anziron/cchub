@@ -778,8 +778,6 @@ a.link:hover { text-decoration-thickness: 2px; }
 .quota-card { padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r-lg); }
 .quota-row { display: grid; grid-template-columns: 3.6em minmax(0, 1fr) 3em; align-items: center; gap: 3px 10px; padding: 10px 0 9px; font-size: 12.5px; }
 .quota-row + .quota-row { border-top: 1px solid var(--line); }
-.quota-renew { display: grid; grid-template-columns: 3.6em minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); color: var(--text); font-size: 12.5px; }
-.quota-renew .quota-reset { grid-column: auto; }
 .quota-label { color: var(--text-2); }
 .quota-row b { color: var(--text); font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
 .quota-bar { position: relative; height: 6px; border-radius: 3px; background: var(--hover); }

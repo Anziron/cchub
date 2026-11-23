@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { formatTokens, quotaPercent, resetText, resetWhen } from "./Common";
 import { Icon } from "./Icon";
 import type { Store } from "./store";
-import { addDays, dailySeries, heatmap, hourlySeries, localDate, modelLabel, nextRenewal, OTHER, quotaPace, summarize, type Bar, type TokenParts, type UsageDay, type UsageMetric, type UsageRange, type UsageSummary } from "./usage";
+import { addDays, dailySeries, heatmap, hourlySeries, localDate, modelLabel, OTHER, quotaPace, summarize, type Bar, type TokenParts, type UsageDay, type UsageMetric, type UsageRange, type UsageSummary } from "./usage";
 
 const RANGES: [UsageRange, string][] = [["today", "今天"], ["7d", "7 天"], ["30d", "30 天"], ["all", "全部"]];
 const RANGE_KEY = "cchub.usageRange";
@@ -59,23 +59,6 @@ function QuotaRow({ label, window, length }: { label: string; window?: { utiliza
         {window ? resetWhen(window) : "下一轮回复后更新"}
         {warn ? <em> · {warn}</em> : null}
       </span>
-    </div>
-  );
-}
-
-/** 额度卡片最后一行：下次续费日，按订阅开始日每月推算（官方不提供续费日）。 */
-function RenewRow({ createdAt, today }: { createdAt: string; today: string }) {
-  const start = new Date(createdAt);
-  if (Number.isNaN(start.getTime())) return null;
-  const first = localDate(start);
-  const next = nextRenewal(first, today);
-  const days = Math.round((Date.parse(next) - Date.parse(today)) / 86400000);
-  const weekday = WEEKDAY_NAMES[new Date(`${next}T00:00:00Z`).getUTCDay()];
-  return (
-    <div className="quota-renew" title={`按订阅开始日（${first}）每月推算；官方不提供续费日，按年付费时不准`}>
-      <span className="quota-label">续费</span>
-      <span>{+next.slice(5, 7)}月{+next.slice(8, 10)}日 {weekday}</span>
-      <span className="quota-reset">{days === 0 ? "今天" : `${days} 天后`}</span>
     </div>
   );
 }
@@ -376,7 +359,6 @@ export function UsagePane({ store }: { store: Store }) {
   const { fiveHour, sevenDay, fable } = store.limits;
   const now = new Date();
   const today = localDate(now);
-  const subscription = stats?.subscription;
   const summary = stats ? summarize(stats.days, range, today) : null;
   const [view, setViewState] = useState<ModelView>(() => (localStorage.getItem(VIEW_KEY) === "cost" ? "cost" : "tokens"));
   const setView = (value: ModelView) => {
@@ -392,7 +374,6 @@ export function UsagePane({ store }: { store: Store }) {
         <QuotaRow label="5 小时" window={fiveHour} length={5 * 3600} />
         <QuotaRow label="本周" window={sevenDay} length={7 * 86400} />
         {fable ? <QuotaRow label="Fable" window={fable} length={7 * 86400} /> : null}
-        {subscription ? <RenewRow createdAt={subscription.createdAt} today={today} /> : null}
       </div>
 
       <div className="usage-head">
