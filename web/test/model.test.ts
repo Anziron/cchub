@@ -25,6 +25,9 @@ import {
   onProcessExit,
   matchCommands,
   cachedLimits,
+  defaultEffortFor,
+  defaultModelFor,
+  pickableModels,
   commandStatus,
   limitRank,
   mergeRateLimits,
@@ -847,4 +850,29 @@ test("刷新后重放 out：强度从 apply_flag_settings 的成功回复恢复�
   assert.equal(thread.effort, "high");
   apply(thread, reply(setEffortLine(null)));
   assert.equal(thread.effort, undefined);
+});
+
+// CLI `initialize` 回复里 models 的形状（2.1.330），只留用到的字段。
+const CLI_MODELS = [
+  { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)", supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
+  { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5", supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
+  { value: "sonnet", resolvedModel: "claude-sonnet-5-5", displayName: "Sonnet 5.5", supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
+  { value: "claude-haiku-4-5-20251001", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5" },
+];
+
+test("模型列表去掉 CLI 的 default 项；没设默认时默认是它指向的具体模型", () => {
+  assert.deepEqual(pickableModels(CLI_MODELS).map((m) => m.value), ["opus", "sonnet", "claude-haiku-4-5-20251001"]);
+  assert.equal(defaultModelFor(CLI_MODELS), "opus");
+  assert.equal(defaultModelFor(CLI_MODELS, "sonnet"), "sonnet");
+  // 选过的模型不在列表里了（CLI 下架）：退回 CLI 的默认。
+  assert.equal(defaultModelFor(CLI_MODELS, "claude-gone"), "opus");
+  // 还是内置别名列表（default 没有 resolvedModel）：不知道指向谁，不猜。
+  assert.equal(defaultModelFor([{ value: "default", displayName: "默认" }, { value: "opus", displayName: "Opus" }]), undefined);
+});
+
+test("默认强度：默认模型不支持该强度（或不支持强度）时不用", () => {
+  assert.equal(defaultEffortFor(CLI_MODELS, "sonnet", "high"), "high");
+  assert.equal(defaultEffortFor(CLI_MODELS, "sonnet", undefined), undefined);
+  assert.equal(defaultEffortFor(CLI_MODELS, "claude-haiku-4-5-20251001", "high"), undefined);
+  assert.equal(defaultEffortFor(CLI_MODELS, "opus", "ultra"), undefined);
 });

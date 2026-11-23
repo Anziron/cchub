@@ -1,3 +1,5 @@
+const STAR = "M8 2.300 9.700 5.800l3.800.5-2.800 2.700.7 3.800L8 11l-3.400 1.800.7-3.800L2.500 6.300l3.800-.5z";
+
 const PATHS: Record<string, string> = {
   plus: "M8 3v10M3 8h10",
   chev: "m6 3.5 4.5 4.5L6 12.5",
@@ -33,11 +35,15 @@ const PATHS: Record<string, string> = {
   cog: "M6.800 2h2.400l.4 1.600 1.200.7 1.500-.5 1.200 2.100-1.100 1.100v1.800l1.100 1.100-1.200 2.100-1.500-.5-1.200.7-.4 1.600H6.800l-.4-1.600-1.200-.7-1.500.5-1.200-2.100 1.100-1.100V7.100L2.500 6l1.200-2.100 1.500.5 1.200-.7zM8 6.300a1.700 1.700 0 1 0 0 3.400 1.700 1.700 0 0 0 0-3.400Z",
   home:"M2.500 7.300 8 2.800l5.500 4.500M3.800 6.500V13h3V9.500h2.400V13h3V6.500",
   pin:"M5.500 2.500h5M6.500 2.500v3.500L4.500 9h7L9.500 6V2.500M8 9v4.500",
+  star: STAR,
 };
 
 export function Icon({ name, size = 16, className }: { name: string; size?: number; className?: string }) {
   if (name === "more") {
     return <svg width={size} height={size} viewBox="0 0 16 16" className={className} aria-hidden="true"><circle cx="3.500" cy="8" r="1.200" fill="currentColor" /><circle cx="8" cy="8" r="1.200" fill="currentColor" /><circle cx="12.500" cy="8" r="1.200" fill="currentColor" /></svg>;
+  }
+  if (name === "star-fill") {
+    return <svg width={size} height={size} viewBox="0 0 16 16" className={className} aria-hidden="true"><path d={STAR} fill="currentColor" stroke="currentColor" strokeWidth="1.250" strokeLinejoin="round" /></svg>;
   }
   if (name === "stop") {
     return <svg width={size} height={size} viewBox="0 0 16 16" className={className}><rect x="4" y="4" width="8" height="8" rx="1.600" fill="currentColor" /></svg>;

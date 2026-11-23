@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { Icon } from "./Icon";
 import { FONTS, SIZES, THEMES, type Appearance } from "./appearance";
-import { effortsFor, findModel, hubHost, hubUrl, runningTasks, type ModelOption, type SlashCommand } from "./model";
+import { effortsFor, findModel, hubHost, hubUrl, modelDisplayName, pickableModels, runningTasks, type ModelOption, type SlashCommand } from "./model";
 import { backgroundStatus, isAndroid, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
 import { deviceList, formatAgo, SERVER_GROUP } from "./sidebar";
 
@@ -257,24 +257,46 @@ export function useMenuFit(anchor: RefObject<HTMLElement | null>, open: boolean,
   return fit;
 }
 
+/** 星号按钮：实心是默认，空心点了设为默认（不切换当前选择、不关菜单）。 */
+function DefaultStar({ on, title, onSet }: { on: boolean; title: string; onSet: () => void }) {
+  return (
+    <i
+      role="button"
+      aria-pressed={on}
+      className={`default-star${on ? " on" : ""}`}
+      title={on ? title : `设为${title}`}
+      onClick={(event) => { event.stopPropagation(); if (!on) onSet(); }}
+    >
+      <Icon name={on ? "star-fill" : "star"} size={14} />
+    </i>
+  );
+}
+
 /**
  * 模型和推理强度：上面一行是当前模型，点开换成模型列表；下面是强度滑块和档位名。
- * 拖滑块、点档位都不关菜单；设过强度时标题行右边可以恢复默认。
+ * 拖滑块、点档位都不关菜单；强度不是默认强度时标题行右边可以恢复默认。
+ * 默认用星号设：模型列表每行一个（实心是默认模型），“推理强度”标题旁一个（把当前档设为默认）。
+ * CLI 的 `default` 项不列出，它指向的模型（或用户选的默认）就是 `defaultModel`。
  */
-export function ModelMenu({ models, model, nextModel, effort, onChange, onEffort }: {
+export function ModelMenu({ models, model, nextModel, effort, defaultModel, defaultEffort, onChange, onEffort, onDefaults }: {
   models: ModelOption[];
   model?: string;
   /** 一轮进行中选的模型，下一轮才生效。 */
   nextModel?: boolean;
   effort?: string;
+  defaultModel?: string;
+  /** “恢复默认”恢复到的强度，undefined 表示跟随模型。 */
+  defaultEffort?: string;
   onChange: (value: string) => void;
   onEffort: (effort?: string) => void;
+  onDefaults: (change: { model?: string; effort?: string | null }) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [picking, setPicking] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const current = findModel(models, model);
-  const modelName = current?.displayName ?? model ?? "默认模型";
+  const list = pickableModels(models);
+  const current = findModel(list, model);
+  const modelName = current?.displayName ?? (model ? modelDisplayName(model) : "默认模型");
   const efforts = effortsFor(current);
   const index = efforts.findIndex((e) => e.value === effort);
   const effortLabel = index >= 0 ? efforts[index].label : undefined;
@@ -309,23 +331,33 @@ export function ModelMenu({ models, model, nextModel, effort, onChange, onEffort
         {effortLabel ? <em>{effortLabel}</em> : null}
         <Icon name="down" size={12} />
       </button>
-      {open && picking ? (
+      {!open ? null : picking ? (
         <div className="menu" role="menu" style={fit}>
           <button type="button" className="menu-back" onClick={() => setPicking(false)}><Icon name="back" size={13} />模型</button>
-          {models.map((option) => (
-            <button
-              type="button"
-              key={option.value}
-              role="menuitemradio"
-              aria-checked={option === current}
-              onClick={() => { onChange(option.value); setPicking(false); }}
-            >
-              <span><b>{option.displayName}</b>{option.description ? <small>{option.description}</small> : null}</span>
-              {option === current ? <Icon name="check" size={14} /> : null}
-            </button>
-          ))}
+          {list.map((option) => {
+            const isDefault = option.value === defaultModel;
+            return (
+              <button
+                type="button"
+                key={option.value}
+                role="menuitemradio"
+                aria-checked={option === current}
+                onClick={() => { onChange(option.value); setPicking(false); }}
+              >
+                <span>
+                  <b>{option.displayName}</b>
+                  {option.description ? <small>{option.description}</small> : null}
+                </span>
+                <span className="opt-end">
+                  <DefaultStar on={isDefault} title="默认模型" onSet={() => onDefaults({ model: option.value })} />
+                  {option === current ? <Icon name="check" size={14} /> : <i className="check-space" />}
+                </span>
+              </button>
+            );
+          })}
+          <p className="menu-foot"><Icon name="star-fill" size={11} />新会话默认用的模型</p>
         </div>
-      ) : open ? (
+      ) : (
         <div className="menu effort-card" style={fit}>
           <div className="menu-title">模型</div>
           <button type="button" className="effort-model" onClick={() => setPicking(true)}>
@@ -334,9 +366,14 @@ export function ModelMenu({ models, model, nextModel, effort, onChange, onEffort
           </button>
           <div className="menu-sep" />
           <div className="effort-head">
-            <span className="menu-title">推理强度</span>
-            {!efforts.length ? <small>这个模型不支持</small> : effortLabel ? (
-              <button type="button" className="effort-reset" title="恢复成模型的默认强度" onClick={() => onEffort(undefined)}><Icon name="reset" size={12} />恢复默认</button>
+            <span className="menu-title">
+              推理强度
+              {efforts.length ? (
+                <DefaultStar on={effort === defaultEffort} title="默认强度" onSet={() => onDefaults({ effort: effort ?? null })} />
+              ) : null}
+            </span>
+            {!efforts.length ? <small>这个模型不支持</small> : effort !== defaultEffort ? (
+              <button type="button" className="effort-reset" title={defaultEffort ? "恢复成你设的默认强度" : "恢复成模型的默认强度"} onClick={() => onEffort(defaultEffort)}><Icon name="reset" size={12} />恢复默认</button>
             ) : <small>默认</small>}
           </div>
           {efforts.length ? (
@@ -365,7 +402,7 @@ export function ModelMenu({ models, model, nextModel, effort, onChange, onEffort
             </div>
           ) : null}
         </div>
-      ) : null}
+      )}
     </div>
   );
 }

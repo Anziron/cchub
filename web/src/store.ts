@@ -30,6 +30,8 @@ import {
   onProcessExit,
   parseCancelled,
   parseCommands,
+  defaultEffortFor,
+  defaultModelFor,
   parseModels,
   parseRateLimits,
   runningTasks,
@@ -75,6 +77,8 @@ const URL_KEY = "cchub.url";
 const MODELS_KEY = "cchub.models";
 const CWD_KEY = "cchub.cwd";
 const COMMANDS_KEY = "cchub.commands";
+/** 用户自选的默认模型和强度，每台设备各存一份。 */
+const DEFAULTS_KEY = "cchub.defaults";
 const LIMITS_KEY = "cchub.limits";
 const DRAFTS_KEY = "cchub.drafts";
 const TASK_TIMES_KEY = "cchub.taskTimes";
@@ -141,6 +145,8 @@ export class Store {
   showSettings = this.url === "";
   models = loadModels();
   commands = loadJson<SlashCommand[]>(COMMANDS_KEY, []);
+  /** 用户选的默认模型和强度（可能已不在模型列表里，用 `defaultModel` / `defaultEffort` 取有效值）。 */
+  defaults = loadJson<{ model?: string; effort?: string }>(DEFAULTS_KEY, {});
   limits = cachedLimits(loadJson<RateLimits>(LIMITS_KEY, {}));
   /** 右侧窗格：改动、后台任务、待办、方案、会话信息。记在本地，切换会话时保留。 */
   pane: PaneId | null = isNarrow() ? null : storedPane();
@@ -1117,6 +1123,25 @@ export class Store {
       });
     } else session.pendingModel = model;
     session.thread.model = model;
+    this.changed();
+  }
+
+  /** 新会话用的模型：用户选的默认，没选过就是 CLI 默认指向的具体模型。 */
+  get defaultModel(): string | undefined {
+    return defaultModelFor(this.models, this.defaults.model);
+  }
+
+  /** 新会话用的强度、“恢复默认”恢复到的强度；undefined 表示跟随模型。 */
+  get defaultEffort(): string | undefined {
+    return defaultEffortFor(this.models, this.defaultModel, this.defaults.effort);
+  }
+
+  setDefaults(change: { model?: string; effort?: string | null }): void {
+    const next = { ...this.defaults };
+    if (change.model) next.model = change.model;
+    if (change.effort !== undefined) next.effort = change.effort ?? undefined;
+    this.defaults = next;
+    localStorage.setItem(DEFAULTS_KEY, JSON.stringify(next));
     this.changed();
   }
 

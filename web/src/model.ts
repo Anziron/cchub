@@ -991,6 +991,23 @@ function controlReply(line: string, requestId: string): Json | null {
   }
 }
 
+/** 可选的模型：去掉 CLI 的 `default` 项（它只是指向某个具体模型，那个模型另有一项）。 */
+export const pickableModels = (models: ModelOption[]): ModelOption[] => models.filter((m) => m.value !== "default");
+
+/** 默认模型：用户选过且还在列表里就用它，否则用 CLI 的 `default` 指向的那个具体模型；都不知道时 undefined（不带 `--model`）。 */
+export function defaultModelFor(models: ModelOption[], saved?: string): string | undefined {
+  const list = pickableModels(models);
+  if (saved && list.some((m) => m.value === saved)) return saved;
+  const cli = models.find((m) => m.value === "default")?.resolvedModel;
+  return cli ? list.find((m) => m.resolvedModel === cli)?.value : undefined;
+}
+
+/** 默认强度：默认模型支持才用，否则跟随模型（undefined）。 */
+export function defaultEffortFor(models: ModelOption[], model: string | undefined, saved?: string): string | undefined {
+  if (!saved) return undefined;
+  return effortsFor(findModel(models, model)).some((e) => e.value === saved) ? saved : undefined;
+}
+
 /** 当前模型对应哪一项。`thread.model` 可能是别名，也可能是完整模型 ID。 */
 export function findModel(models: ModelOption[], model?: string): ModelOption | undefined {
   if (!model) return undefined;

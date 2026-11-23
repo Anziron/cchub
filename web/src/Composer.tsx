@@ -318,7 +318,17 @@ export function Composer({ store, session }: { store: Store; session: Session })
           <div className="tools">
             <ModeLabel mode={thread.permissionMode} />
             <span className="grow" />
-            <ModelMenu models={store.models} model={thread.model} nextModel={!!thread.nextModel} effort={thread.effort} onChange={(value) => store.setModel(session, value)} onEffort={(value) => store.setEffort(session, value)} />
+            <ModelMenu
+              models={store.models}
+              model={thread.model}
+              nextModel={!!thread.nextModel}
+              effort={thread.effort}
+              defaultModel={store.defaultModel}
+              defaultEffort={store.defaultEffort}
+              onChange={(value) => store.setModel(session, value)}
+              onEffort={(value) => store.setEffort(session, value)}
+              onDefaults={(change) => store.setDefaults(change)}
+            />
             <UsageRing store={store} session={session} />
             {busy && !input.hasContent ? (
               <button type="button" className="send stop" aria-label="中断" title="中断（Esc）" onClick={() => store.interrupt(session)}><Icon name="stop" size={14} /></button>
@@ -386,8 +396,11 @@ export function AppMark() {
 export function Welcome({ store }: { store: Store }) {
   const input = useInput(store, NEW_DRAFT, store.cwd);
   const { text, setText } = input;
-  const [model, setModel] = useState("");
-  const [effort, setEffort] = useState<string>();
+  // 没动过就跟着默认走（默认改了、模型列表晚到都跟着变）；刷新后回到默认，不回到 CLI 的 “Default”。
+  const [chosenModel, setModel] = useState<string>();
+  const [chosenEffort, setEffort] = useState<{ value?: string }>();
+  const model = chosenModel ?? store.defaultModel;
+  const effort = chosenEffort ? chosenEffort.value : store.defaultEffort;
   const submit = (message: string) => {
     if (!message.trim() && !input.files.length) return;
     if (isResumeCommand(message)) {
@@ -401,7 +414,7 @@ export function Welcome({ store }: { store: Store }) {
       store.openWorkspace();
       return;
     }
-    store.newSession(input.take(message), store.cwd, model, effort);
+    store.newSession(input.take(message), store.cwd, model ?? "", effort);
   };
   const send = () => submit(text);
   const commands = useCommandMenu(store.commandsFor(), text, setText, submit);
@@ -449,7 +462,16 @@ export function Welcome({ store }: { store: Store }) {
           <div className="tools">
             <ModeLabel />
             <span className="grow" />
-            <ModelMenu models={store.models} model={model || "default"} effort={effort} onChange={setModel} onEffort={setEffort} />
+            <ModelMenu
+              models={store.models}
+              model={model}
+              effort={effort}
+              defaultModel={store.defaultModel}
+              defaultEffort={store.defaultEffort}
+              onChange={setModel}
+              onEffort={(value) => setEffort({ value })}
+              onDefaults={(change) => store.setDefaults(change)}
+            />
             <UsageRing store={store} />
             <button className={`send${input.hasContent ? " ready" : ""}`} aria-label="发送" title="发送（Enter）" disabled={!input.hasContent}><Icon name="enter" size={15} /></button>
           </div>

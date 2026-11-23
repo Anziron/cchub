@@ -330,6 +330,17 @@ html, body, #root { height: 100%; }
 @keyframes effort-glow { 50% { text-shadow: 0 0 10px color-mix(in srgb, var(--accent) 60%, transparent); } }
 @media (prefers-reduced-motion: reduce) { .effort-slider.max::before, .effort-slider.max::after, .effort-ticks button.on.max { animation: none; } }
 .effort-card .effort-hint { margin: 8px 0 0; color: var(--muted); font-size: 11.5px; text-align: center; }
+/* 默认模型和强度：模型列表每行的星号、“推理强度”标题旁的星号 */
+.menu > button:not(.mi) .opt-end { flex: none; flex-direction: row; align-items: center; gap: 4px; }
+.menu .check-space { width: 14px; }
+.default-star { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: var(--r-sm); color: var(--faint); font-style: normal; cursor: pointer; }
+.default-star:hover { background: var(--hover); color: var(--text); }
+.default-star.on, .default-star.on:hover { background: none; color: var(--accent); cursor: default; }
+.menu > button:not(.mi) .default-star svg { color: inherit; }
+.effort-head .menu-title { display: inline-flex; align-items: center; gap: 2px; }
+.effort-head .default-star { width: 18px; height: 18px; }
+.menu-foot { display: flex; align-items: center; gap: 4px; margin: 4px 10px 4px; color: var(--faint); font-size: 11px; line-height: 1.4; }
+.menu-foot svg { color: var(--accent); }
 
 /* 弹窗 */
 .overlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(20, 18, 15, .36); animation: fade .16s var(--ease) both; }
