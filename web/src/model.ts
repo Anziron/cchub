@@ -396,6 +396,8 @@ export interface LimitWindow {
 export interface RateLimits {
   fiveHour?: LimitWindow;
   sevenDay?: LimitWindow;
+  /** Fable 的周额度（`seven_day_overage_included`），只有带这个窗口的账号、用过 Fable 后才有。 */
+  fable?: LimitWindow;
 }
 
 /** 从 `rate_limit_event` 取额度。 */
@@ -409,7 +411,7 @@ export function parseRateLimits(line: string, source?: LimitSource): RateLimits 
       typeof window?.utilization === "number" && typeof window?.resetsAt === "number"
         ? { utilization: window.utilization, resetsAt: window.resetsAt, ...(source ? { source } : {}) }
         : undefined;
-    return { fiveHour: pick(windows.five_hour), sevenDay: pick(windows.seven_day) };
+    return { fiveHour: pick(windows.five_hour), sevenDay: pick(windows.seven_day), fable: pick(windows.seven_day_overage_included) };
   } catch {
     return null;
   }
@@ -432,7 +434,7 @@ export function mergeRateLimits(old: RateLimits, next: RateLimits): RateLimits {
     if (a.source.session === b.source.session) return b.source.seq > a.source.seq ? b : a;
     return b.source.rank >= a.source.rank ? b : a;
   };
-  return { fiveHour: newer(old.fiveHour, next.fiveHour), sevenDay: newer(old.sevenDay, next.sevenDay) };
+  return { fiveHour: newer(old.fiveHour, next.fiveHour), sevenDay: newer(old.sevenDay, next.sevenDay), fable: newer(old.fable, next.fable) };
 }
 
 /** `/` 命令，字段来自 CLI 的 `initialize` 回复。 */

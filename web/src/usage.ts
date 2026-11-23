@@ -41,6 +41,8 @@ export interface UsageStats {
   generatedAt: number;
   tzOffset: number;
   days: UsageDay[];
+  /** 订阅开始时间（ISO）和计费方式，来自服务器 CLI 的账号缓存；旧版脚本或没登录订阅时没有。 */
+  subscription?: { createdAt: string; billingType?: string };
 }
 
 export type UsageRange = "today" | "7d" | "30d" | "all";
@@ -151,6 +153,22 @@ export function quotaPace(window: { utilization: number; resetsAt: number }, len
   if (window.utilization <= 0 || elapsed < 0.05) return { elapsed, runsOut: null };
   const runsOut = start + (now - start) / window.utilization;
   return { elapsed, runsOut: runsOut < window.resetsAt ? runsOut : null };
+}
+
+/**
+ * 下次续费日（本地日期 `YYYY-MM-DD`），按订阅开始日每月推算：今天正好是续费日就返回今天，
+ * 小月没有那一天时取月底。官方不给续费日和计费周期，按年付费时会算错。
+ */
+export function nextRenewal(start: string, today: string): string {
+  const day = +start.slice(8, 10);
+  let year = +today.slice(0, 4);
+  let month = +today.slice(5, 7);
+  for (;;) {
+    const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const date = `${year}-${String(month).padStart(2, "0")}-${String(Math.min(day, last)).padStart(2, "0")}`;
+    if (date >= today && date > start) return date;
+    if (++month > 12) { month = 1; year++; }
+  }
 }
 
 function pick(days: UsageDay[], range: UsageRange, today: string): UsageDay[] {

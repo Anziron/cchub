@@ -279,11 +279,29 @@ def build_output(cache, tz):
     }
 
 
+def read_subscription(path):
+    """从 CLI 缓存的账号信息（~/.claude.json 的 oauthAccount）取订阅开始时间和计费方式，前端据此推算续费日。
+    只取这两项，不输出邮箱、姓名等；文件不在或格式不对时返回 None。"""
+    try:
+        with open(path) as f:
+            account = json.load(f).get("oauthAccount") or {}
+    except (OSError, ValueError, AttributeError):
+        return None
+    created = account.get("subscriptionCreatedAt")
+    if not isinstance(created, str):
+        return None
+    out = {"createdAt": created}
+    if isinstance(account.get("billingType"), str):
+        out["billingType"] = account["billingType"]
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="汇总 Claude Code 会话记录的用量，输出一行 JSON")
     ap.add_argument("--root", default=os.path.expanduser("~/.claude/projects"))
     ap.add_argument("--cache", default=os.path.expanduser("~/.cache/cchub-usage/cache-v2.json"))
     ap.add_argument("--tz", type=int, default=0, help="相对 UTC 往东的分钟数（UTC+8 为 480）")
+    ap.add_argument("--account", default=os.path.expanduser("~/.claude.json"), help="CLI 的账号缓存，用来取订阅开始时间")
     args = ap.parse_args(argv)
     root = os.path.abspath(args.root)
     cache_path = os.path.abspath(args.cache)
@@ -294,6 +312,9 @@ def main(argv=None):
         update_cache(root, cache)
         save_cache(cache_path, cache)
         out = build_output(cache, args.tz)
+    subscription = read_subscription(args.account)
+    if subscription:
+        out["subscription"] = subscription
     sys.stdout.write(json.dumps(out, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 

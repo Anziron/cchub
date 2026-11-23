@@ -122,6 +122,7 @@ function UsageRing({ store, session }: { store: Store; session?: Session }) {
           <div className="menu-title">额度</div>
           <Quota label="5 小时" window={store.limits.fiveHour} />
           <Quota label="本周" window={store.limits.sevenDay} />
+          {store.limits.fable ? <Quota label="Fable" window={store.limits.fable} /> : null}
           {session ? (
             <>
               <div className="menu-title">这个会话</div>

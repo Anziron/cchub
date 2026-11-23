@@ -120,6 +120,7 @@ function Status({ store }: { store: Store }) {
         <div className="side-quota" role="button" tabIndex={0} title="查看使用情况和重置时间" onClick={openUsage} onKeyDown={(event) => { if (event.key === "Enter") openUsage(); }}>
           <QuotaLine label="5 小时" window={fiveHour} />
           <QuotaLine label="本周" window={sevenDay} />
+          <QuotaLine label="Fable" window={store.limits.fable} />
         </div>
       ) : null}
     </>

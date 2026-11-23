@@ -224,7 +224,7 @@ export const demoHub: Hub = {
           } : undefined,
         };
       }).filter((d) => d.messages);
-      setTimeout(() => emit({ type: "usage", stats: JSON.stringify({ version: 2, generatedAt: Math.floor(Date.now() / 1000) - 120, tzOffset: 480, days }), error: scene === "usage-error" ? "统计命令没有安装，或运行超时" : null }), 300);
+      setTimeout(() => emit({ type: "usage", stats: JSON.stringify({ version: 2, generatedAt: Math.floor(Date.now() / 1000) - 120, tzOffset: 480, days, subscription: { createdAt: new Date(Date.now() - 40 * 86400000).toISOString(), billingType: "stripe_subscription" } }), error: scene === "usage-error" ? "统计命令没有安装，或运行超时" : null }), 300);
     } else if (msg.type === "mount") {
       emit({ type: "mounted", device: msg.device, path: msg.path, cwd: `/mnt/${msg.device}/${msg.path[0].toLowerCase()}/${msg.path.slice(3).replaceAll("\\", "/")}`, error: null });
     } else if (msg.type === "input") {
@@ -277,7 +277,7 @@ export const demoHub: Hub = {
       } else session?.lines.forEach((payload, i) => emit({ type: "event", session: msg.session, class: "durable", seq: i, payload }));
       const event = (o: unknown) => emit({ type: "event", session: msg.session, class: "durable", seq: 0, payload: JSON.stringify(o) });
       const hours = Math.floor(Date.now() / 1000) + 7200;
-      event({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.34, resetsAt: hours }, seven_day: { utilization: 0.86, resetsAt: hours + 400000 } } } });
+      event({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.34, resetsAt: hours }, seven_day: { utilization: 0.86, resetsAt: hours + 400000 }, seven_day_overage_included: { utilization: 0.12, resetsAt: hours + 300000 } } } });
       event({ type: "assistant", message: { id: "usage", usage: { input_tokens: 2, cache_read_input_tokens: 240000, cache_creation_input_tokens: 4000 }, content: [] } });
       if (msg.session === "rich") {
         // 这一轮的实时 token：一条已结束的消息 + 正在生成的片段。

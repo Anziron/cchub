@@ -334,6 +334,18 @@ test("额度合并：同一窗口官方提前清零也要更新，按来源判�
   assert.equal(parseRateLimits("{\"type\":\"user\"}"), null);
 });
 
+test("Fable 额度来自 seven_day_overage_included，合并时保留", () => {
+  const line = JSON.stringify({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: {
+    five_hour: { utilization: 0.2, resetsAt: 100 },
+    seven_day_overage_included: { utilization: 0.37, resetsAt: 900 },
+  } } });
+  const fable = parseRateLimits(line)!;
+  assert.equal(fable.fable?.utilization, 0.37);
+  // 没用 Fable 的会话不带这个窗口，不能把已有的 Fable 额度冲掉。
+  const plain = JSON.stringify({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.3, resetsAt: 100 } } } });
+  assert.equal(mergeRateLimits(fable, parseRateLimits(plain)!).fable?.utilization, 0.37);
+});
+
 test("命令菜单只在输入 / 词时出现，前缀匹配排在前面", () => {
   const commands = [{ name: "autocompact" }, { name: "compact" }, { name: "clear" }];
   assert.deepEqual(matchCommands(commands, "/").map((c) => c.name), ["autocompact", "compact", "clear"]);
