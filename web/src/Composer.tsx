@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { CommandMenu, ModelMenu } from "./Dialogs";
-import { Dropdown, Elapsed, FABLE_EMPTY, formatDuration, formatTokens, Meter, Quota, quotaPercent, sessionStatus } from "./Common";
+import { Dropdown, Elapsed, formatTokens, Meter, sessionStatus } from "./Common";
 import { Icon } from "./Icon";
 import { firstAsk, matchCommands, runningTasks, turnTokens, type SlashCommand } from "./model";
 import { mentionText, type DropRef } from "./paths";
@@ -96,19 +96,17 @@ function ModeLabel({ mode }: { mode?: string }) {
   );
 }
 
-/** 用量环：显示 5 小时额度，点开看本周额度、上下文和服务器内存。 */
-function UsageRing({ store, session }: { store: Store; session?: Session }) {
-  const five = quotaPercent(store.limits.fiveHour);
-  const context = session?.thread.context;
-  const contextValue = context?.max ? context.used / context.max : null;
-  const value = five ?? contextValue;
+/** 上下文环：进度就是这个会话的上下文占用，点开看已用 / 上限。额度在侧栏和“使用情况”里。 */
+function ContextRing({ session }: { session: Session }) {
+  const context = session.thread.context;
+  const value = context?.max ? context.used / context.max : null;
   const r = 6.5;
   const length = 2 * Math.PI * r;
   const high = value != null && value >= 0.8;
   return (
     <Dropdown
       className="usage"
-      label="用量"
+      label="上下文"
       button={
         <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
           <circle cx="9" cy="9" r={r} className="ring-bg" />
@@ -119,25 +117,13 @@ function UsageRing({ store, session }: { store: Store; session?: Session }) {
     >
       {() => (
         <>
-          <div className="menu-title">额度</div>
-          <Quota label="5 小时" window={store.limits.fiveHour} />
-          <Quota label="本周" window={store.limits.sevenDay} />
-          <Quota label="Fable" window={store.limits.fable} empty={FABLE_EMPTY} />
-          {session ? (
-            <>
-              <div className="menu-title">这个会话</div>
-              <div className="stat-row" title="接近上限时可以发 /compact 压缩">
-                <span>上下文</span>
-                <Meter value={contextValue} />
-                <span className="num">{context ? `${formatTokens(context.used)}${context.max ? ` / ${formatTokens(context.max)}` : ""}` : "—"}</span>
-              </div>
-              {session.thread.stats.turns ? (
-                <div className="stat-row plain"><span>这次运行</span><span className="num">{session.thread.stats.turns} 轮 · {formatDuration(session.thread.stats.durationMs)} · {formatTokens(session.thread.stats.outputTokens)} tokens</span></div>
-              ) : null}
-            </>
-          ) : null}
-          <div className="menu-title">服务器</div>
-          <div className="stat-row plain"><span>可用内存</span><span className="num">{store.memAvailableMb == null ? "—" : `${store.memAvailableMb} MB`}</span></div>
+          <div className="menu-title">上下文</div>
+          <div className="stat-row" title="接近上限时可以发 /compact 压缩">
+            <span>已用</span>
+            <Meter value={value} />
+            <span className="num">{context ? `${formatTokens(context.used)}${context.max ? ` / ${formatTokens(context.max)}` : ""}` : "—"}</span>
+          </div>
+          {value != null ? <p className="menu-foot">{`${Math.round(value * 100)}%，接近上限时可以发 /compact 压缩`}</p> : null}
         </>
       )}
     </Dropdown>
@@ -329,7 +315,7 @@ export function Composer({ store, session }: { store: Store; session: Session })
               onEffort={(value) => store.setEffort(session, value)}
               onDefaults={(change) => store.setDefaults(change)}
             />
-            <UsageRing store={store} session={session} />
+            <ContextRing session={session} />
             {busy && !input.hasContent ? (
               <button type="button" className="send stop" aria-label="中断" title="中断（Esc）" onClick={() => store.interrupt(session)}><Icon name="stop" size={14} /></button>
             ) : busy ? (
@@ -472,7 +458,6 @@ export function Welcome({ store }: { store: Store }) {
               onEffort={(value) => setEffort({ value })}
               onDefaults={(change) => store.setDefaults(change)}
             />
-            <UsageRing store={store} />
             <button className={`send${input.hasContent ? " ready" : ""}`} aria-label="发送" title="发送（Enter）" disabled={!input.hasContent}><Icon name="enter" size={15} /></button>
           </div>
         </div>

@@ -110,17 +110,6 @@ export function resetText(window?: QuotaWindow, empty = "下一轮回复后更�
   return `${resetWhen(window)}（${new Date(window.resetsAt * 1000).toLocaleString()}）`;
 }
 
-export function Quota({ label, window, empty }: { label: string; window?: QuotaWindow; empty?: string }) {
-  const value = quotaPercent(window);
-  return (
-    <div className="stat-row" title={resetText(window, empty)}>
-      <span>{label}</span>
-      <Meter value={value} />
-      <span className="num">{value != null ? `${Math.round(value * 100)}%` : "—"}</span>
-    </div>
-  );
-}
-
 /**
  * 按钮加弹出菜单：点外面或 Esc 关闭，放上方还是下方由 useMenuFit 按剩余空间决定。
  * `children` 拿到 close，选中菜单项后自己关。
