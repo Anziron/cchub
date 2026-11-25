@@ -27,11 +27,11 @@ jobs:
       - run: bash scripts/check.sh
       # 生产用的 systemd 托管：kill -9 hubd 后会话进程还在、续订结果一致。要往系统的 systemd 里起单元，
       # 测试程序用 sudo 跑（只有运行用 sudo，编译仍是普通用户）；CCHUB_E2E_SYSTEMD=1 不许它悄悄跳过。
+      # 这台机器的 sudo 不支持 -E（会忽略并清掉环境），变量要经 env 作为参数带进去。
       - name: systemd 存活测试
         run: cargo test -p hubd --test e2e --locked survives_hubd_kill
         env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: sudo -E
-          CCHUB_E2E_SYSTEMD: "1"
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: sudo env CCHUB_E2E_SYSTEMD=1
       # 部署用的 hubd 由这一步编译；`hubd --version` 显示的构建号（标签或分支名 + 短提交号）在这里写进去。
       - run: HUBD_BUILD="$GITHUB_REF_NAME ${GITHUB_SHA::7}" bash scripts/check-budget.sh
       - uses: actions/upload-artifact@v4
