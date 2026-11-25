@@ -6,6 +6,8 @@ import { firstAsk, isWaiting } from "./model.ts";
 import { deviceColorMap, deviceColorVars } from "./deviceColors.ts";
 import { DEVICE_STATE, deviceList, deviceOf, groupByDate, groupDevices, SERVER_GROUP, type DeviceEntry } from "./sidebar.ts";
 import { describeCwd } from "./paths.ts";
+import type { HostLoad } from "./generated/HostLoad.ts";
+import { formatLoad, HOST_LOAD_REFRESH_MS, level, memoryPercent, percent } from "./hostload.ts";
 import type { Session, Store } from "./store.ts";
 
 type StatusFilter = "all" | "wait" | "running";
@@ -185,17 +187,42 @@ export function SideFooter({ store }: { store: Store }) {
   const conn = store.connection;
   const connClass = !store.url ? "bad" : conn === "connected" ? "ok" : conn === "disconnected" ? "bad" : "pending";
   const connText = !store.url ? "未连接服务器" : conn === "connected" ? "已连接" : conn === "disconnected" ? "已断开" : "重连中";
+  // 页面看得见时每 5 秒问一次服务器负载，切回窗口时补一次；没连上、旧 hubd 不支持时 store 不发。
+  useEffect(() => {
+    const tick = () => { if (pageVisible()) store.requestHostLoad(); };
+    tick();
+    const timer = setInterval(tick, HOST_LOAD_REFRESH_MS);
+    document.addEventListener("visibilitychange", tick);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", tick); };
+  }, [store, conn]);
+  const load = conn === "connected" ? store.hostLoad.load : null;
   return (
     <div className="side-bottom">
       <Status store={store} />
       <div className="side-foot">
-        <button className={`conn ${connClass}`} title="连接服务器" onClick={() => store.toggleSettings()}>
+        <button className={`conn ${connClass}${load ? " with-load" : ""}`} title="连接服务器" onClick={() => store.toggleSettings()}>
           <i />
           <span>{connText}</span>
-          {conn === "connected" && store.memAvailableMb != null ? <small title="服务器可用内存">可用 {store.memAvailableMb} MB</small> : null}
+          {/* 旧 hubd 不支持负载统计、或第一次统计还没回来时，照旧显示可用内存。 */}
+          {conn === "connected" && !load && store.memAvailableMb != null ? <small title="服务器可用内存">可用 {store.memAvailableMb} MB</small> : null}
         </button>
+        {load ? <HostLoadButton store={store} load={load} /> : null}
       </div>
     </div>
+  );
+}
+
+/** 「已连接」右边的服务器 CPU 和内存，点开「服务器」窗格看各会话的占用。 */
+function HostLoadButton({ store, load }: { store: Store; load: HostLoad }) {
+  const cpu = percent(load.cpu_permille);
+  const mem = memoryPercent(load);
+  const title = `服务器 ${load.cpus} 核 · CPU ${cpu}% · 负载 ${formatLoad(load.load_x100[0] ?? 0)}\n内存已用 ${load.mem_total_mb - load.mem_available_mb} / ${load.mem_total_mb} MB，可用 ${load.mem_available_mb} MB\n点开看各会话占多少`;
+  return (
+    <button type="button" className={`host-load${store.pane === "server" ? " on" : ""}`} title={title} onClick={() => store.togglePane("server")}>
+      <span className={level(cpu)}>CPU {cpu}%</span>
+      <span className="sep">·</span>
+      <span className={level(mem)}>内存 {Math.round(mem)}%</span>
+    </button>
   );
 }
 

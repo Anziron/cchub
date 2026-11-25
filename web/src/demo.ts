@@ -4,6 +4,7 @@ import approval from "../../testdata/recordings/approval/stream.jsonl?raw";
 import interrupt from "../../testdata/recordings/interrupt/stream.jsonl?raw";
 import plan from "../../testdata/recordings/plan/stream.jsonl?raw";
 import question from "../../testdata/recordings/question/stream.jsonl?raw";
+import type { HostLoad } from "./generated/HostLoad.ts";
 import type { UiEvent } from "./generated/UiEvent.ts";
 import type { Hub } from "./hub.ts";
 import { NEW_DRAFT } from "./nav.ts";
@@ -51,6 +52,45 @@ function whenPresent(selector: string, run: (el: Element) => void): void {
     run(el);
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
+}
+
+let loadTick = 0;
+
+/**
+ * 假负载，参照一台 2 核、2 GB 的服务器，会话和会话栏的演示数据一致。数值按次数起伏，不用随机数，截图可重复。
+ * `?scene=load-busy` 繁忙（负载是核数的 5 倍），`load-lowmem` 内存紧张。
+ */
+function demoHostLoad(): HostLoad {
+  const tick = loadTick++;
+  const wave = (base: number, spread: number) => Math.max(0, Math.round(base + Math.sin(tick * 1.3 + base) * spread));
+  const busy = scene === "load-busy";
+  const lowmem = scene === "load-lowmem";
+  const scale = busy ? 1 : lowmem ? 0.6 : 0.3;
+  const extra = lowmem ? 140 : 0;
+  const byCpu = (a: { cpu_permille: number }, b: { cpu_permille: number }) => b.cpu_permille - a.cpu_permille;
+  const sessions = [
+    { session: "rich", cpu_permille: wave(380 * scale, 30), mem_mb: 268 + extra },
+    { session: "approval", cpu_permille: wave(30 * scale, 8), mem_mb: 214 + extra },
+    { session: "plan", cpu_permille: wave(20 * scale, 6), mem_mb: 196 + extra },
+    { session: "question", cpu_permille: wave(10 * scale, 4), mem_mb: 181 + extra },
+  ].sort(byCpu);
+  const others = [
+    { pid: 31337, name: "claude", cwd: "/root/notes", cpu_permille: wave(310 * scale, 25), mem_mb: 246 + extra / 4 },
+    { pid: 812, name: "xray", cwd: "/usr/local/x-ui", cpu_permille: wave(20 * scale, 5), mem_mb: 38 },
+    { pid: 640, name: "tailscaled", cwd: "/", cpu_permille: wave(10, 3), mem_mb: 46 },
+    { pid: 2301, name: "hubd", cwd: "/", cpu_permille: 4, mem_mb: 9 },
+  ].sort(byCpu);
+  const sum = [...sessions, ...others].reduce((total, item) => total + item.cpu_permille, 0) + 15;
+  const used = busy ? 1226 : lowmem ? 1826 : 1016;
+  return {
+    cpus: 2,
+    cpu_permille: Math.min(1000, busy ? Math.max(sum, wave(965, 20)) : sum),
+    load_x100: busy ? [1091, 1155, 981] : lowmem ? [240, 210, 180] : [62, 81, 74],
+    mem_total_mb: 1967,
+    mem_available_mb: 1967 - used,
+    sessions,
+    others,
+  };
 }
 
 function until(recording: string, needle: string): string[] {
@@ -153,6 +193,11 @@ let emit: (event: UiEvent) => void = () => {};
 const DEVICE_CWDS = ["/mnt/laptop/d/demo-api", "/mnt/mac-mini/Users/dev/cchub", "/root/notes", "/mnt/laptop/d/demo-api", "/mnt/office-pc/e/billing", "/mnt/laptop/d/blog"];
 
 export function setupDemo(store: Store): void {
+  // 「服务器」窗格的走势图：先放 10 分钟的记录，截图时不用真等。
+  store.hostLoad.history = Array.from({ length: 119 }, (_, i) => {
+    const load = demoHostLoad();
+    return { at: Date.now() - (120 - i) * 5000, cpu: load.cpu_permille / 10, mem: ((load.mem_total_mb - load.mem_available_mb) / load.mem_total_mb) * 100 };
+  });
   const long = Array.from({ length: 14 }, (_, i) => `第 ${i + 1} 行：补充说明，输入框变高后滚动条和发送按钮的位置。`).join("\n");
   // 草稿要在输入框挂载前写好：无头浏览器的虚拟时钟到点就截图，之后的重画赶不上。
   const key = params.get("s") ?? NEW_DRAFT;
@@ -226,6 +271,10 @@ export const demoHub: Hub = {
         };
       }).filter((d) => d.messages);
       setTimeout(() => emit({ type: "usage", stats: JSON.stringify({ version: 2, generatedAt: Math.floor(Date.now() / 1000) - 120, tzOffset: 480, days }), error: scene === "usage-error" ? "统计命令没有安装，或运行超时" : null }), 300);
+    } else if (msg.type === "host_load") {
+      // `?scene=load-old`：旧 hubd 不认识这个请求（会话栏照旧只显示可用内存，窗格提示升级）。
+      if (scene === "load-old") emit({ type: "error", session: null, message: "无法解析消息：unknown variant `host_load`, expected one of `start`, `list`" });
+      else emit({ type: "host_load", load: demoHostLoad(), error: null });
     } else if (msg.type === "mount") {
       emit({ type: "mounted", device: msg.device, path: msg.path, cwd: `/mnt/${msg.device}/${msg.path[0].toLowerCase()}/${msg.path.slice(3).replaceAll("\\", "/")}`, error: null });
     } else if (msg.type === "input") {

@@ -17,5 +17,7 @@
 {"type":"task_output","path":"/tmp/claude/tasks/b1.output","text":"done","error":null}
 {"type":"usage","stats":"{\"version\":1}","error":null}
 {"type":"devices","devices":[{"name":"pc","os":"windows","online":true},{"name":"mac","os":null,"online":false}],"error":null}
+{"type":"host_load","load":{"cpus":2,"cpu_permille":968,"load_x100":[1091,1155,981],"mem_total_mb":1967,"mem_available_mb":741,"sessions":[{"session":"s1","cpu_permille":380,"mem_mb":268}],"others":[{"pid":4242,"name":"claude","cwd":"/work","cpu_permille":310,"mem_mb":246},{"pid":1,"name":"systemd","cwd":null,"cpu_permille":0,"mem_mb":12}]},"error":null}
+{"type":"host_load","load":null,"error":"读不了 /proc/stat"}
 {"type":"error","message":"无法解析消息：unknown variant `x`"}
 {"session":"s1","type":"error","message":"启动失败"}

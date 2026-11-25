@@ -99,12 +99,12 @@ impl Sessions {
         fs::write(self.dir(session).join("title"), title)
     }
 
-    /// 列出自己建的会话目录，最近更新的在前。
-    pub fn list(&self, is_running: impl Fn(&str, &Path) -> bool) -> Vec<SessionInfo> {
+    /// 所有会话的 ID 和目录：目录名是合法 ID、建好了输入 FIFO 的。
+    pub fn entries(&self) -> Vec<(String, PathBuf)> {
         let Ok(entries) = fs::read_dir(&self.root) else {
             return Vec::new();
         };
-        let mut sessions: Vec<SessionInfo> = entries
+        entries
             .flatten()
             .filter_map(|entry| {
                 let id = entry
@@ -113,14 +113,22 @@ impl Sessions {
                     .filter(|n| valid_id(n))?
                     .to_string();
                 let dir = entry.path();
-                if !dir.join("in").exists() {
-                    return None;
-                }
+                dir.join("in").exists().then_some((id, dir))
+            })
+            .collect()
+    }
+
+    /// 列出自己建的会话目录，最近更新的在前。
+    pub fn list(&self, is_running: impl Fn(&str, &Path) -> bool) -> Vec<SessionInfo> {
+        let mut sessions: Vec<SessionInfo> = self
+            .entries()
+            .into_iter()
+            .map(|(id, dir)| {
                 let updated = mtime_secs(&dir.join("out"));
                 // 没发过言（或旧会话）就用会话创建时间，即 `cwd` 文件的修改时间。
                 let active =
                     mtime_secs(&dir.join("active")).or_else(|| mtime_secs(&dir.join("cwd")));
-                Some(SessionInfo {
+                SessionInfo {
                     title: fs::read_to_string(dir.join("title")).ok(),
                     cwd: fs::read_to_string(dir.join("cwd")).ok(),
                     running: is_running(&id, &dir),
@@ -128,7 +136,7 @@ impl Sessions {
                     active,
                     archived: dir.join("archived").exists(),
                     id,
-                })
+                }
             })
             .collect();
         sessions.sort_by_key(|session| std::cmp::Reverse(session.updated));

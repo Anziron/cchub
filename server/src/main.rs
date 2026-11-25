@@ -9,6 +9,8 @@ mod host;
 #[cfg(unix)]
 mod idle;
 #[cfg(unix)]
+mod load;
+#[cfg(unix)]
 mod runner;
 #[cfg(unix)]
 mod session;
@@ -139,6 +141,7 @@ async fn run(config: config::Config) -> std::io::Result<()> {
         title_memory_mb,
         usage_cmd: config.usage_cmd,
         usage_lock: Default::default(),
+        load: Default::default(),
         devices_cache: Default::default(),
         input_timeout: config.input_timeout,
     });

@@ -21,5 +21,5 @@ pub use sync::{Inbound, InboundAction, LineSplitter, Outbound, OutboundLimits};
 pub use uplink::{Dedupe, Outbox};
 pub use wire::{
     client_version, with_version_query, AckError, ClientMsg, ConnectionState, DeviceInfo, Frame,
-    Health, ServerMsg, SessionInfo, UiEvent, PROTOCOL_VERSION,
+    Health, HostLoad, ProcessLoad, ServerMsg, SessionInfo, SessionLoad, UiEvent, PROTOCOL_VERSION,
 };

@@ -2,10 +2,11 @@
 import type { AckError } from "./AckError";
 import type { DeviceInfo } from "./DeviceInfo";
 import type { EventClass } from "./EventClass";
+import type { HostLoad } from "./HostLoad";
 import type { SessionInfo } from "./SessionInfo";
 
 export type ServerMsg = { "type": "hello", version: string, protocol_version: number, } | { "type": "ack", id: string, error?: AckError | null, } | { "type": "event", seq: number, next: number, class: EventClass, 
 /**
  * `claude` 输出的一行原文，`hubd` 不解析正文。
  */
-payload: string, } | { "type": "skipped", seq: number, next: number, } | { "type": "attached", live: number, } | { "type": "device", online: boolean, } | { "type": "status", running: boolean, } | { "type": "sessions", sessions: Array<SessionInfo>, mem_available_mb: number | null, } | { "type": "browse", device: string | null, path: string | null, parent: string | null, entries: Array<string>, error: string | null, } | { "type": "mounted", device: string, path: string, cwd: string | null, error: string | null, } | { "type": "task_output", path: string, text: string | null, error: string | null, } | { "type": "usage", stats: string | null, error: string | null, } | { "type": "devices", devices: Array<DeviceInfo>, error: string | null, } | { "type": "error", message: string, };
+payload: string, } | { "type": "skipped", seq: number, next: number, } | { "type": "attached", live: number, } | { "type": "device", online: boolean, } | { "type": "status", running: boolean, } | { "type": "sessions", sessions: Array<SessionInfo>, mem_available_mb: number | null, } | { "type": "browse", device: string | null, path: string | null, parent: string | null, entries: Array<string>, error: string | null, } | { "type": "mounted", device: string, path: string, cwd: string | null, error: string | null, } | { "type": "task_output", path: string, text: string | null, error: string | null, } | { "type": "usage", stats: string | null, error: string | null, } | { "type": "devices", devices: Array<DeviceInfo>, error: string | null, } | { "type": "host_load", load: HostLoad | null, error: string | null, } | { "type": "error", message: string, };

@@ -5,6 +5,7 @@ import type { Hub } from "./hub.ts";
 import { isNarrow } from "./platform.ts";
 import { sortKey } from "./sidebar.ts";
 import { parseUsage, type UsageStats } from "./usage.ts";
+import { applyHostLoad, emptyHostLoad, isUnsupported, type HostLoadState } from "./hostload.ts";
 import { afterTurn, confirmInserted, joinQueued, settleCancel, settleInsert, type Queued } from "./queue.ts";
 import { DropMounts, type DropRef } from "./paths.ts";
 import { choiceAck, controlNotice, inputNotice, replyAck, resumeChoice, startModel, userAck, type AckResult } from "./uplink.ts";
@@ -123,6 +124,8 @@ export class Store {
   taskOutput: { path: string; text: string | null; error: string | null } | null = null;
   /** 整体用量（使用情况窗格），打开窗格或点刷新时向服务器要一次。 */
   usage: { stats: UsageStats | null; error: string | null; loading: boolean } = { stats: null, error: null, loading: false };
+  /** 服务器负载（会话栏底部和「服务器」窗格），会话栏底部定时来要。 */
+  hostLoad: HostLoadState = emptyHostLoad();
   /** 新会话要用的工作区，服务器上的路径。 */
   cwd = saved.cwd.get();
   showWorkspace = false;
@@ -208,6 +211,8 @@ export class Store {
     if (state === "connected") {
       this.versionProblem = null;
       this.showSettings = false;
+      // 重连的可能是升级过的 hubd：之前不支持负载统计的，再试一次。
+      this.hostLoad = { ...this.hostLoad, unsupported: false };
       this.refresh();
       this.requestDevices();
     }
@@ -377,7 +382,15 @@ export class Store {
         // 失败时保留上一次的列表。
         if (!event.error) this.devices = event.devices;
         break;
+      case "host_load":
+        this.hostLoad = applyHostLoad(this.hostLoad, event.load, event.error);
+        break;
       case "error":
+        // 旧 hubd 不认识定时发的 `host_load`：不弹错误，之后不再问，会话栏照旧显示可用内存。
+        if (!event.session && isUnsupported(event.message)) {
+          this.hostLoad = { ...this.hostLoad, unsupported: true };
+          break;
+        }
         this.error = serverErrorText(event.message);
         if (event.session) {
           const session = this.sessions.get(event.session);
@@ -1018,6 +1031,12 @@ export class Store {
       this.changed();
     });
     this.changed();
+  }
+
+  /** 问一次服务器负载。会话栏底部每 5 秒调用；没连上、旧 hubd 不支持时不发。发送失败不提示，下次照样问。 */
+  requestHostLoad(): void {
+    if (this.connection !== "connected" || this.hostLoad.unsupported) return;
+    void this.hub.send({ type: "host_load" }).catch(() => undefined);
   }
 
   readTaskOutput(path: string): void {
