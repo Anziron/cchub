@@ -7,6 +7,9 @@
 //! - `mount <设备> <路径>`：输出服务器上的路径。
 //! - `ensure <服务器上的路径>`：确认 `/mnt/<设备>/...` 已挂载，没有就补挂；成功时退出码为 0。
 
+// 浏览、挂载、设备列表都交给外部命令（用户点了才跑，结果有缓存），经 runner 带超时运行。
+#![allow(clippy::disallowed_methods)]
+
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path};

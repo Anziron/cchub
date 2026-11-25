@@ -1,5 +1,8 @@
 //! 带超时运行子进程。挂载断开时子进程可能卡很久，不能让它拖住 `hubd`。
 
+// 起子进程是这个模块的本职（见 server/clippy.toml）。
+#![allow(clippy::disallowed_methods)]
+
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::FromRawFd;

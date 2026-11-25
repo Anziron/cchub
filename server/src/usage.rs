@@ -3,6 +3,9 @@
 //! 命令约定（默认 `cchub-usage`，见 `tools/usage/`；可用 `HUBD_USAGE_CMD` 替换，为空时关闭）：
 //! `<命令> --tz <分钟>`，成功时标准输出是一行 JSON，失败时退出码非 0。
 
+// 统计交给外部命令，用户打开“使用情况”时才跑，经 runner 带超时运行。
+#![allow(clippy::disallowed_methods)]
+
 use std::process::Command;
 use std::time::Duration;
 

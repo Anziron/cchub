@@ -362,7 +362,8 @@ async fn handle(
                     resume: resume.as_deref(),
                     model: model.as_deref(),
                 };
-                app.host.start(&id, &dir, &workdir, launch)
+                let input = app.sessions.hold(&id)?;
+                app.host.start(&id, &dir, &workdir, launch, &input)
             })
             .await?;
         }

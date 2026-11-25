@@ -20,6 +20,11 @@ const PIPE_SLACK: usize = 2 * 4096;
 /// 写不进去时多久再看一次。
 const WRITE_POLL: Duration = Duration::from_millis(20);
 
+/// 会话的输入 FIFO 已由 `Sessions` 打开并持有的凭证，只有 [`Sessions::hold`] 能造出来。
+/// 启动进程（`ProcessHost::start`）要它：FIFO 的最后一个写端关闭时缓冲里的数据会丢，
+/// 必须先打开并持有、再启动进程。这个顺序由类型保证，不靠代码的先后。
+pub struct HeldInput(());
+
 /// 一条输入的结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Written {
@@ -175,8 +180,14 @@ impl Sessions {
             .create(true)
             .append(true)
             .open(dir.join("out"))?;
-        self.input(session)?;
+        self.hold(session)?;
         Ok(())
+    }
+
+    /// 打开（已打开就复用）并持有会话的输入 FIFO。启动进程前调用，凭证交给 `ProcessHost::start`。
+    pub fn hold(&self, session: &str) -> io::Result<HeldInput> {
+        self.input(session)?;
+        Ok(HeldInput(()))
     }
 
     /// 写一行到进程的 stdin，每个 `id` 最多写一次。进程不在不写；FIFO 剩余空间放得下整行才写，

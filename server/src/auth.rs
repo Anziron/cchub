@@ -1,5 +1,8 @@
 //! 来访身份校验。`hubd` 能间接在服务器上执行命令，来访者身份无法确认时一律拒绝。
 
+// 每个新连接问一次 `tailscale whois`（建连接时，不在消息热路径上）。
+#![allow(clippy::disallowed_methods)]
+
 use std::net::{IpAddr, SocketAddr};
 use std::process::Command;
 use std::time::Duration;

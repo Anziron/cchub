@@ -1,5 +1,7 @@
 //! 完整链路：录制数据 → fake-claude → hubd → 同步核心，不耗 Claude 额度。
 #![cfg(unix)]
+// 测试里起进程、停单元不受 hubd 热路径规矩的限制（server/clippy.toml）。
+#![allow(clippy::disallowed_methods)]
 
 use std::collections::HashSet;
 use std::io::Read;

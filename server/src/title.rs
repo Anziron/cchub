@@ -2,6 +2,9 @@
 //!
 //! 命令从标准输入读提示词，标准输出的第一行是标题。失败、超时或输出不合格时保留原标题。
 
+// 每个新会话后台跑一次标题命令，经 runner 带超时运行。
+#![allow(clippy::disallowed_methods)]
+
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::Path;

@@ -1,11 +1,16 @@
 //! 进程托管。`claude` 不能是 `hubd` 的管道子进程，否则 `hubd` 一死它也跟着退出。
 //! 两种实现都把 stdin 接到 FIFO、stdout 接到文件，`hubd` 重启后靠这两个路径接回。
 
+// 启动和结束会话进程是这个模块的本职；状态检查读 cgroup，只在没有 cgroup v2 时退回 systemctl。
+#![allow(clippy::disallowed_methods)]
+
 use std::fs;
 use std::io;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+
+use crate::session::HeldInput;
 
 /// 启动参数里的会话 ID、模型。会话 ID 已由 `valid_id` 校验。
 #[derive(Debug, Clone, Copy, Default)]
@@ -40,8 +45,15 @@ fn shell_quote(text: &str) -> String {
 }
 
 pub trait ProcessHost: Send + Sync {
-    /// `cwd` 是进程的工作目录，`dir` 是会话目录。
-    fn start(&self, session: &str, dir: &Path, cwd: &Path, launch: Launch) -> io::Result<()>;
+    /// `cwd` 是进程的工作目录，`dir` 是会话目录。`input` 证明 FIFO 已经打开并持有（见 `HeldInput`）。
+    fn start(
+        &self,
+        session: &str,
+        dir: &Path,
+        cwd: &Path,
+        launch: Launch,
+        input: &HeldInput,
+    ) -> io::Result<()>;
     fn is_running(&self, session: &str, dir: &Path) -> bool;
     fn stop(&self, session: &str, dir: &Path) -> io::Result<()>;
 }
@@ -70,7 +82,14 @@ fn cgroup_running(slice: &Path, unit: &str) -> Option<bool> {
 }
 
 impl ProcessHost for SystemdHost {
-    fn start(&self, session: &str, dir: &Path, cwd: &Path, launch: Launch) -> io::Result<()> {
+    fn start(
+        &self,
+        session: &str,
+        dir: &Path,
+        cwd: &Path,
+        launch: Launch,
+        _input: &HeldInput,
+    ) -> io::Result<()> {
         let mut command = Command::new("systemd-run");
         command
             .args(["-q", "--collect", "--unit"])
@@ -144,7 +163,14 @@ fn pid_alive(pid: i32) -> bool {
 }
 
 impl ProcessHost for DirectHost {
-    fn start(&self, _session: &str, dir: &Path, cwd: &Path, launch: Launch) -> io::Result<()> {
+    fn start(
+        &self,
+        _session: &str,
+        dir: &Path,
+        cwd: &Path,
+        launch: Launch,
+        _input: &HeldInput,
+    ) -> io::Result<()> {
         let mut child = Command::new("/bin/sh")
             .arg("-c")
             .arg(shell_command(&self.claude_cmd, dir, launch))
