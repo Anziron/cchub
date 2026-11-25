@@ -27,9 +27,50 @@ fn main() {
     std::process::exit(1);
 }
 
+/// 哪次构建：CI 编译部署用的 hubd 时设 `HUBD_BUILD`（标签或分支名加短提交号，见 `ci.yml`）。
+/// 不用 Cargo 的版本号：它一直是 0.1.0，认不出是哪次构建。
+#[cfg(unix)]
+const BUILD: &str = match option_env!("HUBD_BUILD") {
+    Some(build) => build,
+    None => "本地构建",
+};
+
+/// 配置全部来自环境变量，`hubd` 不接受参数。带了参数就只打印说明、不启动：
+/// 以前照常启动，拿 `hubd --version` 查二进制时曾用正式会话目录起来过。
+#[cfg(unix)]
+fn usage() -> String {
+    format!(
+        "用法：hubd\n\
+         不带参数时按环境变量启动，变量见 README 的「配置」。默认会话目录 {state}、监听 {listen}；\n\
+         试跑要设临时的 HUBD_STATE_DIR 和别的 HUBD_LISTEN 端口，免得碰到正式会话。\n\
+         \n\
+         \x20 -h, --help     显示本说明\n\
+         \x20 -V, --version  显示是哪次构建和协议版本\n",
+        state = config::DEFAULT_STATE_DIR,
+        listen = config::DEFAULT_LISTEN,
+    )
+}
+
 #[cfg(unix)]
 fn main() -> std::process::ExitCode {
     use std::process::ExitCode;
+
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    match args.as_slice() {
+        [] => {}
+        [flag] if flag == "--help" || flag == "-h" => {
+            print!("{}", usage());
+            return ExitCode::SUCCESS;
+        }
+        [flag] if flag == "--version" || flag == "-V" => {
+            println!("hubd {BUILD}（协议 {}）", cchub_protocol::PROTOCOL_VERSION);
+            return ExitCode::SUCCESS;
+        }
+        _ => {
+            eprintln!("hubd 不接受这些参数：{args:?}\n\n{}", usage());
+            return ExitCode::from(2);
+        }
+    }
 
     let config = match config::Config::from_env() {
         Ok(config) => config,

@@ -6,8 +6,8 @@ use std::time::Duration;
 use crate::auth::is_tailscale_ip;
 use crate::title::DEFAULT_TITLE_CMD;
 
-const DEFAULT_LISTEN: &str = "127.0.0.1:7878";
-const DEFAULT_STATE_DIR: &str = "/var/lib/hubd";
+pub const DEFAULT_LISTEN: &str = "127.0.0.1:7878";
+pub const DEFAULT_STATE_DIR: &str = "/var/lib/hubd";
 const DEFAULT_CLAUDE_CMD: &str = "claude -p --input-format stream-json \
     --output-format stream-json --verbose --permission-prompt-tool stdio \
     --include-partial-messages --replay-user-messages";

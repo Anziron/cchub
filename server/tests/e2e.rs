@@ -1105,6 +1105,62 @@ async fn invalid_session_id_is_rejected() {
     assert!(!temp.0.parent().unwrap().join("x").exists());
 }
 
+/// 带参数运行 hubd，返回它的输出。带参数时 hubd 不能按环境变量启动：要很快退出，也不能建会话目录。
+async fn run_with_args(args: &[&str]) -> std::process::Output {
+    let temp = Temp::new(&format!("args-{}", next_id()));
+    let state = temp.0.join("state");
+    let run = Command::new(env!("CARGO_BIN_EXE_hubd"))
+        .args(args)
+        .env("HUBD_LISTEN", "127.0.0.1:0")
+        .env("HUBD_HOST", "direct")
+        .env("HUBD_STATE_DIR", &state)
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(Duration::from_secs(10), run)
+        .await
+        .unwrap_or_else(|_| panic!("hubd {args:?} 一直不退出：按环境变量启动了"))
+        .unwrap();
+    assert!(
+        !state.exists(),
+        "hubd {args:?} 建了会话目录：按环境变量启动了"
+    );
+    output
+}
+
+#[tokio::test]
+async fn unknown_arguments_print_usage_instead_of_starting() {
+    for args in [&["--bogus"][..], &["start"], &["--version", "--help"]] {
+        let output = run_with_args(args).await;
+        assert_eq!(output.status.code(), Some(2), "hubd {args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("用法：hubd"), "hubd {args:?}：{stderr}");
+    }
+}
+
+#[tokio::test]
+async fn help_prints_usage() {
+    for flag in ["--help", "-h"] {
+        let output = run_with_args(&[flag]).await;
+        assert!(output.status.success(), "hubd {flag}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("用法：hubd"), "hubd {flag}：{stdout}");
+    }
+}
+
+#[tokio::test]
+async fn version_prints_protocol_version() {
+    for flag in ["--version", "-V"] {
+        let output = run_with_args(&[flag]).await;
+        assert!(output.status.success(), "hubd {flag}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let protocol = format!("协议 {PROTOCOL_VERSION}");
+        assert!(
+            stdout.starts_with("hubd ") && stdout.contains(&protocol),
+            "hubd {flag}：{stdout}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn non_loopback_listen_is_refused() {
     let status = Command::new(env!("CARGO_BIN_EXE_hubd"))

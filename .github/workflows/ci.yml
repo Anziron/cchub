@@ -25,7 +25,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: bash scripts/check.sh
-      - run: bash scripts/check-budget.sh
+      # 部署用的 hubd 由这一步编译；`hubd --version` 显示的构建号（标签或分支名 + 短提交号）在这里写进去。
+      - run: HUBD_BUILD="$GITHUB_REF_NAME ${GITHUB_SHA::7}" bash scripts/check-budget.sh
       - uses: actions/upload-artifact@v4
         with:
           name: hubd-linux-musl

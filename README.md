@@ -37,7 +37,7 @@ curl -fsSL https://github.com/Anziron/cchub/releases/latest/download/install-ser
 
 ## 配置
 
-`hubd` 只读环境变量（写在 systemd 服务文件里）：
+`hubd` 只读环境变量（写在 systemd 服务文件里），带任何参数都不启动：`hubd --help` 显示说明，`hubd --version` 显示是哪次构建。
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
