@@ -3,11 +3,10 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useMenuFit } from "./Dialogs";
 import { Icon } from "./Icon";
-import { commandStatus, firstAsk, isSending, isWaiting, runningTasks, type Ask } from "./model";
+import { commandStatus, describeTool, firstAsk, formatDuration, isSending, isWaiting, runningTasks, type Ask } from "./model";
 import { pageVisible } from "./platform";
 import { formatAgo } from "./sidebar";
 import type { Session, Store } from "./store";
-import { describeTool } from "./Thread";
 
 export function askHint(ask?: Ask): string {
   if (ask?.kind === "plan") return "方案等你确认";
@@ -30,14 +29,7 @@ export function StateIcon({ state }: { state: RowState }) {
   return <span className={`state${state ? ` ${state}` : " done"}`} aria-hidden="true" />;
 }
 
-export function formatDuration(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-  return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds / 60) % 60}m`;
-}
-
-export { formatTokens } from "./model";
+export { formatDuration, formatTokens } from "./model";
 
 /** 只含用时文本的小组件：每秒刷新只重渲染它自己，窗口看不见时不刷新（失去焦点照常刷新）。 */
 export function Elapsed({ since }: { since: number }) {

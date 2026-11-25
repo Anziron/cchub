@@ -160,6 +160,9 @@ step_rules() {
     rule "demo 在渲染前加载完" \
         "只在 main.tsx 里 await import(\"./demo\")：它顶层按地址参数重置本地存储（宽度、收起、设备筛选），晚加载时界面先读到上一张截图残留的值" \
         demo_not_awaited
+    rule "前端模块之间没有运行时循环导入" \
+        "把两边共用的函数挪进纯逻辑模块（model.ts 等），组件之间只单向依赖：循环时谁先初始化取决于加载顺序，可能拿到 undefined" \
+        node scripts/import-cycles.mjs web/src
     rule "文件名不能只差大小写" \
         "改名：设备是 Windows，只差大小写的两个文件会被当成同一个（tsc 报 TS1149；侧栏组件因此叫 SessionList.tsx）" \
         case_clash

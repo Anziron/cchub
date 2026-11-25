@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
-import type { Ask, Question } from "./model";
+import { describeTool, type Ask, type Question } from "./model";
 import type { Session, Store } from "./store";
-import { describeTool } from "./Thread";
 
 interface Props {
   ask: Ask;

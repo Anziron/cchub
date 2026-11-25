@@ -887,6 +887,54 @@ export function formatTokens(tokens: number): string {
   return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
 }
 
+export function formatDuration(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds / 60) % 60}m`;
+}
+
+function relativeTo(path: unknown, cwd?: string): string {
+  const text = String(path ?? "");
+  return cwd && text.startsWith(`${cwd}/`) ? text.slice(cwd.length + 1) : text;
+}
+
+/** 工具调用的一行说明：动词、对象、图标。对话流、审批卡片、侧栏状态行共用。 */
+export function describeTool(tool: Pick<ToolItem, "name" | "input">, cwd?: string): { verb: string; target: string; icon: string } {
+  const input = tool.input;
+  const line = (value: unknown) => String(value ?? "").split("\n")[0];
+  switch (tool.name) {
+    case "Bash":
+      return { verb: "运行", target: line(input.command), icon: "term" };
+    case "Read":
+      return { verb: "读取", target: relativeTo(input.file_path, cwd), icon: "file" };
+    case "Edit":
+    case "MultiEdit":
+      return { verb: "编辑", target: relativeTo(input.file_path, cwd), icon: "file" };
+    case "Write":
+      return { verb: "写入", target: relativeTo(input.file_path, cwd), icon: "file" };
+    case "Grep":
+      return { verb: "搜索", target: line(input.pattern), icon: "file" };
+    case "Glob":
+      return { verb: "查找", target: line(input.pattern), icon: "file" };
+    case "WebFetch":
+      return { verb: "打开", target: line(input.url), icon: "file" };
+    case "WebSearch":
+      return { verb: "搜索网页", target: line(input.query), icon: "file" };
+    case "Task":
+    case "Agent":
+      return { verb: "子任务：", target: line(input.description), icon: "agents" };
+    case "Skill":
+      return { verb: "使用技能", target: line(input.skill), icon: "file" };
+    case "AskUserQuestion":
+      return { verb: "提问", target: "", icon: "think" };
+    case "ExitPlanMode":
+      return { verb: "提交方案", target: "", icon: "think" };
+    default:
+      return { verb: tool.name, target: "", icon: "file" };
+  }
+}
+
 /** hubd 回执成功：写给进程了，等 CLI 回传。只有还在“发送中”的才变，回传早于回执时不倒退。 */
 export function markDelivered(thread: Thread, id: string): void {
   thread.items = thread.items.map((item) => (item.kind === "user" && item.id === id && item.state === "sending" ? { ...item, state: "delivered" } : item));

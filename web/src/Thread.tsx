@@ -2,53 +2,12 @@ import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } fr
 import { AskCard } from "./AskCard";
 import { Icon } from "./Icon";
 import { linkify, Markdown, WebLink } from "./Markdown";
-import { groupTools, searchLinks, type Ask, type Item, type RenderBlock, type ToolItem } from "./model";
-import { formatDuration, formatTokens } from "./Common";
+import { describeTool, formatDuration, formatTokens, groupTools, searchLinks, type Ask, type Item, type RenderBlock, type ToolItem } from "./model";
 import { isTouch } from "./platform";
 import type { Session, Store } from "./store";
 
-function relative(path: unknown, cwd?: string): string {
-  const text = String(path ?? "");
-  return cwd && text.startsWith(`${cwd}/`) ? text.slice(cwd.length + 1) : text;
-}
-
 function lineCount(text: unknown): number {
   return typeof text === "string" && text ? text.split("\n").length : 0;
-}
-
-export function describeTool(tool: Pick<ToolItem, "name" | "input">, cwd?: string): { verb: string; target: string; icon: string } {
-  const input = tool.input;
-  const line = (value: unknown) => String(value ?? "").split("\n")[0];
-  switch (tool.name) {
-    case "Bash":
-      return { verb: "运行", target: line(input.command), icon: "term" };
-    case "Read":
-      return { verb: "读取", target: relative(input.file_path, cwd), icon: "file" };
-    case "Edit":
-    case "MultiEdit":
-      return { verb: "编辑", target: relative(input.file_path, cwd), icon: "file" };
-    case "Write":
-      return { verb: "写入", target: relative(input.file_path, cwd), icon: "file" };
-    case "Grep":
-      return { verb: "搜索", target: line(input.pattern), icon: "file" };
-    case "Glob":
-      return { verb: "查找", target: line(input.pattern), icon: "file" };
-    case "WebFetch":
-      return { verb: "打开", target: line(input.url), icon: "file" };
-    case "WebSearch":
-      return { verb: "搜索网页", target: line(input.query), icon: "file" };
-    case "Task":
-    case "Agent":
-      return { verb: "子任务：", target: line(input.description), icon: "agents" };
-    case "Skill":
-      return { verb: "使用技能", target: line(input.skill), icon: "file" };
-    case "AskUserQuestion":
-      return { verb: "提问", target: "", icon: "think" };
-    case "ExitPlanMode":
-      return { verb: "提交方案", target: "", icon: "think" };
-    default:
-      return { verb: tool.name, target: "", icon: "file" };
-  }
 }
 
 export function Diff({ oldText, newText }: { oldText: string; newText: string }) {
