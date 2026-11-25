@@ -8,6 +8,7 @@ import { parseUsage, type UsageStats } from "./usage.ts";
 import { afterTurn, confirmInserted, joinQueued, settleCancel, settleInsert, type Queued } from "./queue.ts";
 import { dropRef, mountTarget, type DropRef } from "./paths.ts";
 import { choiceAck, controlNotice, inputNotice, replyAck, resumeChoice, startModel, userAck, type AckResult } from "./uplink.ts";
+import { saved, savedModels, stampTaskTimes, withoutPending, withPending } from "./storage.ts";
 import type { DeviceInfo } from "./generated/DeviceInfo.ts";
 import {
   addSending,
@@ -43,9 +44,7 @@ import {
   userLine,
   userState,
   type Ask,
-  type ModelOption,
   type PendingChoice,
-  type RateLimits,
   type SlashCommand,
   type Thread,
 } from "./model.ts";
@@ -73,18 +72,6 @@ export interface Session {
   queue: Queued[];
 }
 
-const URL_KEY = "cchub.url";
-const MODELS_KEY = "cchub.models";
-const CWD_KEY = "cchub.cwd";
-const COMMANDS_KEY = "cchub.commands";
-/** 用户自选的默认模型和强度，每台设备各存一份。 */
-const DEFAULTS_KEY = "cchub.defaults";
-/** 会话进程不在时选的模型 / 强度（按会话 ID），恢复进程时带上，见 `PendingChoice`。 */
-const PENDING_KEY = "cchub.pending";
-const LIMITS_KEY = "cchub.limits";
-const DRAFTS_KEY = "cchub.drafts";
-const TASK_TIMES_KEY = "cchub.taskTimes";
-const MAX_TASK_TIMES = 200;
 /** 新会话发出后刷新列表的时间点：haiku 起标题一般 4～6 秒。 */
 const TITLE_REFRESH_MS = [7000, 20000];
 /** 新会话页的草稿。 */
@@ -94,33 +81,8 @@ export type PaneId = "changes" | "tasks" | "todos" | "plan" | "info" | "usage";
 const PANES: PaneId[] = ["changes", "tasks", "todos", "plan", "info", "usage"];
 /** 不依赖会话的窗格，新会话页也能打开。 */
 export const GLOBAL_PANES: PaneId[] = ["usage"];
-const PANE_KEY = "cchub.pane";
-const storedPane = (): PaneId | null => PANES.find((p) => p === localStorage.getItem(PANE_KEY)) ?? null;
-const VIEW_KEY = "cchub.view";
-const SIDE_COLLAPSED_KEY = "cchub.sideCollapsed";
+const storedPane = (): PaneId | null => PANES.find((p) => p === saved.pane.get()) ?? null;
 const HISTORY_MAX = 50;
-const VERBOSE_KEY = "cchub.verbose";
-
-function loadJson<T>(key: string, fallback: T): T {
-  try {
-    return (JSON.parse(localStorage.getItem(key) ?? "null") as T) ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-/** 还没有任何会话返回过模型列表时用，只放 CLI 长期支持的别名。 */
-const FALLBACK_MODELS: ModelOption[] = [
-  { value: "default", displayName: "默认" },
-  { value: "opus", displayName: "Opus" },
-  { value: "sonnet", displayName: "Sonnet" },
-  { value: "haiku", displayName: "Haiku" },
-];
-
-function loadModels(): ModelOption[] {
-  const saved = loadJson<ModelOption[]>(MODELS_KEY, []);
-  return Array.isArray(saved) && saved.length ? saved : FALLBACK_MODELS;
-}
 
 export interface BrowseState {
   device: string | null;
@@ -137,24 +99,24 @@ export class Store {
   selected: string | null = null;
   memAvailableMb: number | null = null;
   error: string | null = null;
-  url = localStorage.getItem(URL_KEY) ?? "";
+  url = saved.url.get();
   showSettings = this.url === "";
-  models = loadModels();
-  commands = loadJson<SlashCommand[]>(COMMANDS_KEY, []);
+  models = savedModels();
+  commands = saved.commands.get();
   /** 用户选的默认模型和强度（可能已不在模型列表里，用 `defaultModel` / `defaultEffort` 取有效值）。 */
-  defaults = loadJson<{ model?: string; effort?: string }>(DEFAULTS_KEY, {});
-  private pending = loadJson<Record<string, PendingChoice>>(PENDING_KEY, {});
-  limits = cachedLimits(loadJson<RateLimits>(LIMITS_KEY, {}));
+  defaults = saved.defaults.get();
+  private pending = saved.pending.get();
+  limits = cachedLimits(saved.limits.get());
   /** 右侧窗格：改动、后台任务、待办、方案、会话信息。记在本地，切换会话时保留。 */
   pane: PaneId | null = isNarrow() ? null : storedPane();
   /** 详细档：工具调用逐条展开显示，不合并（Ctrl+O 切换）。 */
-  verbose = localStorage.getItem(VERBOSE_KEY) === "1";
+  verbose = saved.verbose.get();
   /** 窄屏下会话列表是否展开，手机上打开 App 先看列表。 */
   showDrawer = isNarrow();
   /** 图标栏当前视图（会话栏和主区域的内容）。 */
-  view = localStorage.getItem(VIEW_KEY) ?? "home";
+  view = saved.view.get();
   /** 会话栏手动收起（记在本地）。 */
-  sideCollapsed = localStorage.getItem(SIDE_COLLAPSED_KEY) === "1";
+  sideCollapsed = saved.sideCollapsed.get();
   /** 消息区太窄、会话栏改成浮层时，浮层是否展开。 */
   sideFloatOpen = false;
   /** 后退 / 前进的历史：看过的会话 id，null 是新会话页。 */
@@ -170,7 +132,7 @@ export class Store {
   /** 整体用量（使用情况窗格），打开窗格或点刷新时向服务器要一次。 */
   usage: { stats: UsageStats | null; error: string | null; loading: boolean } = { stats: null, error: null, loading: false };
   /** 新会话要用的工作区，服务器上的路径。 */
-  cwd = localStorage.getItem(CWD_KEY) ?? "";
+  cwd = saved.cwd.get();
   showWorkspace = false;
   browse: BrowseState = { device: null, path: null, parent: null, entries: [], error: null, loading: false };
   mounting = false;
@@ -195,11 +157,11 @@ export class Store {
   /** 等 hubd 回执的 input：id → 回执到了怎么办。回执只处理一次。 */
   private acks = new Map<string, (error: AckResult | null) => void>();
   private initialized = new Set<string>();
-  private drafts = loadJson<Record<string, string>>(DRAFTS_KEY, {});
+  private drafts = saved.drafts.get();
   private attached: Record<string, DropRef[]> = {};
   /** 为拖入的文件挂载目录，等结果的标签；键是 `设备\n目录`。 */
   private fileMounts = new Map<string, { key: string; path: string; name: string }[]>();
-  private taskTimes = loadJson<Record<string, number>>(TASK_TIMES_KEY, {});
+  private taskTimes = saved.taskTimes.get();
   private limitsSave: ReturnType<typeof setTimeout> | 0 = 0;
 
   private hub: Hub;
@@ -234,7 +196,7 @@ export class Store {
 
   async connect(url: string): Promise<void> {
     this.url = url;
-    localStorage.setItem(URL_KEY, url);
+    saved.url.set(url);
     // 窗口重建时连接还在，要主动问一次状态。
     this.setConnection(await this.hub.connect(url));
     this.changed();
@@ -445,13 +407,13 @@ export class Store {
       const models = parseModels(line, requestId);
       if (models) {
         this.models = models;
-        localStorage.setItem(MODELS_KEY, JSON.stringify(models));
+        saved.models.set(models);
       }
       const commands = parseCommands(line, requestId);
       if (commands) {
         session.commands = commands;
         this.commands = commands;
-        localStorage.setItem(COMMANDS_KEY, JSON.stringify(commands));
+        saved.commands.set(commands);
       }
       return;
     }
@@ -479,28 +441,17 @@ export class Store {
     if (this.limitsSave) return;
     this.limitsSave = setTimeout(() => {
       this.limitsSave = 0;
-      localStorage.setItem(LIMITS_KEY, JSON.stringify(this.limits));
+      saved.limits.set(this.limits);
     }, 1000);
   }
 
   /** 任务事件没有时间戳，首次看到时记下来，窗口重建后重放还能用。 */
   private stampTasks(session: Session, line: string): void {
     if (!line.includes("task")) return;
-    let changed = false;
-    for (const task of session.thread.tasks.values()) {
-      if (task.startedAt) continue;
-      if (!this.taskTimes[task.id]) {
-        // 重放时才第一次看到已结束的任务，开始时间未知。
-        if (task.endedAt) continue;
-        this.taskTimes[task.id] = Date.now();
-        changed = true;
-      }
-      task.startedAt = this.taskTimes[task.id];
-    }
-    if (!changed) return;
-    const entries = Object.entries(this.taskTimes);
-    if (entries.length > MAX_TASK_TIMES) this.taskTimes = Object.fromEntries(entries.slice(-MAX_TASK_TIMES));
-    localStorage.setItem(TASK_TIMES_KEY, JSON.stringify(this.taskTimes));
+    const next = stampTaskTimes(session.thread.tasks.values(), this.taskTimes, Date.now());
+    if (!next) return;
+    this.taskTimes = next;
+    saved.taskTimes.set(next);
   }
 
   /** 问 CLI 当前有哪些模型和命令。不调用模型，也不写进会话记录；每个进程问一次就够。 */
@@ -590,7 +541,7 @@ export class Store {
   setDraft(key: string, text: string): void {
     if (text) this.drafts[key] = text;
     else delete this.drafts[key];
-    localStorage.setItem(DRAFTS_KEY, JSON.stringify(this.drafts));
+    saved.drafts.set(this.drafts);
   }
 
   commandsFor(session?: Session): SlashCommand[] {
@@ -654,7 +605,7 @@ export class Store {
   goHome(): void {
     if (this.view !== "home") {
       this.view = "home";
-      localStorage.setItem(VIEW_KEY, "home");
+      saved.view.set("home");
     }
     this.select(null);
   }
@@ -679,7 +630,7 @@ export class Store {
       else this.setSideCollapsed(!this.sideCollapsed);
     } else {
       this.view = id;
-      localStorage.setItem(VIEW_KEY, id);
+      saved.view.set(id);
       if (floating) this.sideFloatOpen = true;
       else this.setSideCollapsed(false);
     }
@@ -694,7 +645,7 @@ export class Store {
 
   private setSideCollapsed(value: boolean): void {
     this.sideCollapsed = value;
-    localStorage.setItem(SIDE_COLLAPSED_KEY, value ? "1" : "0");
+    saved.sideCollapsed.set(value);
   }
 
   openDrawer(): void {
@@ -758,7 +709,7 @@ export class Store {
   chooseWorkspace(cwd: string): void {
     this.cwd = cwd;
     this.showWorkspace = false;
-    localStorage.setItem(CWD_KEY, cwd);
+    saved.cwd.set(cwd);
     this.changed();
   }
 
@@ -811,16 +762,15 @@ export class Store {
 
   /** 进程不在时选的模型 / 强度存到本地，刷新、重启后照样显示，恢复进程时带上。 */
   private setPending(session: Session, change: PendingChoice): void {
-    this.pending = { ...this.pending, [session.id]: { ...this.pending[session.id], ...change } };
-    localStorage.setItem(PENDING_KEY, JSON.stringify(this.pending));
+    this.pending = withPending(this.pending, session.id, change);
+    saved.pending.set(this.pending);
   }
 
   private takePending(id: string): PendingChoice | undefined {
-    const pending = this.pending[id];
+    const { pending, rest } = withoutPending(this.pending, id);
     if (!pending) return undefined;
-    const { [id]: _, ...rest } = this.pending;
     this.pending = rest;
-    localStorage.setItem(PENDING_KEY, JSON.stringify(rest));
+    saved.pending.set(rest);
     return pending;
   }
 
@@ -1077,7 +1027,7 @@ export class Store {
 
   openPane(pane: PaneId): void {
     this.pane = pane;
-    localStorage.setItem(PANE_KEY, pane);
+    saved.pane.set(pane);
     this.changed();
   }
 
@@ -1090,7 +1040,7 @@ export class Store {
   closePane(): void {
     this.pane = null;
     this.taskOutput = null;
-    localStorage.removeItem(PANE_KEY);
+    saved.pane.clear();
     this.changed();
   }
 
@@ -1100,7 +1050,7 @@ export class Store {
 
   toggleVerbose(): void {
     this.verbose = !this.verbose;
-    localStorage.setItem(VERBOSE_KEY, this.verbose ? "1" : "0");
+    saved.verbose.set(this.verbose);
     this.changed();
   }
 
@@ -1165,7 +1115,7 @@ export class Store {
     if (change.model) next.model = change.model;
     if (change.effort !== undefined) next.effort = change.effort ?? undefined;
     this.defaults = next;
-    localStorage.setItem(DEFAULTS_KEY, JSON.stringify(next));
+    saved.defaults.set(next);
     this.changed();
   }
 

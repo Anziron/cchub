@@ -316,3 +316,152 @@ test("新会话：启动、订阅、问模型、设强度、发第一条消息�
   mock.timers.tick(13000);
   assert.equal(lists(), before + 2);
 });
+
+// ---- 本地存储：键名和格式是老用户数据的约定，不能变 ----
+
+test("偏好存在本地，新开窗口照样读到", async () => {
+  const { store } = setup();
+  await store.connect("ws://hub");
+  store.chooseWorkspace("/work/app");
+  store.clickView("plugins", false);
+  store.clickView("plugins", false);
+  store.toggleVerbose();
+  store.setDefaults({ model: "opus", effort: "high" });
+  store.setDraft("s1", "没写完的话");
+  store.setDraft("s2", "");
+  assert.equal(storage.getItem("cchub.url"), "ws://hub");
+  assert.equal(storage.getItem("cchub.cwd"), "/work/app");
+  assert.equal(storage.getItem("cchub.view"), "plugins");
+  assert.equal(storage.getItem("cchub.sideCollapsed"), "1");
+  assert.equal(storage.getItem("cchub.verbose"), "1");
+  assert.equal(storage.getItem("cchub.defaults"), '{"model":"opus","effort":"high"}');
+  assert.equal(storage.getItem("cchub.drafts"), '{"s1":"没写完的话"}');
+
+  const again = new Store(fakeHub().hub);
+  assert.equal(again.url, "ws://hub");
+  assert.equal(again.showSettings, false);
+  assert.equal(again.cwd, "/work/app");
+  assert.equal(again.view, "plugins");
+  assert.equal(again.sideCollapsed, true);
+  assert.equal(again.verbose, true);
+  assert.deepEqual(again.defaults, { model: "opus", effort: "high" });
+  assert.equal(again.draft("s1"), "没写完的话");
+});
+
+test("第一次打开：没有地址先弹设置，视图是首页，其余都是默认", () => {
+  const store = new Store(fakeHub().hub);
+  assert.equal(store.url, "");
+  assert.equal(store.showSettings, true);
+  assert.equal(store.view, "home");
+  assert.equal(store.sideCollapsed, false);
+  assert.equal(store.verbose, false);
+  assert.equal(store.cwd, "");
+  assert.deepEqual(store.defaults, {});
+  assert.deepEqual(store.commands, []);
+  assert.equal(store.pane, null);
+});
+
+test("initialize 回复里的模型和命令存本地，新开窗口先用它们；读不出时用内置的几个别名", () => {
+  storage.setItem("cchub.models", "{坏的");
+  const { store, hub, session } = setup();
+  assert.deepEqual(
+    store.models.map((m) => m.value),
+    ["default", "opus", "sonnet", "haiku"],
+  );
+  const [init] = hub.controls("initialize");
+  const models = [{ value: "opus", displayName: "Opus 5.5" }];
+  const commands = [{ name: "review", description: "审查" }];
+  const reply = { type: "control_response", response: { subtype: "success", request_id: init.body.request_id, response: { models, commands } } };
+  hub.emit(event("s1", 2000, JSON.stringify(reply)));
+  assert.deepEqual(store.models, models);
+  assert.deepEqual(session.commands, commands);
+  assert.equal(storage.getItem("cchub.models"), JSON.stringify(models));
+  assert.equal(storage.getItem("cchub.commands"), JSON.stringify(commands));
+
+  const again = new Store(fakeHub().hub);
+  assert.deepEqual(again.models, models);
+  assert.deepEqual(
+    again.commandsFor().map((c) => c.name),
+    ["resume", "review"],
+  );
+});
+
+test("缓存的额度去掉来源再用：上次的“运行中”等级不能压住这次的数据", () => {
+  storage.setItem("cchub.limits", JSON.stringify({ fiveHour: { utilization: 0.4, resetsAt: 2000000000, source: { session: "x", seq: 1, rank: 9e15 } } }));
+  const store = new Store(fakeHub().hub);
+  assert.deepEqual(store.limits.fiveHour, { utilization: 0.4, resetsAt: 2000000000 });
+});
+
+const taskStarted = (id: string) => JSON.stringify({ type: "system", subtype: "task_started", task_id: id, description: "跑测试", task_type: "local_bash" });
+
+test("后台任务第一次出现时记下开始时间，窗口重建后重放还能用；只留最近 200 条", () => {
+  const old = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`old${i}`, i + 1]));
+  storage.setItem("cchub.taskTimes", JSON.stringify(old));
+  const a = setup();
+  a.hub.emit(event("s1", 100, taskStarted("t1")));
+  const at = a.session.thread.tasks.get("t1")!.startedAt!;
+  assert.ok(at > 0);
+  const saved = JSON.parse(storage.getItem("cchub.taskTimes")!);
+  assert.equal(Object.keys(saved).length, 200);
+  assert.equal(saved.t1, at);
+  assert.equal(saved.old0, undefined, "最早的被挤掉");
+
+  const b = setup();
+  b.hub.emit(event("s1", 100, taskStarted("t1")));
+  assert.equal(b.session.thread.tasks.get("t1")!.startedAt, at);
+});
+
+test("重放时第一次看到的就是已结束的任务：开始时间未知，不记", () => {
+  const { hub, session } = setup();
+  hub.emit(event("s1", 100, JSON.stringify({ type: "system", subtype: "task_notification", task_id: "t9", status: "completed", summary: "完成" })));
+  assert.equal(session.thread.tasks.get("t9")!.startedAt, undefined);
+  assert.equal(storage.getItem("cchub.taskTimes"), null);
+});
+
+// ---- 窗格和后退 / 前进 ----
+
+test("窗格记在本地，不认识的值不用；关上就删掉", () => {
+  storage.setItem("cchub.pane", "nope");
+  assert.equal(new Store(fakeHub().hub).pane, null);
+  const store = new Store(fakeHub().hub);
+  store.openPane("tasks");
+  assert.equal(storage.getItem("cchub.pane"), "tasks");
+  assert.equal(new Store(fakeHub().hub).pane, "tasks");
+  store.togglePane("tasks");
+  assert.equal(store.pane, null);
+  assert.equal(storage.getItem("cchub.pane"), null);
+});
+
+test("后退 / 前进：在看过的会话之间来回，跳过已关闭的；走到新位置就丢掉前进那一截", () => {
+  const hub = fakeHub();
+  const store = new Store(hub.hub);
+  hub.emit({ type: "sessions", sessions: ["a", "b", "c"].map((id) => sessionInfo(id, false)), mem_available_mb: null });
+  for (const id of ["a", "b", "b", "c"]) store.select(id);
+  const back = () => (store.go(-1), store.selected);
+  assert.equal(back(), "b", "连续重复的只记一次");
+  assert.equal(back(), "a");
+  assert.equal(back(), null, "最早是新会话页");
+  assert.equal(store.canGo(-1), false);
+  store.go(1);
+  assert.equal(store.selected, "a");
+  store.select("c");
+  assert.equal(store.canGo(1), false);
+  store.select("b");
+  store.archive(store.sessions.get("c")!);
+  assert.equal(back(), "a", "已关闭的跳过");
+});
+
+test("后退历史最多记 50 个位置", () => {
+  const hub = fakeHub();
+  const store = new Store(hub.hub);
+  const ids = Array.from({ length: 60 }, (_, i) => `s${i}`);
+  hub.emit({ type: "sessions", sessions: ids.map((id) => sessionInfo(id, false)), mem_available_mb: null });
+  for (const id of ids) store.select(id);
+  let steps = 0;
+  while (store.canGo(-1)) {
+    store.go(-1);
+    steps++;
+  }
+  assert.equal(steps, 49);
+  assert.equal(store.selected, "s10");
+});
