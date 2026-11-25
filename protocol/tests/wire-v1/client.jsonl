@@ -1,0 +1,14 @@
+{"type":"start","session":"s1","resume":"c0ffee00-0000-4000-8000-000000000001","cwd":"/mnt/pc/d/proj","title":"标题","prompt":"你好","model":"claude-opus-5-5"}
+{"type":"start","session":"s2"}
+{"type":"list"}
+{"type":"attach","session":"s1","after":4096}
+{"type":"input","session":"s1","id":"00000000-0000-4000-8000-000000000002","line":"{\"type\":\"user\",\"uuid\":\"00000000-0000-4000-8000-000000000002\",\"message\":{\"role\":\"user\",\"content\":\"你好\"}}"}
+{"type":"stop","session":"s1"}
+{"type":"archive","session":"s1","archived":true}
+{"type":"browse","device":"pc","path":"D:\\proj"}
+{"type":"browse"}
+{"type":"mount","device":"pc","path":"D:\\proj"}
+{"type":"task_output","path":"/tmp/claude/tasks/b1.output"}
+{"type":"usage","tz_offset":480}
+{"type":"usage"}
+{"type":"devices"}

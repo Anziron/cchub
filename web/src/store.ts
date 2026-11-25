@@ -17,6 +17,7 @@ import {
   cancelInsertLine,
   denyLine,
   ackReason,
+  serverErrorText,
   failSending,
   failUser,
   markDelivered,
@@ -427,7 +428,7 @@ export class Store {
         if (!event.error) this.devices = event.devices;
         break;
       case "error":
-        this.error = event.message;
+        this.error = serverErrorText(event.message);
         if (event.session) {
           const session = this.sessions.get(event.session);
           if (session) {

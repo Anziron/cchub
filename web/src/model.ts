@@ -917,6 +917,15 @@ export function ackReason(error: "not_running" | "stalled" | "invalid"): string 
   return "消息太长或格式不对，没有发出";
 }
 
+/**
+ * 服务器报错的显示文字。新增的请求类型不升协议版本（宽松规则，见 `protocol/tests/wire_compat.rs`），
+ * 旧 hubd 收到不认识的请求会回“无法解析消息：unknown variant `…`”（ws.rs 的 `serve`），改成说人话。
+ */
+export function serverErrorText(message: string): string {
+  const unknown = /^无法解析消息：unknown variant `([^`]+)`/.exec(message);
+  return unknown ? `服务器的 hubd 版本较旧，不支持这个功能（${unknown[1]}），升级服务器后再用` : message;
+}
+
 /** 服务器报错时，还没确认的消息都算没发出去。 */
 export function failSending(thread: Thread): void {
   if (!isSending(thread)) return;

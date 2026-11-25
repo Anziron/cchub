@@ -8,6 +8,7 @@ import {
   apply,
   addSending,
   effortsFor,
+  serverErrorText,
   ackReason,
   failSending,
   failUser,
@@ -585,6 +586,13 @@ test("用户消息：发送中 → 已送达 → 回传后没有状态；失败�
   assert.equal(thread.phase, "idle");
   failUser(thread, "u1", "x");
   assert.equal(userState(thread, "u1"), undefined);
+});
+
+test("旧 hubd 不认识新加的请求：提示服务器版本较旧，其他报错原样显示", () => {
+  // 旧 hubd 的原话（ws.rs 的 serve），serde 的报错里带着不认识的类型名。
+  const old = "无法解析消息：unknown variant `inbox`, expected one of `start`, `list`, `attach` at line 1 column 16";
+  assert.equal(serverErrorText(old), "服务器的 hubd 版本较旧，不支持这个功能（inbox），升级服务器后再用");
+  assert.equal(serverErrorText("启动失败：没有这个目录"), "启动失败：没有这个目录");
 });
 
 test("同一条消息又回传一次（hubd 重启后补发，CLI 认出重复、不再处理）：界面不变，不会卡在思考中", () => {

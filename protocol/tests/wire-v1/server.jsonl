@@ -1,0 +1,21 @@
+{"type":"hello","version":"0.1.0","protocol_version":1}
+{"session":"s1","type":"ack","id":"in-1"}
+{"session":"s1","type":"ack","id":"in-2","error":"not_running"}
+{"session":"s1","type":"ack","id":"in-3","error":"stalled"}
+{"session":"s1","type":"ack","id":"in-4","error":"invalid"}
+{"session":"s1","type":"event","seq":0,"next":120,"class":"durable","payload":"{\"type\":\"system\",\"subtype\":\"init\"}"}
+{"session":"s1","type":"event","seq":120,"next":200,"class":"partial","payload":"{\"type\":\"stream_event\"}"}
+{"session":"s1","type":"event","seq":200,"next":300,"class":"approval","payload":"{\"type\":\"control_request\"}"}
+{"session":"s1","type":"event","seq":300,"next":400,"class":"question","payload":"{\"type\":\"control_request\"}"}
+{"session":"s1","type":"skipped","seq":400,"next":800}
+{"session":"s1","type":"attached","live":800}
+{"session":"s1","type":"device","online":false}
+{"session":"s1","type":"status","running":true}
+{"type":"sessions","sessions":[{"id":"s1","title":"标题","cwd":"/mnt/pc/d/proj","running":true,"updated":1764000000,"archived":false,"active":1764000000},{"id":"s2","title":null,"cwd":null,"running":false,"updated":null,"archived":true,"active":null}],"mem_available_mb":512}
+{"type":"browse","device":"pc","path":"D:\\proj","parent":"D:\\","entries":["D:\\proj\\a"],"error":null}
+{"type":"mounted","device":"pc","path":"D:\\proj","cwd":"/mnt/pc/d/proj","error":null}
+{"type":"task_output","path":"/tmp/claude/tasks/b1.output","text":"done","error":null}
+{"type":"usage","stats":"{\"version\":1}","error":null}
+{"type":"devices","devices":[{"name":"pc","os":"windows","online":true},{"name":"mac","os":null,"online":false}],"error":null}
+{"type":"error","message":"无法解析消息：unknown variant `x`"}
+{"session":"s1","type":"error","message":"启动失败"}

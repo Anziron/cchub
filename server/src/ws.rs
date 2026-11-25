@@ -176,6 +176,8 @@ async fn serve(app: Arc<App>, socket: WebSocket, deflate: bool, version: Option<
         let msg = match serde_json::from_str::<ClientMsg>(text.as_str()) {
             Ok(msg) => msg,
             Err(error) => {
+                // 新客户端发来这个版本不认识的请求时也走这里（新增类型不升协议版本）。前端 `serverErrorText`
+                // 认这个前缀和 serde 的 “unknown variant” 提示成“服务器版本较旧”，不要改措辞。
                 let message = format!("无法解析消息：{error}");
                 if send_error(&tx, None, message).await.is_err() {
                     break;
