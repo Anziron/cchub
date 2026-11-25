@@ -41,8 +41,8 @@ pub struct Sessions {
     root: PathBuf,
     /// FIFO 的最后一个 fd 关闭时缓冲数据会丢，所以先打开并持有，再启动进程。
     inputs: Mutex<HashMap<String, Arc<Mutex<File>>>>,
-    /// 每个会话最近写入过的输入 `id`。进程结束（`release`）后仍保留，
-    /// 免得重连补发时把已经交给旧进程的输入再写一遍。
+    /// 每个会话最近写入过的输入 `id`。claude 进程结束（`release`）后仍保留，
+    /// 免得重连补发时把已经交给旧进程的输入再写一遍；`hubd` 重启就清空（见 `uplink.rs` 开头）。
     written: Mutex<HashMap<String, Dedupe>>,
 }
 

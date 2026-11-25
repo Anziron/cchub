@@ -52,7 +52,7 @@ pub enum ClientMsg {
         after: u64,
     },
     /// 一行发给 `claude` 的 stream-json。`id` 由客户端生成，`hubd` 按它回 `Ack` 并去重：
-    /// 同一个 `id` 重发（如断线重连后补发）只回执，不再写入。
+    /// 同一个 `id` 重发（如断线重连后补发）只回执，不再写入；`hubd` 重启后可能再写一次，见 `uplink.rs`。
     Input {
         session: String,
         id: String,

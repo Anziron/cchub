@@ -585,6 +585,20 @@ test("用户消息：发送中 → 已送达 → 回传后没有状态；失败�
   assert.equal(thread.phase, "idle");
   failUser(thread, "u1", "x");
   assert.equal(userState(thread, "u1"), undefined);
+});
+
+test("同一条消息又回传一次（hubd 重启后补发，CLI 认出重复、不再处理）：界面不变，不会卡在思考中", () => {
+  const echo = ev({ type: "user", uuid: "u1", message: { role: "user", content: "你好" } });
+  // 实时发送先有乐观显示；重放 out 时没有，第一次回传就是这条消息。
+  for (const sentHere of [true, false]) {
+    const thread = newThread();
+    if (sentHere) addSending(thread, "u1", "你好");
+    for (const line of [echo, reply("claude-haiku-4-5"), ev({ type: "result", subtype: "success" })]) apply(thread, line);
+    assert.equal(thread.phase, "idle");
+    const items = [...thread.items];
+    apply(thread, echo);
+    assert.deepEqual({ phase: thread.phase, items: thread.items }, { phase: "idle", items }, `sentHere=${sentHere}`);
+  }
   assert.equal(ackReason("invalid"), "消息太长或格式不对，没有发出");
 });
 

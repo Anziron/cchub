@@ -498,6 +498,10 @@ function onUser(thread: Thread, event: Json): void {
     const command = commandText(content);
     // 发送时已经先显示了，回传只是确认送达。
     const sent = findLast(thread, (item) => item.kind === "user" && item.id === event.uuid);
+    const prior = sent >= 0 ? thread.items[sent] : undefined;
+    // 已经回传过（气泡没有发送状态了）又来一次：hubd 重启后客户端按原 id 补发，CLI 认出 uuid 重复、
+    // 只回显不处理（实验见设计仓库 experiments/k2-dup.py）。什么都不改，否则会一直显示“思考中”。
+    if (prior?.kind === "user" && prior.state === undefined) return;
     if (sent >= 0) {
       replaceItem(thread, sent, { kind: "user", id: event.uuid, text: command ?? content });
       if (command) return;
