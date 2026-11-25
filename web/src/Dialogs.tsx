@@ -7,7 +7,8 @@ import { deviceList, formatAgo, SERVER_GROUP } from "./sidebar.ts";
 
 /** 浏览服务器本机目录时发给 hubd 的设备名（同 `server/src/workspace.rs` 的 `SERVER_DEVICE`）。 */
 const SERVER_DEVICE = "@server";
-import { describeCwd, type Session, type Store } from "./store.ts";
+import { describeCwd } from "./paths.ts";
+import type { Session, Store } from "./store.ts";
 
 /** 弹窗。Esc 只关弹窗，不能冒泡到窗口上变成中断任务。 */
 /** `local`：只盖住对话区并在其中居中（和输入框对齐），要放在 `.main` 里渲染。 */

@@ -25,6 +25,8 @@ import {
   newThread,
   onProcessExit,
   matchCommands,
+  isResumeCommand,
+  withResume,
   cachedLimits,
   applyPending,
   defaultEffortFor,
@@ -378,6 +380,15 @@ test("Fable 额度来自 seven_day_overage_included，合并时保留", () => {
   // 没用 Fable 的会话不带这个窗口，不能把已有的 Fable 额度冲掉。
   const plain = JSON.stringify({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.3, resetsAt: 100 } } } });
   assert.equal(mergeRateLimits(fable, parseRateLimits(plain)!).fable?.utilization, 0.37);
+});
+
+test("/resume 由界面处理：只认单独的命令，菜单里没有就补在最前面", () => {
+  assert.equal(isResumeCommand(" /resume "), true);
+  assert.equal(isResumeCommand("/resume abc"), false);
+  assert.equal(isResumeCommand("/resumes"), false);
+  assert.deepEqual(withResume([{ name: "review" }]).map((c) => c.name), ["resume", "review"]);
+  const own = [{ name: "review" }, { name: "resume", description: "CLI 自己的" }];
+  assert.equal(withResume(own), own);
 });
 
 test("命令菜单只在输入 / 词时出现，前缀匹配排在前面", () => {

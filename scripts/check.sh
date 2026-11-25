@@ -126,6 +126,22 @@ import_without_ext() {
         grep -vE "['\"]\.{1,2}/[^'\"?]*\.(tsx?|css|json)['\"]"
 }
 
+# 从 store.ts 导入了类型和 Store 以外的东西。多行或整体导入看不出导入了什么，也算违例。
+store_value_imports() {
+    local line names bad
+    web_grep --exclude=store.ts "from ['\"]\./store\.ts['\"]" | while IFS= read -r line; do
+        case $line in
+        *":import type "*) continue ;;
+        *":import {"*"}"*) ;;
+        *) echo "$line"; continue ;;
+        esac
+        names=${line#*\{}
+        names=${names%%\}*}
+        bad=$(tr ',' '\n' <<<"$names" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -vE '^(type .*|Store|)$' | paste -sd, -)
+        [ -z "$bad" ] || echo "${line%%:import*}: $bad"
+    done
+}
+
 case_clash() { git ls-files | sort -f | uniq -di; }
 
 ps1_without_bom() {
@@ -173,6 +189,9 @@ step_rules() {
     rule "前端相对导入写全扩展名" \
         "写成 ./xxx.ts、./xxx.tsx：web/test 用 node --test 直接跑源码，Node 不会补扩展名，漏写的模块在测试里加载不了" \
         import_without_ext
+    rule "别的模块从 store.ts 只导入类型和 Store" \
+        "工具函数、常量放进纯逻辑模块（paths.ts、nav.ts、model.ts 等）再导入，写成一行 import { … } from \"./store.ts\"：store.ts 是状态外壳，组件只拿它的类型和实例，纯逻辑才能单独测" \
+        store_value_imports
     rule "文件名不能只差大小写" \
         "改名：设备是 Windows，只差大小写的两个文件会被当成同一个（tsc 报 TS1149；侧栏组件因此叫 SessionList.tsx）" \
         case_clash

@@ -6,7 +6,8 @@ import { backgroundTasks, collectChanges, findModel, groupChanges, isTranscript,
 import { pageVisible } from "./platform.ts";
 import { PANE_SIZING, Resizer } from "./Resizer.tsx";
 import { GLOBAL_PANES } from "./nav.ts";
-import { describeCwd, type Session, type Store } from "./store.ts";
+import { describeCwd } from "./paths.ts";
+import type { Session, Store } from "./store.ts";
 import { Diff, TranscriptView } from "./Thread.tsx";
 import { PANE_TITLES } from "./TopBar.tsx";
 import { UsagePane } from "./UsagePane.tsx";

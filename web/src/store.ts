@@ -27,6 +27,7 @@ import {
   mergeRateLimits,
   initializeLine,
   interruptLine,
+  isResumeCommand,
   markInterrupting,
   newThread,
   onProcessExit,
@@ -44,6 +45,7 @@ import {
   stopTaskLine,
   userLine,
   userState,
+  withResume,
   type Ask,
   type PendingChoice,
   type SlashCommand,
@@ -535,8 +537,7 @@ export class Store {
   }
 
   commandsFor(session?: Session): SlashCommand[] {
-    const commands = session?.commands ?? this.commands;
-    return commands.some((c) => c.name === "resume") ? commands : [RESUME_COMMAND, ...commands];
+    return withResume(session?.commands ?? this.commands);
   }
 
   private attach(session: Session): void {
@@ -1109,17 +1110,4 @@ export class Store {
     session.thread.effort = effort;
     this.changed();
   }
-}
-
-const RESUME_COMMAND: SlashCommand = { name: "resume", description: "找回已关闭的会话" };
-
-/** `/resume` 由界面处理（CLI 的无界面模式没有这个命令），不发给 CLI。 */
-export const isResumeCommand = (text: string): boolean => /^\/resume\s*$/.test(text.trim());
-
-/** `/mnt/<设备>/...` 是挂载的设备目录，其他是服务器本地目录。 */
-export function describeCwd(cwd?: string): { project: string; device: string } {
-  if (!cwd) return { project: "", device: "" };
-  const parts = cwd.split("/").filter(Boolean);
-  const project = parts[parts.length - 1] ?? "/";
-  return { project, device: parts[0] === "mnt" && parts[1] ? parts[1] : "服务器" };
 }

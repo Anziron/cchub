@@ -1,7 +1,7 @@
 // 拖进输入框的文件路径怎么转成服务器能读的引用。运行：node --test web/test/
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { dropRef, mentionText, mountTarget } from "../src/paths.ts";
+import { describeCwd, dropRef, mentionText, mountTarget } from "../src/paths.ts";
 
 const cwd = "/mnt/pc-company/d/cchub";
 
@@ -50,4 +50,11 @@ test("发送时以 @路径 拼在正文前，含空格的路径加引号", () =>
   assert.equal(mentionText(["web/src/App.tsx", "docs/a b.md"], "看看这两个"), '@web/src/App.tsx @"docs/a b.md"\n\n看看这两个');
   assert.equal(mentionText([], "hi"), "hi");
   assert.equal(mentionText(["a.ts"], ""), "@a.ts");
+});
+
+test("会话目录：/mnt/<设备>/ 下是设备目录，其他是服务器本地目录", () => {
+  assert.deepEqual(describeCwd("/mnt/laptop/work/app"), { project: "app", device: "laptop" });
+  assert.deepEqual(describeCwd("/srv/tools/"), { project: "tools", device: "服务器" });
+  assert.deepEqual(describeCwd("/"), { project: "/", device: "服务器" });
+  assert.deepEqual(describeCwd(undefined), { project: "", device: "" });
 });

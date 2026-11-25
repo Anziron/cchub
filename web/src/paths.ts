@@ -66,3 +66,11 @@ export function mentionText(paths: string[], text: string): string {
   const refs = paths.map((p) => (/\s/.test(p) ? `@"${p}"` : `@${p}`)).join(" ");
   return text.trim() ? `${refs}\n\n${text}` : refs;
 }
+
+/** 会话目录显示成“项目名 + 设备”：`/mnt/<设备>/...` 是挂载的设备目录，其他是服务器本地目录。 */
+export function describeCwd(cwd?: string): { project: string; device: string } {
+  if (!cwd) return { project: "", device: "" };
+  const parts = cwd.split("/").filter(Boolean);
+  const project = parts[parts.length - 1] ?? "/";
+  return { project, device: parts[0] === "mnt" && parts[1] ? parts[1] : "服务器" };
+}

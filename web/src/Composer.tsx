@@ -2,11 +2,11 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, 
 import { CommandMenu, ModelMenu } from "./Dialogs.tsx";
 import { Dropdown, Elapsed, formatTokens, Meter, sessionStatus } from "./Common.tsx";
 import { Icon } from "./Icon.tsx";
-import { firstAsk, matchCommands, runningTasks, turnTokens, type SlashCommand } from "./model.ts";
-import { mentionText, type DropRef } from "./paths.ts";
+import { firstAsk, isResumeCommand, matchCommands, runningTasks, turnTokens, type SlashCommand } from "./model.ts";
+import { describeCwd, mentionText, type DropRef } from "./paths.ts";
 import { isTouch, onFileDrop, pageVisible } from "./platform.ts";
 import { NEW_DRAFT } from "./nav.ts";
-import { describeCwd, isResumeCommand, type Session, type Store } from "./store.ts";
+import type { Session, Store } from "./store.ts";
 
 const INTERRUPT_TIMEOUT_MS = 5000;
 

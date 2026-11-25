@@ -4,7 +4,8 @@ import { Dropdown, MenuItem, rowState, sessionStatus, SessionMenu, StateIcon } f
 import { Icon } from "./Icon.tsx";
 import { backgroundTasks, collectChanges, latestPlan, runningTasks } from "./model.ts";
 import { GLOBAL_PANES, type PaneId } from "./nav.ts";
-import { describeCwd, type Session, type Store } from "./store.ts";
+import { describeCwd } from "./paths.ts";
+import type { Session, Store } from "./store.ts";
 
 export const PANE_TITLES: Record<PaneId, string> = { changes: "改动", tasks: "后台任务", todos: "待办", plan: "方案", info: "会话信息", usage: "使用情况" };
 const PANE_ICONS: Record<PaneId, string> = { changes: "diff", tasks: "tasks", todos: "check", plan: "plan", info: "info", usage: "chart" };

@@ -476,6 +476,15 @@ export function matchCommands(commands: SlashCommand[], text: string): SlashComm
   ];
 }
 
+const RESUME_COMMAND: SlashCommand = { name: "resume", description: "找回已关闭的会话" };
+
+/** `/resume` 由界面处理（CLI 的无界面模式没有这个命令），不发给 CLI。 */
+export const isResumeCommand = (text: string): boolean => /^\/resume\s*$/.test(text.trim());
+
+/** 命令菜单：CLI 没报 `/resume` 时补在最前面。 */
+export const withResume = (commands: SlashCommand[]): SlashCommand[] =>
+  commands.some((c) => c.name === "resume") ? commands : [RESUME_COMMAND, ...commands];
+
 function onUser(thread: Thread, event: Json): void {
   const content = event.message?.content;
   if (typeof content === "string") {

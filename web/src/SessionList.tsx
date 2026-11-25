@@ -5,7 +5,8 @@ import { Icon } from "./Icon.tsx";
 import { firstAsk, isWaiting } from "./model.ts";
 import { deviceColorMap, deviceColorVars } from "./deviceColors.ts";
 import { DEVICE_STATE, deviceList, deviceOf, groupByDate, groupDevices, SERVER_GROUP, type DeviceEntry } from "./sidebar.ts";
-import { describeCwd, type Session, type Store } from "./store.ts";
+import { describeCwd } from "./paths.ts";
+import type { Session, Store } from "./store.ts";
 
 type StatusFilter = "all" | "wait" | "running";
 type GroupBy = "project" | "date";

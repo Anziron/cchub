@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { ackReason, firstAsk, userState } from "../src/model.ts";
-import { describeCwd, isResumeCommand, Store } from "../src/store.ts";
+import { Store } from "../src/store.ts";
 
 const recording = (name: string) => readFileSync(new URL(`../../testdata/recordings/${name}/stream.jsonl`, import.meta.url), "utf8").trim().split("\n");
 const INIT = recording("approval")[0];
@@ -25,19 +25,6 @@ function setup(running = true, init = true) {
   const session = store.sessions.get("s1")!;
   return { store, hub, session };
 }
-
-test("/mnt/<设备>/ 下是设备目录，其他是服务器本地目录", () => {
-  assert.deepEqual(describeCwd("/mnt/laptop/work/app"), { project: "app", device: "laptop" });
-  assert.deepEqual(describeCwd("/srv/tools/"), { project: "tools", device: "服务器" });
-  assert.deepEqual(describeCwd("/"), { project: "/", device: "服务器" });
-  assert.deepEqual(describeCwd(undefined), { project: "", device: "" });
-});
-
-test("只有单独的 /resume 由界面处理", () => {
-  assert.equal(isResumeCommand(" /resume "), true);
-  assert.equal(isResumeCommand("/resume abc"), false);
-  assert.equal(isResumeCommand("/resumes"), false);
-});
 
 // ---- 用户消息的回执 ----
 
