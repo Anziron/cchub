@@ -1,4 +1,4 @@
-# 从 desktop\icons\source.svg 重新生成入库的桌面端图标。Android 的图标不入库，由 CI 在 android init 之后生成（见 ci.yml）。
+﻿# 从 desktop\icons\source.svg 重新生成入库的桌面端图标。Android 的图标不入库，由 CI 在 android init 之后生成（见 ci.yml）。
 # 用法：pcrun "powershell -ExecutionPolicy Bypass -File scripts\make-icons.ps1"
 $root = Split-Path -Parent $PSScriptRoot
 $icons = Join-Path $root "desktop\icons"

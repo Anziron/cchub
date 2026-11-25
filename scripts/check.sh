@@ -107,10 +107,68 @@ rule() {
         printf '✗ %s\n%s\n  → %s\n' "$name" "$out" "$fix"
     fi
 }
+# 在前端的 .ts / .tsx 里找（不含 Rust 生成的类型）。
+web_grep() { grep -rnE --include='*.ts' --include='*.tsx' --exclude-dir=generated "$@" web/src; }
+
+mask_used() {
+    grep -rnE --include='*.css' '(^|[^-[:alnum:]])(-webkit-)?mask(-image)?[[:space:]]*:' web/src
+    web_grep '[mM]askImage[[:space:]]*:'
+}
+
+demo_not_awaited() {
+    web_grep "from ['\"]\./demo['\"]|import\(['\"]\./demo['\"]\)" | grep -v 'await import("./demo")'
+}
+
+case_clash() { git ls-files | sort -f | uniq -di; }
+
+ps1_without_bom() {
+    local f
+    git ls-files '*.ps1' | while IFS= read -r f; do
+        [ "$(head -c3 "$f" | od -An -tx1 | tr -d ' \n')" = efbbbf ] || echo "$f"
+    done
+}
+
+# 录制里的邮箱、Tailscale 地址（100.64/10、fd7a:115c:a1e0::/48）、令牌、本机路径；record.py 换上的占位值放行。
+unredacted() {
+    grep -rnoE \
+        -e '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
+        -e '\b100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}\b' \
+        -e '[Ff][Dd]7[Aa]:115[Cc]:[Aa]1[Ee]0' \
+        -e 'sk-ant-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}' \
+        -e '/root/|/home/[A-Za-z0-9._-]+|/Users/[A-Za-z0-9._-]+|[A-Za-z]:\\+Users\\+[A-Za-z0-9._-]+|/mnt/[A-Za-z0-9._-]+' \
+        testdata | grep -vE ':(user@example\.com|100\.64\.0\.1|/home/user)$'
+}
+
 step_rules() {
     RULE_COUNT=0
     RULE_BAD=0
-    # （规则加在这里）
+    rule "前端发给 claude 的输入只走 store.ts 的 input()" \
+        "改用 store.input()：它带 id、登记回执回调；控制消息用 store.control()" \
+        web_grep --exclude=store.ts 'type: *"input"'
+    rule "外部链接只走 platform.ts 的 openUrl" \
+        "改用 openUrl：桌面端经 desktop.rs 的 open_url 打开（只放行 http/https），window.open、target=_blank 在 exe 里不可靠" \
+        web_grep --exclude=platform.ts 'window\.open\(|_blank'
+    rule "读秒、动画、定时刷新按 pageVisible() 暂停，不用 document.hasFocus()" \
+        "用 pageVisible()（visibilityState）：用户常把窗口放在旁边看着，焦点在别处时界面会像卡住" \
+        web_grep 'hasFocus'
+    rule "不用 mask-image 做渐隐" \
+        "用吸顶 / 吸底的渐变伪元素（见 styles.css 的 .stream::before）：带遮罩的区域里有转圈、呼吸点这类无限动画时，整块每帧重新合成，GPU 一直忙" \
+        mask_used
+    rule "不把 HTML 字符串塞进界面" \
+        "用 React 渲染文本或元素：工具输出、模型回复里都可能带 HTML" \
+        web_grep 'innerHTML|outerHTML|insertAdjacentHTML|dangerouslySetInnerHTML'
+    rule "demo 在渲染前加载完" \
+        "只在 main.tsx 里 await import(\"./demo\")：它顶层按地址参数重置本地存储（宽度、收起、设备筛选），晚加载时界面先读到上一张截图残留的值" \
+        demo_not_awaited
+    rule "文件名不能只差大小写" \
+        "改名：设备是 Windows，只差大小写的两个文件会被当成同一个（tsc 报 TS1149；侧栏组件因此叫 SessionList.tsx）" \
+        case_clash
+    rule ".ps1 存成带 BOM 的 UTF-8" \
+        "加上 BOM：设备上的 PowerShell 5 把无 BOM 的 .ps1 按 GBK 读，中文注释以全角标点结尾时会吞掉下一行" \
+        ps1_without_bom
+    rule "录制里没有没脱敏的内容（邮箱、令牌、Tailscale 地址、本机路径）" \
+        "用 tools/record/record.py 重录，或照它的规则替换：邮箱 → user@example.com，Tailscale 地址 → 100.64.0.1，家目录 → /home/user，项目目录 → /work" \
+        unredacted
     echo "规则 $RULE_COUNT 条，违反 $RULE_BAD 条"
     [ "$RULE_BAD" -eq 0 ]
 }
