@@ -201,12 +201,87 @@ fn ids(lines: impl Iterator<Item = String>) -> (HashSet<String>, HashSet<String>
     (uuids, messages, tools)
 }
 
+/// 会话进程的托管方式：生产用 systemd，测试和没有 systemd 的环境用 direct。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Host {
+    Direct,
+    Systemd,
+}
+
+/// systemd 版要 root（往系统的 systemd 里起单元）和 systemd。服务器上 cc-check 以 root 运行，会直接跑；
+/// 不满足时跳过并说明原因。设了 `CCHUB_E2E_SYSTEMD=1`（CI 用 sudo 跑这一项，见 ci.yml）就必须能跑。
+fn systemd_ready() -> bool {
+    // SAFETY: geteuid 没有参数，不会失败。
+    let root = unsafe { libc::geteuid() } == 0;
+    let booted = Path::new("/run/systemd/system").is_dir();
+    if root && booted {
+        return true;
+    }
+    let why = if root {
+        "这台机器没有 systemd"
+    } else {
+        "不是 root"
+    };
+    assert!(
+        std::env::var_os("CCHUB_E2E_SYSTEMD").is_none(),
+        "CCHUB_E2E_SYSTEMD=1 要求跑 systemd 版，但{why}"
+    );
+    eprintln!("跳过 systemd 版：{why}（CI 用 sudo 跑这一项）");
+    false
+}
+
+/// 测试结束（包括失败）时停掉 systemd 单元，不在机器上留下进程。
+struct Unit(String);
+
+impl Drop for Unit {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("systemctl")
+            .args(["stop", &self.0])
+            .status();
+    }
+}
+
 #[tokio::test]
 async fn replay_survives_hubd_kill_and_matches_transcript() {
-    let temp = Temp::new("kill");
-    let (mut hubd, addr) = spawn_hubd(&temp.0).await;
+    survives_hubd_kill(Host::Direct).await;
+}
+
+/// 生产用的托管方式。以前只有用真 CLI 的版本（耗额度，标着 ignore，没人跑）。
+#[tokio::test]
+async fn systemd_replay_survives_hubd_kill_and_matches_transcript() {
+    if systemd_ready() {
+        survives_hubd_kill(Host::Systemd).await;
+    }
+}
+
+/// 回放审批场景：等审批时 kill -9 hubd，会话进程必须还活着；新的 hubd 接回后回复审批，
+/// 收到的内容要和录制、会话记录一致。
+async fn survives_hubd_kill(host: Host) {
+    let (kind, dir) = match host {
+        Host::Direct => ("direct", "kill"),
+        Host::Systemd => ("systemd", "kill-systemd"),
+    };
+    let temp = Temp::new(dir);
+    // systemd 的单元名全机唯一：会话 ID 带上进程号，不和别的测试或正式会话撞名。
+    let session = match host {
+        Host::Direct => "s1".to_string(),
+        Host::Systemd => format!("e2e-{}-kill", std::process::id()),
+    };
+    let unit = format!("cchub-session-{session}");
+    let _cleanup = (host == Host::Systemd).then(|| Unit(unit.clone()));
+    // systemd 版套一层 timeout：测试进程被强杀、来不及停单元时，单元最多留 5 分钟。
+    let cmd = format!(
+        "{}{} {} 1",
+        if host == Host::Systemd {
+            "timeout 300 "
+        } else {
+            ""
+        },
+        env!("CARGO_BIN_EXE_fake-claude"),
+        recording("stream.jsonl").display()
+    );
+    let (mut hubd, addr) = spawn_hubd_with(&temp.0, kind, &cmd).await;
     let mut socket = connect(&addr).await;
-    let session = "s1".to_string();
 
     let mut inbound = Inbound::new(0);
     let mut applied = Vec::new();
@@ -249,13 +324,19 @@ async fn replay_survives_hubd_kill_and_matches_transcript() {
     // hubd 被杀时审批还没回复：进程必须活着，等新的 hubd 接回。
     hubd.kill().await.unwrap();
     hubd.wait().await.unwrap();
-    let pid = std::fs::read_to_string(temp.0.join("s1/pid")).unwrap();
-    assert!(
-        Path::new(&format!("/proc/{}", pid.trim())).exists(),
-        "fake-claude 随 hubd 退出了"
-    );
+    let alive = match host {
+        Host::Direct => {
+            let pid = std::fs::read_to_string(temp.0.join(&session).join("pid")).unwrap();
+            Path::new(&format!("/proc/{}", pid.trim())).exists()
+        }
+        Host::Systemd => std::process::Command::new("systemctl")
+            .args(["is-active", "--quiet", &unit])
+            .status()
+            .is_ok_and(|status| status.success()),
+    };
+    assert!(alive, "会话进程随 hubd 退出了（{kind}）");
 
-    let (_hubd, addr) = spawn_hubd(&temp.0).await;
+    let (_hubd, addr) = spawn_hubd_with(&temp.0, kind, &cmd).await;
     let mut socket = connect(&addr).await;
     send(
         &mut socket,
@@ -315,103 +396,6 @@ async fn replay_survives_hubd_kill_and_matches_transcript() {
     assert_eq!(got_tools, want_tools);
 
     send(&mut socket, ClientMsg::Stop { session }).await;
-}
-
-/// 真实 claude + systemd，消耗少量额度，手动运行：
-/// `cargo test -p hubd --test e2e -- --ignored`
-#[tokio::test]
-#[ignore]
-async fn real_claude_under_systemd_survives_hubd_kill() {
-    let temp = Temp::new("real");
-    let cmd = "claude -p --input-format stream-json --output-format stream-json --verbose \
-        --permission-prompt-tool stdio --permission-mode default --model haiku \
-        --no-session-persistence";
-    let session = format!("e2e-{}", std::process::id());
-    let (mut hubd, addr) = spawn_hubd_with(&temp.0, "systemd", cmd).await;
-    let mut socket = connect(&addr).await;
-    let mut inbound = Inbound::new(0);
-    let mut applied = Vec::new();
-
-    send(
-        &mut socket,
-        ClientMsg::Start {
-            session: session.clone(),
-            title: None,
-            prompt: None,
-            model: None,
-            resume: None,
-            cwd: None,
-        },
-    )
-    .await;
-    send(
-        &mut socket,
-        ClientMsg::Attach {
-            session: session.clone(),
-            after: 0,
-        },
-    )
-    .await;
-    let user = serde_json::json!({"type": "user", "message": {"role": "user",
-        "content": "Use the Bash tool once in the foreground to run: echo hi > marker . Then reply OK."}});
-    send(
-        &mut socket,
-        ClientMsg::Input {
-            session: session.clone(),
-            id: next_id(),
-            line: user.to_string(),
-        },
-    )
-    .await;
-    read_until(&mut socket, &mut inbound, &mut applied, |line| {
-        classify(line) == EventClass::Approval
-    })
-    .await;
-
-    hubd.kill().await.unwrap();
-    hubd.wait().await.unwrap();
-    let (_hubd, addr) = spawn_hubd_with(&temp.0, "systemd", cmd).await;
-    let mut socket = connect(&addr).await;
-    send(
-        &mut socket,
-        ClientMsg::Attach {
-            session: session.clone(),
-            after: inbound.expected(),
-        },
-    )
-    .await;
-
-    let request: Value = serde_json::from_str(applied.last().unwrap()).unwrap();
-    let reply = serde_json::json!({
-        "type": "control_response",
-        "response": {
-            "subtype": "success",
-            "request_id": request["request_id"],
-            "response": {"behavior": "allow", "updatedInput": request["request"]["input"]},
-        },
-    });
-    send(
-        &mut socket,
-        ClientMsg::Input {
-            session: session.clone(),
-            id: next_id(),
-            line: reply.to_string(),
-        },
-    )
-    .await;
-    read_until(&mut socket, &mut inbound, &mut applied, |line| {
-        event_type(line) == "result"
-    })
-    .await;
-
-    let stopped = std::process::Command::new("systemctl")
-        .args(["stop", &format!("cchub-session-{session}")])
-        .status();
-    assert!(
-        temp.0.join(&session).join("marker").exists(),
-        "工具没有在会话目录里执行"
-    );
-    assert!(stopped.unwrap().success());
 }
 
 fn context_switches(pid: u32) -> u64 {
