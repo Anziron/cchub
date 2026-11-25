@@ -322,7 +322,11 @@ mod tests {
         let unit = slice.join("cchub-session-a.service");
         fs::create_dir_all(&unit).unwrap();
         fs::write(unit.join("cgroup.procs"), "1234\n").unwrap();
-        fs::write(unit.join("cpu.stat"), "usage_usec 2500000\nuser_usec 2000000\n").unwrap();
+        fs::write(
+            unit.join("cpu.stat"),
+            "usage_usec 2500000\nuser_usec 2000000\n",
+        )
+        .unwrap();
         fs::write(unit.join("memory.current"), "314572800\n").unwrap();
         assert_eq!(
             cgroup_usage(&slice, "cchub-session-a"),
@@ -334,7 +338,11 @@ mod tests {
         );
         assert_eq!(cgroup_usage(&slice, "cchub-session-b"), None, "unit 已回收");
         fs::write(unit.join("cgroup.procs"), "").unwrap();
-        assert_eq!(cgroup_usage(&slice, "cchub-session-a"), None, "进程都退出了");
+        assert_eq!(
+            cgroup_usage(&slice, "cchub-session-a"),
+            None,
+            "进程都退出了"
+        );
         fs::remove_dir_all(&slice).unwrap();
     }
 }
