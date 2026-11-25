@@ -4,9 +4,9 @@ import approval from "../../testdata/recordings/approval/stream.jsonl?raw";
 import interrupt from "../../testdata/recordings/interrupt/stream.jsonl?raw";
 import plan from "../../testdata/recordings/plan/stream.jsonl?raw";
 import question from "../../testdata/recordings/question/stream.jsonl?raw";
-import type { UiEvent } from "./generated/UiEvent";
-import type { Hub } from "./hub";
-import { NEW_DRAFT, type Store } from "./store";
+import type { UiEvent } from "./generated/UiEvent.ts";
+import type { Hub } from "./hub.ts";
+import { NEW_DRAFT, type Store } from "./store.ts";
 
 const params = new URLSearchParams(location.search);
 const scene = params.get("scene");

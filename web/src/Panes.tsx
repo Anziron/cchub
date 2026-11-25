@@ -1,14 +1,14 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { formatDuration, formatTokens, Meter } from "./Common";
-import { Icon } from "./Icon";
-import { Markdown } from "./Markdown";
-import { backgroundTasks, collectChanges, findModel, groupChanges, isTranscript, latestPlan, parseTranscript, taskOutputPath, type ChangeGroup, type FileChange, type Task } from "./model";
-import { pageVisible } from "./platform";
-import { PANE_SIZING, Resizer } from "./Resizer";
-import { describeCwd, GLOBAL_PANES, type Session, type Store } from "./store";
-import { Diff, TranscriptView } from "./Thread";
-import { PANE_TITLES } from "./TopBar";
-import { UsagePane } from "./UsagePane";
+import { formatDuration, formatTokens, Meter } from "./Common.tsx";
+import { Icon } from "./Icon.tsx";
+import { Markdown } from "./Markdown.tsx";
+import { backgroundTasks, collectChanges, findModel, groupChanges, isTranscript, latestPlan, parseTranscript, taskOutputPath, type ChangeGroup, type FileChange, type Task } from "./model.ts";
+import { pageVisible } from "./platform.ts";
+import { PANE_SIZING, Resizer } from "./Resizer.tsx";
+import { describeCwd, GLOBAL_PANES, type Session, type Store } from "./store.ts";
+import { Diff, TranscriptView } from "./Thread.tsx";
+import { PANE_TITLES } from "./TopBar.tsx";
+import { UsagePane } from "./UsagePane.tsx";
 
 function ChangeFile({ file, name }: { file: FileChange; name: string }) {
   const [open, setOpen] = useState(false);

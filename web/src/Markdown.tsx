@@ -1,6 +1,6 @@
 import { marked, type Token, type Tokens } from "marked";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { isWebUrl, openUrl } from "./platform";
+import { isWebUrl, openUrl } from "./platform.ts";
 
 // 渲染成 React 元素而不是 HTML 字符串，模型输出里的标签只会显示成文字。
 

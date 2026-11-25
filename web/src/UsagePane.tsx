@@ -1,9 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
-import { FABLE_EMPTY, formatTokens, quotaPercent, resetText, resetWhen } from "./Common";
-import { Icon } from "./Icon";
-import type { Store } from "./store";
-import { addDays, dailySeries, heatmap, hourlySeries, localDate, modelLabel, OTHER, quotaPace, summarize, type Bar, type TokenParts, type UsageDay, type UsageMetric, type UsageRange, type UsageSummary } from "./usage";
+import { FABLE_EMPTY, formatTokens, quotaPercent, resetText, resetWhen } from "./Common.tsx";
+import { Icon } from "./Icon.tsx";
+import type { Store } from "./store.ts";
+import { addDays, dailySeries, heatmap, hourlySeries, localDate, modelLabel, OTHER, quotaPace, summarize, type Bar, type TokenParts, type UsageDay, type UsageMetric, type UsageRange, type UsageSummary } from "./usage.ts";
 
 const RANGES: [UsageRange, string][] = [["today", "今天"], ["7d", "7 天"], ["30d", "30 天"], ["all", "全部"]];
 const RANGE_KEY = "cchub.usageRange";

@@ -1,12 +1,12 @@
 // 侧栏、标题栏、输入区、窗格共用的小组件和格式化函数。
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useMenuFit } from "./Dialogs";
-import { Icon } from "./Icon";
-import { commandStatus, describeTool, firstAsk, formatDuration, isSending, isWaiting, runningTasks, type Ask } from "./model";
-import { pageVisible } from "./platform";
-import { formatAgo } from "./sidebar";
-import type { Session, Store } from "./store";
+import { useMenuFit } from "./Dialogs.tsx";
+import { Icon } from "./Icon.tsx";
+import { commandStatus, describeTool, firstAsk, formatDuration, isSending, isWaiting, runningTasks, type Ask } from "./model.ts";
+import { pageVisible } from "./platform.ts";
+import { formatAgo } from "./sidebar.ts";
+import type { Session, Store } from "./store.ts";
 
 export function askHint(ask?: Ask): string {
   if (ask?.kind === "plan") return "方案等你确认";
@@ -29,7 +29,7 @@ export function StateIcon({ state }: { state: RowState }) {
   return <span className={`state${state ? ` ${state}` : " done"}`} aria-hidden="true" />;
 }
 
-export { formatDuration, formatTokens } from "./model";
+export { formatDuration, formatTokens } from "./model.ts";
 
 /** 只含用时文本的小组件：每秒刷新只重渲染它自己，窗口看不见时不刷新（失去焦点照常刷新）。 */
 export function Elapsed({ since }: { since: number }) {

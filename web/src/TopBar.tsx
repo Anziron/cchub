@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { canPin, setOnTop } from "./platform";
-import { Dropdown, MenuItem, rowState, sessionStatus, SessionMenu, StateIcon } from "./Common";
-import { Icon } from "./Icon";
-import { backgroundTasks, collectChanges, latestPlan, runningTasks } from "./model";
-import { describeCwd, GLOBAL_PANES, type PaneId, type Session, type Store } from "./store";
+import { canPin, setOnTop } from "./platform.ts";
+import { Dropdown, MenuItem, rowState, sessionStatus, SessionMenu, StateIcon } from "./Common.tsx";
+import { Icon } from "./Icon.tsx";
+import { backgroundTasks, collectChanges, latestPlan, runningTasks } from "./model.ts";
+import { describeCwd, GLOBAL_PANES, type PaneId, type Session, type Store } from "./store.ts";
 
 export const PANE_TITLES: Record<PaneId, string> = { changes: "改动", tasks: "后台任务", todos: "待办", plan: "方案", info: "会话信息", usage: "使用情况" };
 const PANE_ICONS: Record<PaneId, string> = { changes: "diff", tasks: "tasks", todos: "check", plan: "plan", info: "info", usage: "chart" };

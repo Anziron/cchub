@@ -1,18 +1,18 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { Composer, Welcome } from "./Composer";
-import { ConfirmDialog, ConnectDialog, ResumeDialog, WorkspaceDialog } from "./Dialogs";
-import { loadAppearance, resolveTheme, saveAppearance, type Appearance } from "./appearance";
-import { Icon } from "./Icon";
-import type { Todo } from "./model";
-import { PaneView } from "./Panes";
-import { customFrame, isAndroid, isNarrow, pageVisible, takeOpenedSession } from "./platform";
-import { Rail, type ViewDef } from "./Rail";
-import { currentWidth, initLayoutVars, LAYOUT_EVENT, PANE_SIZING, Resizer, SIDE_SIZING } from "./Resizer";
-import { SessionsPane, SideFooter } from "./SessionList";
-import { GLOBAL_PANES, type Session, type Store } from "./store";
-import { ThreadView } from "./Thread";
-import { TopBar } from "./TopBar";
-import { TitleBar } from "./WindowControls";
+import { Composer, Welcome } from "./Composer.tsx";
+import { ConfirmDialog, ConnectDialog, ResumeDialog, WorkspaceDialog } from "./Dialogs.tsx";
+import { loadAppearance, resolveTheme, saveAppearance, type Appearance } from "./appearance.ts";
+import { Icon } from "./Icon.tsx";
+import type { Todo } from "./model.ts";
+import { PaneView } from "./Panes.tsx";
+import { customFrame, isAndroid, isNarrow, pageVisible, takeOpenedSession } from "./platform.ts";
+import { Rail, type ViewDef } from "./Rail.tsx";
+import { currentWidth, initLayoutVars, LAYOUT_EVENT, PANE_SIZING, Resizer, SIDE_SIZING } from "./Resizer.tsx";
+import { SessionsPane, SideFooter } from "./SessionList.tsx";
+import { GLOBAL_PANES, type Session, type Store } from "./store.ts";
+import { ThreadView } from "./Thread.tsx";
+import { TopBar } from "./TopBar.tsx";
+import { TitleBar } from "./WindowControls.tsx";
 
 function useAppearance() {
   const [look, setLook] = useState<Appearance>(() => loadAppearance(localStorage, matchMedia("(prefers-color-scheme: dark)").matches));

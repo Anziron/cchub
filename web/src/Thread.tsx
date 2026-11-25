@@ -1,10 +1,10 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { AskCard } from "./AskCard";
-import { Icon } from "./Icon";
-import { linkify, Markdown, WebLink } from "./Markdown";
-import { describeTool, formatDuration, formatTokens, groupTools, searchLinks, type Ask, type Item, type RenderBlock, type ToolItem } from "./model";
-import { isTouch } from "./platform";
-import type { Session, Store } from "./store";
+import { AskCard } from "./AskCard.tsx";
+import { Icon } from "./Icon.tsx";
+import { linkify, Markdown, WebLink } from "./Markdown.tsx";
+import { describeTool, formatDuration, formatTokens, groupTools, searchLinks, type Ask, type Item, type RenderBlock, type ToolItem } from "./model.ts";
+import { isTouch } from "./platform.ts";
+import type { Session, Store } from "./store.ts";
 
 function lineCount(text: unknown): number {
   return typeof text === "string" && text ? text.split("\n").length : 0;

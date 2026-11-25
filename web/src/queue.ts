@@ -5,7 +5,7 @@
  * - 等结束：留在桌面端，可以改（放回输入框）或删，这一轮正常结束后合成一条发出；被中断时放回输入框。
  * 只存在内存里：关掉窗口后不会在别的时机突然发出去。
  */
-import type { Thread } from "./model";
+import type { Thread } from "./model.ts";
 
 // 不从 model 导入函数：测试直接用 node 跑，被测模块之间只能有类型依赖。
 const waitingAsk = (thread: Thread) => [...thread.asks.values()].some((ask) => !ask.sent);

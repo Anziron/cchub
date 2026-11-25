@@ -1,11 +1,11 @@
 import { Fragment, memo, useEffect, useState } from "react";
-import { pageVisible } from "./platform";
-import { askHint, Dropdown, MenuItem, Meter, quotaPercent, rowState, sessionStatus, SessionMenu, STATE_ORDER, StateIcon } from "./Common";
-import { Icon } from "./Icon";
-import { firstAsk, isWaiting } from "./model";
-import { deviceColorMap, deviceColorVars } from "./deviceColors";
-import { DEVICE_STATE, deviceList, deviceOf, groupByDate, groupDevices, SERVER_GROUP, type DeviceEntry } from "./sidebar";
-import { describeCwd, type Session, type Store } from "./store";
+import { pageVisible } from "./platform.ts";
+import { askHint, Dropdown, MenuItem, Meter, quotaPercent, rowState, sessionStatus, SessionMenu, STATE_ORDER, StateIcon } from "./Common.tsx";
+import { Icon } from "./Icon.tsx";
+import { firstAsk, isWaiting } from "./model.ts";
+import { deviceColorMap, deviceColorVars } from "./deviceColors.ts";
+import { DEVICE_STATE, deviceList, deviceOf, groupByDate, groupDevices, SERVER_GROUP, type DeviceEntry } from "./sidebar.ts";
+import { describeCwd, type Session, type Store } from "./store.ts";
 
 type StatusFilter = "all" | "wait" | "running";
 type GroupBy = "project" | "date";

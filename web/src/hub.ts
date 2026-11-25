@@ -1,8 +1,8 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { ClientMsg } from "./generated/ClientMsg";
-import type { ConnectionState } from "./generated/ConnectionState";
-import type { UiEvent } from "./generated/UiEvent";
+import type { ClientMsg } from "./generated/ClientMsg.ts";
+import type { ConnectionState } from "./generated/ConnectionState.ts";
+import type { UiEvent } from "./generated/UiEvent.ts";
 
 export interface Hub {
   connect(url: string): Promise<ConnectionState>;
@@ -21,6 +21,6 @@ const tauriHub: Hub = {
 export async function loadHub(): Promise<Hub | null> {
   if (isTauri()) return tauriHub;
   // 只在开发时用录制数据回放，发布包里没有这部分。
-  if (import.meta.env.DEV) return (await import("./demo")).demoHub;
+  if (import.meta.env.DEV) return (await import("./demo.ts")).demoHub;
   return null;
 }

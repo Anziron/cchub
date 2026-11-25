@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
-import { assignDeviceColors, DEVICE_COLORS, deviceList, deviceOf, SERVER_GROUP } from "./sidebar";
-import type { Store } from "./store";
+import { assignDeviceColors, DEVICE_COLORS, deviceList, deviceOf, SERVER_GROUP } from "./sidebar.ts";
+import type { Store } from "./store.ts";
 
 /** 颜色编号转成 CSS 变量（色相、饱和度），明度由样式按主题定（light-dark）。 */
 export function deviceColorVars(index: number): CSSProperties {

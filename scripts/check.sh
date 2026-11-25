@@ -116,7 +116,14 @@ mask_used() {
 }
 
 demo_not_awaited() {
-    web_grep "from ['\"]\./demo['\"]|import\(['\"]\./demo['\"]\)" | grep -v 'await import("./demo")'
+    web_grep "from ['\"]\./demo(\.ts)?['\"]|import\(['\"]\./demo(\.ts)?['\"]\)" | grep -v 'await import("./demo.ts")'
+}
+
+# 没写扩展名的相对导入（含 import()、只为副作用的 import "…"）；带 ?raw 这类查询串的放行。
+import_without_ext() {
+    grep -rnE --include='*.ts' --include='*.tsx' --exclude-dir=generated \
+        "(from|import)[[:space:]]*\(?[[:space:]]*['\"]\.{1,2}/[^'\"?]*['\"]" web/src web/test |
+        grep -vE "['\"]\.{1,2}/[^'\"?]*\.(tsx?|css|json)['\"]"
 }
 
 case_clash() { git ls-files | sort -f | uniq -di; }
@@ -158,11 +165,14 @@ step_rules() {
         "用 React 渲染文本或元素：工具输出、模型回复里都可能带 HTML" \
         web_grep 'innerHTML|outerHTML|insertAdjacentHTML|dangerouslySetInnerHTML'
     rule "demo 在渲染前加载完" \
-        "只在 main.tsx 里 await import(\"./demo\")：它顶层按地址参数重置本地存储（宽度、收起、设备筛选），晚加载时界面先读到上一张截图残留的值" \
+        "只在 main.tsx 里 await import(\"./demo.ts\")：它顶层按地址参数重置本地存储（宽度、收起、设备筛选），晚加载时界面先读到上一张截图残留的值" \
         demo_not_awaited
     rule "前端模块之间没有运行时循环导入" \
         "把两边共用的函数挪进纯逻辑模块（model.ts 等），组件之间只单向依赖：循环时谁先初始化取决于加载顺序，可能拿到 undefined" \
         node scripts/import-cycles.mjs web/src
+    rule "前端相对导入写全扩展名" \
+        "写成 ./xxx.ts、./xxx.tsx：web/test 用 node --test 直接跑源码，Node 不会补扩展名，漏写的模块在测试里加载不了" \
+        import_without_ext
     rule "文件名不能只差大小写" \
         "改名：设备是 Windows，只差大小写的两个文件会被当成同一个（tsc 报 TS1149；侧栏组件因此叫 SessionList.tsx）" \
         case_clash

@@ -1,14 +1,14 @@
-import type { AckError } from "./generated/AckError";
-import type { ConnectionState } from "./generated/ConnectionState";
-import type { SessionInfo } from "./generated/SessionInfo";
-import type { UiEvent } from "./generated/UiEvent";
-import type { Hub } from "./hub";
-import { isNarrow } from "./platform";
-import { sortKey } from "./sidebar";
-import { parseUsage, type UsageStats } from "./usage";
-import { afterTurn, confirmInserted, joinQueued, settleCancel, type Queued } from "./queue";
-import { dropRef, mountTarget, type DropRef } from "./paths";
-import type { DeviceInfo } from "./generated/DeviceInfo";
+import type { AckError } from "./generated/AckError.ts";
+import type { ConnectionState } from "./generated/ConnectionState.ts";
+import type { SessionInfo } from "./generated/SessionInfo.ts";
+import type { UiEvent } from "./generated/UiEvent.ts";
+import type { Hub } from "./hub.ts";
+import { isNarrow } from "./platform.ts";
+import { sortKey } from "./sidebar.ts";
+import { parseUsage, type UsageStats } from "./usage.ts";
+import { afterTurn, confirmInserted, joinQueued, settleCancel, type Queued } from "./queue.ts";
+import { dropRef, mountTarget, type DropRef } from "./paths.ts";
+import type { DeviceInfo } from "./generated/DeviceInfo.ts";
 import {
   addSending,
   allowLine,
@@ -49,7 +49,7 @@ import {
   type RateLimits,
   type SlashCommand,
   type Thread,
-} from "./model";
+} from "./model.ts";
 
 export interface Session {
   id: string;
@@ -209,7 +209,10 @@ export class Store {
   private taskTimes = loadJson<Record<string, number>>(TASK_TIMES_KEY, {});
   private limitsSave: ReturnType<typeof setTimeout> | 0 = 0;
 
-  constructor(private hub: Hub) {
+  private hub: Hub;
+
+  constructor(hub: Hub) {
+    this.hub = hub;
     void hub.onEvent((events) => {
       // 整批都是不影响界面的事件（如内容没变的任务输出轮询）时不刷新。
       let dirty = false;

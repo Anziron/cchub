@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Icon } from "./Icon";
-import { Markdown } from "./Markdown";
-import { describeTool, type Ask, type Question } from "./model";
-import type { Session, Store } from "./store";
+import { Icon } from "./Icon.tsx";
+import { Markdown } from "./Markdown.tsx";
+import { describeTool, type Ask, type Question } from "./model.ts";
+import type { Session, Store } from "./store.ts";
 
 interface Props {
   ask: Ask;

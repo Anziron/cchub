@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type ComponentType, type RefObject } from "react";
-import { AppearancePanel } from "./Dialogs";
-import { MenuItem } from "./Common";
-import { Icon } from "./Icon";
-import type { Appearance } from "./appearance";
-import type { Store } from "./store";
+import { AppearancePanel } from "./Dialogs.tsx";
+import { MenuItem } from "./Common.tsx";
+import { Icon } from "./Icon.tsx";
+import type { Appearance } from "./appearance.ts";
+import type { Store } from "./store.ts";
 
 /**
  * 图标栏上的一个视图。`side` 是会话栏上半部分的内容，`main` 是主区域的内容（没有就用默认的会话页）。

@@ -1,13 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
-import { Icon } from "./Icon";
-import { FONTS, SIZES, THEMES, type Appearance } from "./appearance";
-import { effortsFor, findModel, hubHost, hubUrl, modelDisplayName, pickableModels, runningTasks, type ModelOption, type SlashCommand } from "./model";
-import { backgroundStatus, isAndroid, requestBatteryUnrestricted, type BackgroundStatus } from "./platform";
-import { deviceList, formatAgo, SERVER_GROUP } from "./sidebar";
+import { Icon } from "./Icon.tsx";
+import { FONTS, SIZES, THEMES, type Appearance } from "./appearance.ts";
+import { effortsFor, findModel, hubHost, hubUrl, modelDisplayName, pickableModels, runningTasks, type ModelOption, type SlashCommand } from "./model.ts";
+import { backgroundStatus, isAndroid, requestBatteryUnrestricted, type BackgroundStatus } from "./platform.ts";
+import { deviceList, formatAgo, SERVER_GROUP } from "./sidebar.ts";
 
 /** 浏览服务器本机目录时发给 hubd 的设备名（同 `server/src/workspace.rs` 的 `SERVER_DEVICE`）。 */
 const SERVER_DEVICE = "@server";
-import { describeCwd, type Session, type Store } from "./store";
+import { describeCwd, type Session, type Store } from "./store.ts";
 
 /** 弹窗。Esc 只关弹窗，不能冒泡到窗口上变成中断任务。 */
 /** `local`：只盖住对话区并在其中居中（和输入框对齐），要放在 `.main` 里渲染。 */

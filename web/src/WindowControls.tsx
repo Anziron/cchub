@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { AppMark } from "./Composer";
-import { Icon } from "./Icon";
-import { isNarrow, watchMaximized, windowOps } from "./platform";
-import type { Store } from "./store";
+import { AppMark } from "./Composer.tsx";
+import { Icon } from "./Icon.tsx";
+import { isNarrow, watchMaximized, windowOps } from "./platform.ts";
+import type { Store } from "./store.ts";
 
 /**
  * 无边框窗口的标题栏：横跨整个窗口的单独一行，只放全局的东西——左边应用图标、后退 / 前进、收起侧栏，
