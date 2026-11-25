@@ -9,6 +9,7 @@ import { afterTurn, confirmInserted, joinQueued, settleCancel, settleInsert, typ
 import { dropRef, mountTarget, type DropRef } from "./paths.ts";
 import { choiceAck, controlNotice, inputNotice, replyAck, resumeChoice, startModel, userAck, type AckResult } from "./uplink.ts";
 import { saved, savedModels, stampTaskTimes, withoutPending, withPending } from "./storage.ts";
+import { asPane, History, type PaneId } from "./nav.ts";
 import type { DeviceInfo } from "./generated/DeviceInfo.ts";
 import {
   addSending,
@@ -74,15 +75,6 @@ export interface Session {
 
 /** 新会话发出后刷新列表的时间点：haiku 起标题一般 4～6 秒。 */
 const TITLE_REFRESH_MS = [7000, 20000];
-/** 新会话页的草稿。 */
-export const NEW_DRAFT = "";
-
-export type PaneId = "changes" | "tasks" | "todos" | "plan" | "info" | "usage";
-const PANES: PaneId[] = ["changes", "tasks", "todos", "plan", "info", "usage"];
-/** 不依赖会话的窗格，新会话页也能打开。 */
-export const GLOBAL_PANES: PaneId[] = ["usage"];
-const storedPane = (): PaneId | null => PANES.find((p) => p === saved.pane.get()) ?? null;
-const HISTORY_MAX = 50;
 
 export interface BrowseState {
   device: string | null;
@@ -108,7 +100,7 @@ export class Store {
   private pending = saved.pending.get();
   limits = cachedLimits(saved.limits.get());
   /** 右侧窗格：改动、后台任务、待办、方案、会话信息。记在本地，切换会话时保留。 */
-  pane: PaneId | null = isNarrow() ? null : storedPane();
+  pane: PaneId | null = isNarrow() ? null : asPane(saved.pane.get());
   /** 详细档：工具调用逐条展开显示，不合并（Ctrl+O 切换）。 */
   verbose = saved.verbose.get();
   /** 窄屏下会话列表是否展开，手机上打开 App 先看列表。 */
@@ -119,9 +111,7 @@ export class Store {
   sideCollapsed = saved.sideCollapsed.get();
   /** 消息区太窄、会话栏改成浮层时，浮层是否展开。 */
   sideFloatOpen = false;
-  /** 后退 / 前进的历史：看过的会话 id，null 是新会话页。 */
-  private history: (string | null)[] = [null];
-  private historyAt = 0;
+  private history = new History();
   /** 等确认结束的会话。 */
   stopping: Session | null = null;
   /** 确认结束后是关闭会话还是只结束进程。 */
@@ -558,7 +548,7 @@ export class Store {
   /** `fromHistory`：后退 / 前进触发的切换，不再记进历史。 */
   select(id: string | null, fromHistory = false): void {
     this.selected = id;
-    if (!fromHistory) this.remember(id);
+    if (!fromHistory) this.history.remember(id);
     this.showSettings = false;
     this.showDrawer = false;
     this.sideFloatOpen = false;
@@ -570,35 +560,20 @@ export class Store {
     this.changed();
   }
 
-  /** 记一个新位置：丢掉“前进”那一截，连续重复的不记。 */
-  private remember(id: string | null): void {
-    if (this.history[this.historyAt] === id) return;
-    this.history = this.history.slice(0, this.historyAt + 1);
-    this.history.push(id);
-    if (this.history.length > HISTORY_MAX) this.history.shift();
-    this.historyAt = this.history.length - 1;
-  }
-
-  /** 往 `step` 方向第一个还能去的位置（已关闭或不存在的会话跳过），没有就是 -1。 */
-  private historyTarget(step: -1 | 1): number {
-    for (let i = this.historyAt + step; i >= 0 && i < this.history.length; i += step) {
-      const id = this.history[i];
-      const session = id === null ? undefined : this.sessions.get(id);
-      if (id === null || (session && !session.archived)) return i;
-    }
-    return -1;
-  }
+  /** 后退 / 前进能去的会话：还在、没关闭。 */
+  private isOpen = (id: string): boolean => {
+    const session = this.sessions.get(id);
+    return !!session && !session.archived;
+  };
 
   canGo(step: -1 | 1): boolean {
-    return this.historyTarget(step) >= 0;
+    return this.history.canGo(step, this.isOpen);
   }
 
   /** 后退（-1）/ 前进（1），像浏览器一样在看过的会话之间来回。 */
   go(step: -1 | 1): void {
-    const i = this.historyTarget(step);
-    if (i < 0) return;
-    this.historyAt = i;
-    this.select(this.history[i], true);
+    const target = this.history.go(step, this.isOpen);
+    if (target !== undefined) this.select(target, true);
   }
 
   /** 图标栏的“首页”：回到首页视图并打开新会话页。 */
@@ -790,7 +765,7 @@ export class Store {
     session.running = true;
     session.attached = true;
     this.selected = id;
-    this.remember(id);
+    this.history.remember(id);
     this.showDrawer = false;
     // 第一条消息交给 hubd 在后台概括成标题（`/` 命令不概括），几秒后刷新列表拿到。
     const prompt = text.trimStart().startsWith("/") ? undefined : text;

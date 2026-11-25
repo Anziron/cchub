@@ -6,7 +6,8 @@ import plan from "../../testdata/recordings/plan/stream.jsonl?raw";
 import question from "../../testdata/recordings/question/stream.jsonl?raw";
 import type { UiEvent } from "./generated/UiEvent.ts";
 import type { Hub } from "./hub.ts";
-import { NEW_DRAFT, type Store } from "./store.ts";
+import { NEW_DRAFT } from "./nav.ts";
+import type { Store } from "./store.ts";
 
 const params = new URLSearchParams(location.search);
 const scene = params.get("scene");

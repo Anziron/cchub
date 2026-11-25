@@ -9,7 +9,8 @@ import { customFrame, isAndroid, isNarrow, pageVisible, takeOpenedSession } from
 import { Rail, type ViewDef } from "./Rail.tsx";
 import { currentWidth, initLayoutVars, LAYOUT_EVENT, PANE_SIZING, Resizer, SIDE_SIZING } from "./Resizer.tsx";
 import { SessionsPane, SideFooter } from "./SessionList.tsx";
-import { GLOBAL_PANES, type Session, type Store } from "./store.ts";
+import { GLOBAL_PANES } from "./nav.ts";
+import type { Session, Store } from "./store.ts";
 import { ThreadView } from "./Thread.tsx";
 import { TopBar } from "./TopBar.tsx";
 import { TitleBar } from "./WindowControls.tsx";

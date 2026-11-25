@@ -5,7 +5,8 @@ import { Icon } from "./Icon.tsx";
 import { firstAsk, matchCommands, runningTasks, turnTokens, type SlashCommand } from "./model.ts";
 import { mentionText, type DropRef } from "./paths.ts";
 import { isTouch, onFileDrop, pageVisible } from "./platform.ts";
-import { describeCwd, isResumeCommand, NEW_DRAFT, type Session, type Store } from "./store.ts";
+import { NEW_DRAFT } from "./nav.ts";
+import { describeCwd, isResumeCommand, type Session, type Store } from "./store.ts";
 
 const INTERRUPT_TIMEOUT_MS = 5000;
 
