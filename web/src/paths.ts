@@ -67,6 +67,47 @@ export function mentionText(paths: string[], text: string): string {
   return text.trim() ? `${refs}\n\n${text}` : refs;
 }
 
+/**
+ * 拖入文件时等目录挂载的登记：项目外、同一台设备上的文件先挂载它所在的目录（hubd 的 `mount`，和选工作区一样），
+ * 同一目录只挂一次，结果回来时等它的标签都换掉。只记账，不发请求、不改标签。
+ */
+export class DropMounts {
+  /** 键是 `设备\n目录`，值是等它的标签：草稿键、原路径、文件名。 */
+  private waiting = new Map<string, { key: string; path: string; name: string }[]>();
+
+  /** 拖进来的一批文件变成标签；返回要新发的挂载请求（同一目录已经在等的不再发）。 */
+  plan(key: string, paths: string[], cwd: string | undefined): { refs: DropRef[]; mounts: { device: string; dir: string }[] } {
+    const mounts: { device: string; dir: string }[] = [];
+    const refs = paths.map((path): DropRef => {
+      const ref = dropRef(path, cwd);
+      const target = ref.reachable ? null : mountTarget(path, cwd);
+      if (!target) return ref;
+      const id = `${target.device}\n${target.dir}`;
+      const waiting = this.waiting.get(id);
+      if (waiting) waiting.push({ key, path, name: target.name });
+      else {
+        this.waiting.set(id, [{ key, path, name: target.name }]);
+        mounts.push({ device: target.device, dir: target.dir });
+      }
+      return { path, reachable: false, pending: true };
+    });
+    return { refs, mounts };
+  }
+
+  /** 目录挂载有了结果：等它的标签各换成什么（挂上是服务器路径，失败标出原因）。没人等（是选工作区的挂载）返回 null。 */
+  settle(device: string, dir: string, cwd: string | null, error: string | null): { key: string; path: string; ref: DropRef }[] | null {
+    const id = `${device}\n${dir}`;
+    const waiting = this.waiting.get(id);
+    if (!waiting) return null;
+    this.waiting.delete(id);
+    return waiting.map(({ key, path, name }) => ({
+      key,
+      path,
+      ref: cwd ? { path: `${cwd.replace(/\/+$/, "")}/${name}`, reachable: true } : { path, reachable: false, error: error ?? "挂载失败" },
+    }));
+  }
+}
+
 /** 会话目录显示成“项目名 + 设备”：`/mnt/<设备>/...` 是挂载的设备目录，其他是服务器本地目录。 */
 export function describeCwd(cwd?: string): { project: string; device: string } {
   if (!cwd) return { project: "", device: "" };

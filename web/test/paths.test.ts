@@ -1,7 +1,7 @@
 // 拖进输入框的文件路径怎么转成服务器能读的引用。运行：node --test web/test/
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { describeCwd, dropRef, mentionText, mountTarget } from "../src/paths.ts";
+import { describeCwd, DropMounts, dropRef, mentionText, mountTarget } from "../src/paths.ts";
 
 const cwd = "/mnt/pc-company/d/cchub";
 
@@ -50,6 +50,26 @@ test("发送时以 @路径 拼在正文前，含空格的路径加引号", () =>
   assert.equal(mentionText(["web/src/App.tsx", "docs/a b.md"], "看看这两个"), '@web/src/App.tsx @"docs/a b.md"\n\n看看这两个');
   assert.equal(mentionText([], "hi"), "hi");
   assert.equal(mentionText(["a.ts"], ""), "@a.ts");
+});
+
+test("拖入文件的挂载登记：同一目录只挂一次，结果回来按草稿键换掉每个标签，只结算一次", () => {
+  const mounts = new DropMounts();
+  const first = mounts.plan("s1", ["D:\\cchub\\a.ts", "D:\\blog\\x.md", "D:\\blog\\y.md"], cwd);
+  assert.deepEqual(first.mounts, [{ device: "pc-company", dir: "D:\\blog" }]);
+  assert.deepEqual(first.refs, [
+    { path: "a.ts", reachable: true },
+    { path: "D:\\blog\\x.md", reachable: false, pending: true },
+    { path: "D:\\blog\\y.md", reachable: false, pending: true },
+  ]);
+  assert.deepEqual(mounts.plan("", ["D:\\blog\\z.md"], cwd).mounts, [], "已经在等的目录不再挂");
+  assert.deepEqual(mounts.settle("pc-company", "D:\\blog", "/mnt/pc-company/d/blog/", null), [
+    { key: "s1", path: "D:\\blog\\x.md", ref: { path: "/mnt/pc-company/d/blog/x.md", reachable: true } },
+    { key: "s1", path: "D:\\blog\\y.md", ref: { path: "/mnt/pc-company/d/blog/y.md", reachable: true } },
+    { key: "", path: "D:\\blog\\z.md", ref: { path: "/mnt/pc-company/d/blog/z.md", reachable: true } },
+  ]);
+  assert.equal(mounts.settle("pc-company", "D:\\blog", null, null), null, "结算过就没人等了（之后的是选工作区的挂载）");
+  mounts.plan("s1", ["D:\\blog\\x.md"], cwd);
+  assert.deepEqual(mounts.settle("pc-company", "D:\\blog", null, null)?.[0].ref, { path: "D:\\blog\\x.md", reachable: false, error: "挂载失败" });
 });
 
 test("会话目录：/mnt/<设备>/ 下是设备目录，其他是服务器本地目录", () => {

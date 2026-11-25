@@ -6,7 +6,7 @@ import { isNarrow } from "./platform.ts";
 import { sortKey } from "./sidebar.ts";
 import { parseUsage, type UsageStats } from "./usage.ts";
 import { afterTurn, confirmInserted, joinQueued, settleCancel, settleInsert, type Queued } from "./queue.ts";
-import { dropRef, mountTarget, type DropRef } from "./paths.ts";
+import { DropMounts, type DropRef } from "./paths.ts";
 import { choiceAck, controlNotice, inputNotice, replyAck, resumeChoice, startModel, userAck, type AckResult } from "./uplink.ts";
 import { saved, savedModels, stampTaskTimes, withoutPending, withPending } from "./storage.ts";
 import { asPane, History, type PaneId } from "./nav.ts";
@@ -151,8 +151,7 @@ export class Store {
   private initialized = new Set<string>();
   private drafts = saved.drafts.get();
   private attached: Record<string, DropRef[]> = {};
-  /** 为拖入的文件挂载目录，等结果的标签；键是 `设备\n目录`。 */
-  private fileMounts = new Map<string, { key: string; path: string; name: string }[]>();
+  private dropMounts = new DropMounts();
   private taskTimes = saved.taskTimes.get();
   private limitsSave: ReturnType<typeof setTimeout> | 0 = 0;
 
@@ -477,43 +476,19 @@ export class Store {
     this.changed();
   }
 
-  /**
-   * 从系统拖进来的文件。项目外、同一台设备上的文件先挂载它所在的目录（hubd 的 `mount`，
-   * 和选工作区一样），挂上后换成服务器上的绝对路径；挂不上才标成读不到。
-   */
+  /** 从系统拖进来的文件（项目外的先挂载所在目录，见 `paths.ts` 的 `DropMounts`）。 */
   dropFiles(key: string, paths: string[], cwd: string | undefined): void {
-    const mounts: { device: string; dir: string }[] = [];
-    const refs = paths.map((path): DropRef => {
-      const ref = dropRef(path, cwd);
-      const target = ref.reachable ? null : mountTarget(path, cwd);
-      if (!target) return ref;
-      const id = `${target.device}\n${target.dir}`;
-      const waiting = this.fileMounts.get(id);
-      if (waiting) waiting.push({ key, path, name: target.name });
-      else {
-        this.fileMounts.set(id, [{ key, path, name: target.name }]);
-        mounts.push(target);
-      }
-      return { path, reachable: false, pending: true };
-    });
+    const { refs, mounts } = this.dropMounts.plan(key, paths, cwd);
     // 先放标签再发请求：回复可能马上到，到时要能找到等它的标签。
     this.addFiles(key, refs);
     for (const m of mounts) void this.send({ type: "mount", device: m.device, path: m.dir });
   }
 
-  /** 文件所在目录挂载完成：等它的标签换成服务器路径，失败时标出原因。 */
+  /** 文件所在目录挂载完成：等它的标签换掉。不是为文件挂的返回 false。 */
   private takeFileMount(device: string, dir: string, cwd: string | null, error: string | null): boolean {
-    const id = `${device}\n${dir}`;
-    const waiting = this.fileMounts.get(id);
-    if (!waiting) return false;
-    this.fileMounts.delete(id);
-    for (const w of waiting) {
-      this.attached[w.key] = this.files(w.key).map((ref) =>
-        ref.path !== w.path ? ref
-        : cwd ? { path: `${cwd.replace(/\/+$/, "")}/${w.name}`, reachable: true }
-        : { path: w.path, reachable: false, error: error ?? "挂载失败" },
-      );
-    }
+    const settled = this.dropMounts.settle(device, dir, cwd, error);
+    if (!settled) return false;
+    for (const { key, path, ref } of settled) this.attached[key] = this.files(key).map((r) => (r.path === path ? ref : r));
     return true;
   }
 

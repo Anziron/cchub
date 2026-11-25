@@ -452,3 +452,64 @@ test("后退历史最多记 50 个位置", () => {
   assert.equal(steps, 49);
   assert.equal(store.selected, "s10");
 });
+
+// ---- 拖入文件和选工作区的挂载 ----
+
+const PROJECT = "/mnt/laptop/d/proj";
+
+test("拖入文件：项目内的换成相对路径；项目外的先挂载所在目录（同一目录只挂一次），挂上后换成服务器路径", () => {
+  const { store, hub } = setup();
+  store.dropFiles("s1", ["D:\\proj\\src\\a.ts", "D:\\notes\\x.md", "D:\\notes\\y.md", "D:\\other\\z.txt", "D:\\root.txt"], PROJECT);
+  assert.deepEqual(hub.of("mount"), [
+    { type: "mount", device: "laptop", path: "D:\\notes" },
+    { type: "mount", device: "laptop", path: "D:\\other" },
+  ]);
+  assert.deepEqual(store.files("s1"), [
+    { path: "src/a.ts", reachable: true },
+    { path: "D:\\notes\\x.md", reachable: false, pending: true },
+    { path: "D:\\notes\\y.md", reachable: false, pending: true },
+    { path: "D:\\other\\z.txt", reachable: false, pending: true },
+    { path: "D:\\root.txt", reachable: false },
+  ]);
+  store.dropFiles("s1", ["D:\\proj\\src\\a.ts"], PROJECT);
+  assert.equal(store.files("s1").length, 5, "同一个文件不重复加");
+
+  hub.emit({ type: "mounted", device: "laptop", path: "D:\\notes", cwd: "/mnt/laptop/d/notes/", error: null });
+  hub.emit({ type: "mounted", device: "laptop", path: "D:\\other", cwd: null, error: "设备离线" });
+  assert.deepEqual(store.files("s1"), [
+    { path: "src/a.ts", reachable: true },
+    { path: "/mnt/laptop/d/notes/x.md", reachable: true },
+    { path: "/mnt/laptop/d/notes/y.md", reachable: true },
+    { path: "D:\\other\\z.txt", reachable: false, error: "设备离线" },
+    { path: "D:\\root.txt", reachable: false },
+  ]);
+  assert.equal(store.cwd, "", "为文件挂的目录不切换工作区");
+  assert.equal(store.takeFiles("s1").length, 5);
+  assert.deepEqual(store.files("s1"), []);
+});
+
+test("两个输入框拖入同一目录的文件：只挂一次，结果各自套上", () => {
+  const { store, hub } = setup();
+  store.dropFiles("s1", ["D:\\notes\\x.md"], PROJECT);
+  store.dropFiles("", ["D:\\notes\\y.md"], PROJECT);
+  assert.equal(hub.of("mount").length, 1);
+  hub.emit({ type: "mounted", device: "laptop", path: "D:\\notes", cwd: "/mnt/laptop/d/notes", error: null });
+  assert.deepEqual(store.files("s1"), [{ path: "/mnt/laptop/d/notes/x.md", reachable: true }]);
+  assert.deepEqual(store.files(""), [{ path: "/mnt/laptop/d/notes/y.md", reachable: true }]);
+});
+
+test("选工作区时挂载设备目录：挂上就选中并记住，失败显示原因", () => {
+  const { store, hub } = setup();
+  store.openWorkspace();
+  store.mount("laptop", "D:\\proj");
+  assert.equal(store.mounting, true);
+  hub.emit({ type: "mounted", device: "laptop", path: "D:\\proj", cwd: PROJECT, error: null });
+  assert.equal(store.mounting, false);
+  assert.equal(store.cwd, PROJECT);
+  assert.equal(store.showWorkspace, false);
+  assert.equal(storage.getItem("cchub.cwd"), PROJECT);
+  store.mount("laptop", "D:\\gone");
+  hub.emit({ type: "mounted", device: "laptop", path: "D:\\gone", cwd: null, error: null });
+  assert.equal(store.mountError, "挂载失败");
+  assert.equal(store.cwd, PROJECT);
+});
