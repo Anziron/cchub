@@ -1,6 +1,8 @@
 //! 桌面端的连接逻辑，放在 Rust 进程里，窗口关闭后也能维持连接和通知。
 //! 不依赖 Tauri，所以 Linux 上也能测试。
 
+#![forbid(unsafe_code)]
+
 mod attention;
 
 use std::collections::{HashMap, HashSet};

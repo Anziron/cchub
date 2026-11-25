@@ -1,0 +1,6 @@
+# 服务器上的 cc-check 和 CI 用同一个 Rust 版本：新版本的 clippy 会多出警告，版本不同时会一边绿一边红。
+# 升级：改这里的版本号，跑 cc-check 修掉新警告，一起提交。CI 按这个文件装工具链（ci.yml 里没有版本号）。
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

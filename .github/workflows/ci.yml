@@ -14,10 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-          targets: x86_64-unknown-linux-musl
+      # 工具链按 rust-toolchain.toml 装（版本只写在那里，和服务器上的 cc-check 一致），再加这个任务要的目标平台。
+      - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
@@ -47,7 +45,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
       - run: npm run build:web
@@ -76,9 +74,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,x86_64-linux-android
+      - run: rustup toolchain install && rustup target add aarch64-linux-android x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
       - uses: android-actions/setup-android@v3
         with:

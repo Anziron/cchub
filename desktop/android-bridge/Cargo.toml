@@ -6,6 +6,9 @@ edition.workspace = true
 publish.workspace = true
 links = "tauri-plugin-cchub-bridge"
 
+[lints]
+workspace = true
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

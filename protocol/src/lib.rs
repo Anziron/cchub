@@ -2,6 +2,8 @@
 //!
 //! 这里不碰网络和文件：输入事件，输出动作，所以两端都能在同一个测试里确定性地模拟。
 
+#![forbid(unsafe_code)]
+
 pub mod codec;
 pub mod envelope;
 pub mod sync;
