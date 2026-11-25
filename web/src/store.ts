@@ -1,4 +1,3 @@
-import type { AckError } from "./generated/AckError.ts";
 import type { ConnectionState } from "./generated/ConnectionState.ts";
 import type { SessionInfo } from "./generated/SessionInfo.ts";
 import type { UiEvent } from "./generated/UiEvent.ts";
@@ -6,8 +5,9 @@ import type { Hub } from "./hub.ts";
 import { isNarrow } from "./platform.ts";
 import { sortKey } from "./sidebar.ts";
 import { parseUsage, type UsageStats } from "./usage.ts";
-import { afterTurn, confirmInserted, joinQueued, settleCancel, type Queued } from "./queue.ts";
+import { afterTurn, confirmInserted, joinQueued, settleCancel, settleInsert, type Queued } from "./queue.ts";
 import { dropRef, mountTarget, type DropRef } from "./paths.ts";
+import { choiceAck, controlNotice, inputNotice, replyAck, resumeChoice, startModel, userAck, type AckResult } from "./uplink.ts";
 import type { DeviceInfo } from "./generated/DeviceInfo.ts";
 import {
   addSending,
@@ -16,7 +16,6 @@ import {
   apply,
   cancelInsertLine,
   denyLine,
-  ackReason,
   serverErrorText,
   failSending,
   failUser,
@@ -122,12 +121,6 @@ function loadModels(): ModelOption[] {
   const saved = loadJson<ModelOption[]>(MODELS_KEY, []);
   return Array.isArray(saved) && saved.length ? saved : FALLBACK_MODELS;
 }
-
-/** 回执结果：hubd 说的原因，`send` 是消息根本没发到 hubd（连接层报错）。 */
-type AckResult = AckError | "send";
-
-/** 新会话页选“默认”就不带 `--model`，让 CLI 自己选。 */
-const startModel = (model?: string): string | undefined => (model && model !== "default" ? model : undefined);
 
 export interface BrowseState {
   device: string | null;
@@ -295,8 +288,9 @@ export class Store {
   /** 控制消息：失败就在顶部提示；连接层发送失败时 `input` 已经提示过。 */
   private control(session: Session, line: string, label: string): void {
     this.input(session, line, (error) => {
-      if (error && error !== "send") {
-        this.error = `${label}失败：${ackReason(error)}`;
+      const notice = controlNotice(label, error);
+      if (notice) {
+        this.error = notice;
         this.changed();
       }
     });
@@ -782,41 +776,37 @@ export class Store {
     this.deliverUser(session, id, userLine(text, id), false);
   }
 
-  /**
-   * 发用户消息并处理回执：成功 → 已送达；进程不在 → 自动恢复进程后用同一个 id 重发一次（`retried`）；
-   * 其他失败标成 failed 并给出原因。启动失败时 `error` 事件已经标过 failed，不再重试。
-   */
+  /** 发用户消息并按回执处理（规则见 `uplink.ts` 的 `userAck`）；`retried` 是恢复进程后的那次重发。 */
   private deliverUser(session: Session, id: string, line: string, retried: boolean): void {
     this.input(session, line, (error) => {
       const thread = session.thread;
-      if (!error) markDelivered(thread, id);
-      else if (userState(thread, id) === "failed") return;
-      else if (error === "not_running" && !retried && userState(thread, id) === "sending") {
+      const action = userAck(error, userState(thread, id), retried);
+      if (action.kind === "ignore") return;
+      if (action.kind === "delivered") markDelivered(thread, id);
+      else if (action.kind === "retry") {
         this.resume(session);
         this.deliverUser(session, id, line, true);
       } else {
-        failUser(thread, id, error === "send" ? undefined : ackReason(error));
-        if (error === "stalled" || error === "invalid") this.error = ackReason(error);
+        failUser(thread, id, action.reason);
+        if (action.notice) this.error = action.notice;
       }
       this.changed();
     }, id);
   }
 
-  /** 进程已回收：用记录的 ID 恢复。进程不在时选的模型带在 `--model` 上，强度每次恢复都要重发。 */
+  /** 进程已回收：用记录的 ID 恢复，带上待定的模型、重发强度（`resumeChoice`）。 */
   private resume(session: Session): void {
-    const pending = this.takePending(session.id);
+    const choice = resumeChoice(this.takePending(session.id), session.thread.effort);
     void this.send({
       type: "start",
       session: session.id,
       resume: session.thread.claudeSessionId,
-      model: startModel(pending?.model),
+      model: choice.model,
     });
     session.running = true;
     this.initialized.delete(session.id);
     this.requestInit(session);
-    // 强度只存在进程的 flag 设置层里，`--resume` 后会回到默认。
-    const effort = pending?.effort !== undefined ? pending.effort : session.thread.effort;
-    if (effort) this.control(session, setEffortLine(effort), "设置推理强度");
+    if (choice.effort) this.control(session, setEffortLine(choice.effort), "设置推理强度");
   }
 
   /** 进程不在时选的模型 / 强度存到本地，刷新、重启后照样显示，恢复进程时带上。 */
@@ -895,13 +885,10 @@ export class Store {
       session.queue = [...session.queue, { id, text, mode }];
       session.updated = session.active = Math.floor(Date.now() / 1000);
       this.input(session, userLine(text, id), (error) => {
-        if (!error) {
-          session.queue = session.queue.map((q) => (q.id === id ? { ...q, delivered: true } : q));
-        } else {
-          // 没写进去：转成等结束，留着让用户改或删。进程不在时 status 事件会把队列放回输入框，不另外提示。
-          session.queue = session.queue.map((q) => (q.id === id ? { ...q, mode: "wait" } : q));
-          if (error === "stalled" || error === "invalid") this.error = ackReason(error);
-        }
+        session.queue = settleInsert(session.queue, id, !error);
+        // 进程不在时 status 事件会把队列放回输入框，不另外提示。
+        const notice = inputNotice(error);
+        if (notice) this.error = notice;
         this.changed();
       }, id);
     } else {
@@ -945,7 +932,8 @@ export class Store {
       if (!error) return;
       this.cancelRequests.delete(requestId);
       session.queue = session.queue.map((q) => (q.id === id ? { ...q, cancelling: false } : q));
-      if (error !== "send") this.error = `撤回失败：${ackReason(error)}`;
+      const notice = controlNotice("撤回", error);
+      if (notice) this.error = notice;
       this.changed();
     });
     this.changed();
@@ -981,12 +969,13 @@ export class Store {
     ask.error = undefined;
     ask.reply = shown;
     this.input(session, line, (error) => {
-      if (!error) return;
-      if (error === "not_running") ask.expired = true;
+      const action = replyAck(error);
+      if (action.kind === "ok") return;
+      if (action.kind === "expired") ask.expired = true;
       else {
         ask.sent = false;
         ask.reply = undefined;
-        ask.error = error === "send" ? "没有发出，可以再试一次" : ackReason(error);
+        ask.error = action.error;
         if (shown) this.appendDraft(session.id, shown);
       }
       this.changed();
@@ -1146,12 +1135,13 @@ export class Store {
     if (session.thread.phase !== "idle") session.thread.nextModel = model;
     if (session.running) {
       this.input(session, setModelLine(model), (error) => {
-        if (!error) return;
+        const action = choiceAck("切换模型", error);
+        if (action.kind === "ok") return;
         session.thread.nextModel = undefined;
-        if (error === "not_running") this.setPending(session, { model });
+        if (action.kind === "pending") this.setPending(session, { model });
         else {
           session.thread.model = previous;
-          if (error !== "send") this.error = `切换模型失败：${ackReason(error)}`;
+          if (action.notice) this.error = action.notice;
         }
         this.changed();
       });
@@ -1183,9 +1173,10 @@ export class Store {
   setEffort(session: Session, effort?: string): void {
     if (session.running) {
       this.input(session, setEffortLine(effort ?? null), (error) => {
-        if (error === "not_running") this.setPending(session, { effort: effort ?? null });
-        else if (error && error !== "send") {
-          this.error = `设置推理强度失败：${ackReason(error)}`;
+        const action = choiceAck("设置推理强度", error);
+        if (action.kind === "pending") this.setPending(session, { effort: effort ?? null });
+        else if (action.kind === "rejected" && action.notice) {
+          this.error = action.notice;
           this.changed();
         }
       });

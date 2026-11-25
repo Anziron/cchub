@@ -5,10 +5,9 @@
  * - 等结束：留在桌面端，可以改（放回输入框）或删，这一轮正常结束后合成一条发出；被中断时放回输入框。
  * 只存在内存里：关掉窗口后不会在别的时机突然发出去。
  */
-import type { Thread } from "./model.ts";
+import { isWaiting, type Thread } from "./model.ts";
 
-// 不从 model 导入函数：测试直接用 node 跑，被测模块之间只能有类型依赖。
-const waitingAsk = (thread: Thread) => [...thread.asks.values()].some((ask) => !ask.sent);
+/** 还有没写进 FIFO 的用户消息（只算发送中；`model.ts` 的 `isSending` 连已送达的也算）。 */
 const sending = (thread: Thread) => thread.items.some((item) => item.kind === "user" && item.state === "sending");
 
 export interface Queued {
@@ -21,6 +20,11 @@ export interface Queued {
   late?: boolean;
   /** 插入的消息：hubd 回执成功，已写给 CLI。 */
   delivered?: boolean;
+}
+
+/** 插入消息的回执：写进去了标已送达；没写进去转成等结束，留着让用户改或删。 */
+export function settleInsert(queue: Queued[], id: string, written: boolean): Queued[] {
+  return queue.map((q) => (q.id !== id ? q : written ? { ...q, delivered: true } : { ...q, mode: "wait" }));
 }
 
 /** 撤回请求有了回复：撤回成功就移出队列，来不及就标成 `late`。 */
@@ -41,7 +45,7 @@ export function confirmInserted(queue: Queued[], thread: Thread): Queued[] {
 /** 一轮结束后对等结束的消息做什么：发出、放回输入框，或者继续等。 */
 export function afterTurn(queue: Queued[], thread: Thread, interrupted: boolean): "flush" | "restore" | null {
   if (!queue.some((q) => q.mode === "wait") || queue.some((q) => q.mode === "insert")) return null;
-  if (thread.phase !== "idle" || waitingAsk(thread) || sending(thread)) return null;
+  if (thread.phase !== "idle" || isWaiting(thread) || sending(thread)) return null;
   return interrupted ? "restore" : "flush";
 }
 
