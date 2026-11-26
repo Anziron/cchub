@@ -40,10 +40,9 @@ export function ServerPane({ store }: { store: Store }) {
         </div>
       </div>
       <LoadChart history={history} />
-      <h4>cchub</h4>
+      <ProcHead title="cchub" />
       {load.sessions.length ? (
         <>
-          <div className="proc-head"><span /><span>CPU</span><span>内存</span></div>
           {load.sessions.map((item) => {
             const session = store.sessions.get(item.session);
             const { project, device } = describeCwd(session?.cwd);
@@ -57,8 +56,7 @@ export function ServerPane({ store }: { store: Store }) {
           })}
         </>
       ) : <p className="empty">没有正在运行的会话。</p>}
-      <h4>其他进程</h4>
-      <div className="proc-head"><span /><span>CPU</span><span>内存</span></div>
+      <ProcHead title="其他进程" />
       {load.others.map((item) => (
         <div key={item.pid} className="proc-row" title={`PID ${item.pid}${item.cwd ? `\n${item.cwd}` : ""}`}>
           <span className="proc-name"><b>{item.name}</b></span>
@@ -68,6 +66,11 @@ export function ServerPane({ store }: { store: Store }) {
       ))}
     </>
   );
+}
+
+/** 分组标题和列名在同一行，省一行高度。 */
+function ProcHead({ title }: { title: string }) {
+  return <div className="proc-head"><h4>{title}</h4><span>CPU</span><span>内存</span></div>;
 }
 
 /** 最近 10 分钟的 CPU、内存折线，横轴按时间（窗口在后台时没有记录，线会断开一段）。鼠标移上去看某一刻的数值。 */

@@ -862,8 +862,9 @@ a.link:hover { text-decoration-thickness: 2px; }
 .pane-server i.cpu { background: var(--accent); }
 .pane-server i.mem { background: var(--mem-line); }
 .proc-head, .proc-row { display: grid; grid-template-columns: minmax(0, 1fr) 42px 58px; gap: 8px; align-items: center; }
-.proc-head { padding: 0 8px 4px; color: var(--faint); font-size: 11px; }
-.proc-head span + span, .proc-row .n { text-align: right; }
+.proc-head { margin-top: 14px; padding: 0 8px 4px 0; color: var(--faint); font-size: 11px; }
+.pane-body .proc-head h4 { margin: 0; }
+.proc-head span, .proc-row .n { text-align: right; }
 .proc-row { width: 100%; min-height: 36px; padding: 4px 8px; border-radius: var(--r-md); color: var(--text-2); font-size: 12.5px; text-align: left; }
 button.proc-row:hover { background: var(--hover); }
 .proc-name { display: flex; flex-direction: column; min-width: 0; }
