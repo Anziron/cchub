@@ -12,7 +12,7 @@ import type { Session, Store } from "./store.ts";
 
 /** 弹窗。Esc 只关弹窗，不能冒泡到窗口上变成中断任务。 */
 /** `local`：只盖住对话区并在其中居中（和输入框对齐），要放在 `.main` 里渲染。 */
-function Modal({ title, onClose, children, className, local }: { title: string; onClose: () => void; children: ReactNode; className?: string; local?: boolean }) {
+export function Modal({ title, onClose, children, className, local }: { title: string; onClose: () => void; children: ReactNode; className?: string; local?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!ref.current?.contains(document.activeElement)) ref.current?.focus();

@@ -57,7 +57,12 @@ $shots = @(
   @("layout-gear-small", "/?s=rich&theme=light&pane=&frame=custom&click=.rail-gear%20.rail-btn", "900,460"),
   @("layout-narrow", "/?s=rich&theme=light&pane=&frame=custom", "820,700"),
   @("layout-drawer", "/?s=rich&theme=light&pane=&frame=custom&click=.drawer-open", "820,700"),
-  @("layout-drawer-plain", "/?s=rich&theme=light&pane=&click=.drawer-open", "820,700")
+  @("layout-drawer-plain", "/?s=rich&theme=light&pane=&click=.drawer-open", "820,700"),
+  # 本机缓存：设置面板（齿轮菜单最后一项）；同步中锁住的卡片和状态行。sync-* 要加 -NoMotion：状态行延迟淡入，不加可能截不到
+  @("cache-light", "/?s=rich&theme=light&pane=&frame=custom&click=.rail-gear%20.rail-btn&then=.menu%20.mi:last-child", "1200,800"),
+  @("cache-dark", "/?s=rich&theme=dark&pane=&frame=custom&click=.rail-gear%20.rail-btn&then=.menu%20.mi:last-child", "1200,800"),
+  @("sync-light", "/?s=approval&scene=syncing&theme=light&pane=", "1200,800"),
+  @("sync-dark", "/?s=approval&scene=syncing&theme=dark&pane=", "1200,800")
 )
 $edge = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 if (-not (Test-Path $edge)) { $edge = "C:\Program Files\Microsoft\Edge\Application\msedge.exe" }

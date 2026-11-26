@@ -1,7 +1,7 @@
 import type { ConnectionState } from "./generated/ConnectionState.ts";
 import type { SessionInfo } from "./generated/SessionInfo.ts";
 import type { UiEvent } from "./generated/UiEvent.ts";
-import type { Hub } from "./hub.ts";
+import type { CacheInfo, CacheOp, Hub } from "./hub.ts";
 import { isNarrow } from "./platform.ts";
 import { sortKey } from "./sidebar.ts";
 import { parseUsage, type UsageStats } from "./usage.ts";
@@ -65,6 +65,11 @@ export interface Session {
   logUpdated: number;
   /** 最近一次订阅时 hubd 报的日志长度：偏移更小的事件是重放的历史。旧版 hubd 不报。 */
   live?: number;
+  /**
+   * 同步中：订阅回了 `attached`、还没追上（`synced`）。显示的是本机缓存或回放到一半的历史，
+   * 里面的审批卡片可能早就在别处回答过了，追上之前不能回。旧版 hubd 不发 `attached`，不会进来。
+   */
+  syncing: boolean;
   deviceOnline: boolean;
   attached: boolean;
   thread: Thread;
@@ -126,6 +131,8 @@ export class Store {
   usage: { stats: UsageStats | null; error: string | null; loading: boolean } = { stats: null, error: null, loading: false };
   /** 服务器负载（会话栏底部和「服务器」窗格）：随会话列表刷新，窗格开着时每 5 秒要一次。 */
   hostLoad: HostLoadState = emptyHostLoad();
+  /** 设置里的「本机缓存」面板：位置和占用、正在做的操作、上一次的错误。 */
+  cache: { open: boolean; info: CacheInfo | null; busy: CacheOp | null; error: string | null } = { open: false, info: null, busy: null, error: null };
   /** 新会话要用的工作区，服务器上的路径。 */
   cwd = saved.cwd.get();
   showWorkspace = false;
@@ -268,6 +275,7 @@ export class Store {
         active: info.active,
         logUpdated: 0,
         archived: false,
+        syncing: false,
         deviceOnline: true,
         attached: false,
         thread: newThread(),
@@ -352,8 +360,27 @@ export class Store {
         break;
       }
       case "attached": {
+        // 先从本机缓存显示时会来两次：缓存末尾，hubd 回了再是日志长度。
         const session = this.sessions.get(event.session);
-        if (session) session.live = event.live;
+        if (session) {
+          session.live = event.live;
+          session.syncing = true;
+        }
+        break;
+      }
+      case "synced": {
+        const session = this.sessions.get(event.session);
+        if (session) session.syncing = false;
+        break;
+      }
+      case "reset": {
+        // 本机缓存接不上服务器上的日志（会话目录被清理后重建等）：清空，客户端已经从头重订，后面照常回放。
+        const session = this.sessions.get(event.session);
+        if (session) {
+          session.thread = newThread();
+          session.live = undefined;
+          session.syncing = true;
+        }
         break;
       }
       case "browse":
@@ -632,6 +659,7 @@ export class Store {
   /** 系统返回键：先关弹窗，再回会话列表；已在列表时返回 false，由系统退到后台。 */
   back(): boolean {
     if (this.stopping) this.cancelStop();
+    else if (this.cache.open) this.closeCache();
     else if (this.showResume) this.closeResume();
     else if (this.pane) this.closePane();
     else if (this.showWorkspace) this.closeWorkspace();
@@ -891,6 +919,8 @@ export class Store {
    * `shown` 是用户在输入框里打的原文，卡片结束后显示；没发出去时放回输入框。
    */
   private reply(session: Session, ask: Ask, line: string, shown?: string): void {
+    // 同步中的卡片可能早就在别处回答过了：追上之前不回（按钮已禁用，这里挡住回车、Esc 快捷键）。
+    if (session.syncing) return;
     ask.sent = true;
     ask.error = undefined;
     ask.reply = shown;
@@ -1043,6 +1073,43 @@ export class Store {
       this.changed();
     });
     this.changed();
+  }
+
+  /** 打开「本机缓存」面板，顺带查一次位置和占用。 */
+  openCache(): void {
+    this.cache = { ...this.cache, open: true, error: null };
+    this.runCache("info");
+    this.changed();
+  }
+
+  closeCache(): void {
+    this.cache = { ...this.cache, open: false };
+    this.changed();
+  }
+
+  clearCache(): void {
+    this.runCache("clear");
+  }
+
+  /** 搬到 `dir`（只有桌面端）。失败时缓存留在原处，面板显示原因。 */
+  moveCache(dir: string): void {
+    this.runCache("move", dir);
+  }
+
+  private runCache(op: CacheOp, dir?: string): void {
+    if (this.cache.busy) return;
+    this.cache = { ...this.cache, busy: op, error: null };
+    this.changed();
+    this.hub.cache(op, dir).then(
+      (info) => {
+        this.cache = { ...this.cache, info, busy: null };
+        this.changed();
+      },
+      (error) => {
+        this.cache = { ...this.cache, busy: null, error: String(error) };
+        this.changed();
+      },
+    );
   }
 
   /** 问一次服务器负载。`refresh` 和开着的「服务器」窗格调用；没连上、旧 hubd 不支持时不发。发送失败不提示，下次照样问。 */

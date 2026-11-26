@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { ackReason, firstAsk, userState } from "../src/model.ts";
-import { Store } from "../src/store.ts";
+import { Store, type Session } from "../src/store.ts";
 
 const recording = (name: string) => readFileSync(new URL(`../../testdata/recordings/${name}/stream.jsonl`, import.meta.url), "utf8").trim().split("\n");
 const INIT = recording("approval")[0];
@@ -569,4 +569,91 @@ test("服务器负载：收到统计记下结果和走势；失败时保留上�
   assert.deepEqual(store.hostLoad.load, load);
   assert.equal(store.hostLoad.error, "读不了 /proc/stat");
   assert.equal(store.error, null);
+});
+
+// ---- 同步中（先显示本机缓存或回放历史，追上服务器之前）----
+
+/** 把审批录制重放到第一个审批请求，返回那张卡片。 */
+function replayToApproval(hub: ReturnType<typeof fakeHub>, session: Session) {
+  const lines = recording("approval");
+  const ask = lines.findIndex((line) => line.includes('"can_use_tool"'));
+  lines.slice(1, ask + 1).forEach((line, i) => hub.emit(event("s1", i + 1, line)));
+  const card = firstAsk(session.thread);
+  assert.ok(card, "录制里有审批卡片");
+  return card;
+}
+
+test("同步中：订阅回了 attached 进入，追上（synced）后退出", () => {
+  const { hub, session } = setup();
+  assert.equal(session.syncing, false);
+  hub.emit({ type: "attached", session: "s1", live: 100 });
+  assert.equal(session.syncing, true);
+  assert.equal(session.live, 100);
+  hub.emit({ type: "synced", session: "s1" });
+  assert.equal(session.syncing, false);
+});
+
+test("同步中卡片不能回复（按钮和快捷键都走这里），追上后照常", () => {
+  const { store, hub, session } = setup();
+  hub.emit({ type: "attached", session: "s1", live: 100 });
+  const card = replayToApproval(hub, session);
+  store.allow(session, card);
+  store.deny(session, card, "不行");
+  assert.equal(hub.replies().length, 0, "可能早就在别处回答过了");
+  assert.equal(card.sent, false);
+  hub.emit({ type: "synced", session: "s1" });
+  store.allow(session, card);
+  assert.equal(hub.replies().length, 1);
+});
+
+test("旧 hubd 不发 attached：不进同步中，卡片照常能回（否则会一直锁着）", () => {
+  const { store, hub, session } = setup();
+  const card = replayToApproval(hub, session);
+  assert.equal(session.syncing, false);
+  store.allow(session, card);
+  assert.equal(hub.replies().length, 1);
+});
+
+test("reset：清空这个会话已显示的内容，等重新回放", () => {
+  const { hub, session } = setup();
+  hub.emit({ type: "attached", session: "s1", live: 100 });
+  replayToApproval(hub, session);
+  assert.ok(session.thread.items.length > 0);
+  hub.emit({ type: "reset", session: "s1" });
+  assert.equal(session.thread.items.length, 0);
+  assert.equal(firstAsk(session.thread), undefined);
+  assert.equal(session.syncing, true, "客户端已经从头重订，等它的 attached 和事件");
+});
+
+// ---- 本机缓存（设置里的面板）----
+
+test("本机缓存面板：打开时查位置和占用，清空后更新", async () => {
+  const { store, hub } = setup();
+  hub.onCache(async (op) => ({ path: "D:\\cache", bytes: op === "clear" ? 0 : 2048, movable: true }));
+  store.openCache();
+  await settle();
+  assert.equal(store.cache.open, true);
+  assert.deepEqual(store.cache.info, { path: "D:\\cache", bytes: 2048, movable: true });
+  store.clearCache();
+  await settle();
+  assert.equal(store.cache.info?.bytes, 0);
+  assert.deepEqual(hub.cacheCalls.map((c) => c.op), ["info", "clear"]);
+});
+
+test("改缓存位置失败：位置不变，显示原因；成功后显示新位置", async () => {
+  const { store, hub } = setup();
+  hub.onCache(async (op, dir) => {
+    if (op === "move" && dir === "E:\\busy") throw "新位置里已有别的文件，请换一个空文件夹或还不存在的路径";
+    return { path: op === "move" ? dir : "D:\\cache", bytes: 10, movable: true };
+  });
+  store.openCache();
+  await settle();
+  store.moveCache("E:\\busy");
+  await settle();
+  assert.equal(store.cache.info?.path, "D:\\cache");
+  assert.match(store.cache.error ?? "", /已有别的文件/);
+  store.moveCache("E:\\cchub-cache");
+  await settle();
+  assert.equal(store.cache.info?.path, "E:\\cchub-cache");
+  assert.equal(store.cache.error, null);
 });

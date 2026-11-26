@@ -35,6 +35,8 @@ export function fakeHub() {
   const sent: Msg[] = [];
   let handler: (events: unknown[]) => void = () => {};
   let failing = false;
+  const cacheCalls: { op: string; dir?: string }[] = [];
+  let cacheReply: (op: string, dir?: string) => Promise<unknown> = async () => ({ path: "C:\\cache", bytes: 0, movable: true });
   const hub = {
     connect: async () => "connected" as const,
     send: async (msg: Msg) => {
@@ -43,6 +45,10 @@ export function fakeHub() {
     },
     onEvent: async (h: (events: unknown[]) => void) => {
       handler = h;
+    },
+    cache: async (op: string, dir?: string) => {
+      cacheCalls.push({ op, dir });
+      return cacheReply(op, dir);
     },
   };
   const inputs = (): Input[] => sent.flatMap((m) => (m.type === "input" ? [{ ...m, body: JSON.parse(m.line) }] : []));
@@ -61,6 +67,11 @@ export function fakeHub() {
     ack: (input: Input, error: string | null = null) => handler([{ type: "ack", session: input.session, id: input.id, error }]),
     failSends: (on: boolean) => {
       failing = on;
+    },
+    /** 本机缓存命令的调用记录，`onCache` 换掉它的回复。 */
+    cacheCalls,
+    onCache: (reply: (op: string, dir?: string) => Promise<unknown>) => {
+      cacheReply = reply;
     },
   };
 }

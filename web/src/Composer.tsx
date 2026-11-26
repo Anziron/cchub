@@ -25,6 +25,17 @@ function Activity({ store, session }: { store: Store; session: Session }) {
     return () => clearInterval(timer);
   }, [waitingStop]);
 
+  // 同步中显示的状态可能是旧的（卡片已在别处回答、这一轮早结束了）：只说在同步。
+  // 很快追上时不显示（样式里延迟淡入），不然打开每个会话都闪一下。
+  if (session.syncing) {
+    return (
+      <div className="activity syncing" role="status">
+        <span className="pulse" />
+        <span className="activity-text">正在同步会话</span>
+      </div>
+    );
+  }
+
   let text = busy || ask ? sessionStatus(session) : "";
   if (!text && background) text = `这一轮已结束，后台还有 ${background} 个任务在运行`;
   else if (!text && !session.running) text = "进程已结束，发消息时自动恢复";
@@ -250,7 +261,8 @@ export function Composer({ store, session }: { store: Store; session: Session })
   const submit = (message: string, mode: "wait" | "insert" = "wait") => {
     if (!message.trim() && !input.files.length) return;
     // 有卡片等回复时，输入框里的话直接当卡片的回复（`/` 命令和带文件的消息照旧当普通消息发）。
-    const ask = firstAsk(thread);
+    // 同步中的卡片可能早就回答过了，照常当普通消息发。
+    const ask = session.syncing ? undefined : firstAsk(thread);
     if (ask && message.trim() && !message.trimStart().startsWith("/") && !input.files.length) {
       setText("");
       store.deny(session, ask, `用户没有选选项，而是回复：${message}`, message.trim());
@@ -291,7 +303,7 @@ export function Composer({ store, session }: { store: Store; session: Session })
             ref={ref}
             rows={1}
             aria-label="输入消息"
-            placeholder={firstAsk(thread) ? "回复上面的问题…" : busy ? (isTouch ? "补充内容，这一轮结束后发送" : "补充内容：Enter 等这一轮结束后发送，Ctrl+Enter 插入这一轮") : "继续补充，输入 / 查看命令，可以拖入文件"}
+            placeholder={firstAsk(thread) && !session.syncing ? "回复上面的问题…" : busy ? (isTouch ? "补充内容，这一轮结束后发送" : "补充内容：Enter 等这一轮结束后发送，Ctrl+Enter 插入这一轮") : "继续补充，输入 / 查看命令，可以拖入文件"}
             value={text}
             onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {

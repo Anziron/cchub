@@ -19,12 +19,16 @@ function inTextField(): boolean {
   return tag === "TEXTAREA" || tag === "INPUT";
 }
 
+/** 已经回过，或同步中（卡片可能早就在别处回答过了，追上之前不能回）。 */
+const locked = ({ ask, session }: Props) => ask.sent || session.syncing;
+
 function Approval({ ask, session, store }: Props) {
   const allow = () => store.allow(session, ask);
   const deny = () => store.deny(session, ask, "用户拒绝了这次操作");
+  const off = locked({ ask, session, store });
   // 只有焦点不在输入框时才响应，打字时按回车不会误批准。
   useEffect(() => {
-    if (ask.sent) return;
+    if (off) return;
     const onKey = (event: KeyboardEvent) => {
       if (inTextField()) return;
       if (event.key === "Enter") allow();
@@ -42,11 +46,11 @@ function Approval({ ask, session, store }: Props) {
       {ask.description ? <p>{ask.description}</p> : null}
       <div className="cmd">{command || JSON.stringify(ask.input, null, 2)}</div>
       <div className="actions">
-        <button className="btn solid" disabled={ask.sent} onClick={allow}>允许<kbd>↵</kbd></button>
+        <button className="btn solid" disabled={off} onClick={allow}>允许<kbd>↵</kbd></button>
         {ask.suggestions?.length ? (
-          <button className="btn ghost" disabled={ask.sent} onClick={() => store.allow(session, ask, true)}>总是允许</button>
+          <button className="btn ghost" disabled={off} onClick={() => store.allow(session, ask, true)}>总是允许</button>
         ) : null}
-        <button className="btn quiet" disabled={ask.sent} onClick={deny}>拒绝<kbd>Esc</kbd></button>
+        <button className="btn quiet" disabled={off} onClick={deny}>拒绝<kbd>Esc</kbd></button>
       </div>
     </article>
   );
@@ -84,6 +88,7 @@ function QuestionBlock({ question, value, onChange, disabled }: { question: Ques
 function Questions({ ask, session, store }: Props) {
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const ready = ask.questions.length > 0 && ask.questions.every((q) => answers[q.question]?.length);
+  const off = locked({ ask, session, store });
   const submit = () => {
     const joined = Object.fromEntries(Object.entries(answers).map(([q, v]) => [q, v.join(", ")]));
     store.answer(session, ask, joined);
@@ -96,13 +101,13 @@ function Questions({ ask, session, store }: Props) {
           key={question.question}
           question={question}
           value={answers[question.question] ?? []}
-          disabled={ask.sent}
+          disabled={off}
           onChange={(next) => setAnswers((all) => ({ ...all, [question.question]: next }))}
         />
       ))}
       <div className="actions">
-        <button className="btn solid" disabled={!ready || ask.sent} onClick={submit}>回答</button>
-        <button className="btn quiet" disabled={ask.sent} onClick={() => store.deny(session, ask, "用户没有回答这个问题")}>跳过</button>
+        <button className="btn solid" disabled={!ready || off} onClick={submit}>回答</button>
+        <button className="btn quiet" disabled={off} onClick={() => store.deny(session, ask, "用户没有回答这个问题")}>跳过</button>
       </div>
     </article>
   );
@@ -111,6 +116,7 @@ function Questions({ ask, session, store }: Props) {
 function Plan({ ask, session, store }: Props) {
   const [revising, setRevising] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const off = locked({ ask, session, store });
   return (
     <article className="ask">
       <Head text="方案等你确认" />
@@ -122,13 +128,13 @@ function Plan({ ask, session, store }: Props) {
       <div className="actions">
         {revising ? (
           <>
-            <button className="btn solid" disabled={!feedback.trim() || ask.sent} onClick={() => store.deny(session, ask, feedback)}>发送修改意见</button>
+            <button className="btn solid" disabled={!feedback.trim() || off} onClick={() => store.deny(session, ask, feedback)}>发送修改意见</button>
             <button className="btn quiet" onClick={() => setRevising(false)}>取消</button>
           </>
         ) : (
           <>
-            <button className="btn solid" disabled={ask.sent} onClick={() => store.allow(session, ask)}>批准并开始</button>
-            <button className="btn ghost" disabled={ask.sent} onClick={() => setRevising(true)}>要求修改</button>
+            <button className="btn solid" disabled={off} onClick={() => store.allow(session, ask)}>批准并开始</button>
+            <button className="btn ghost" disabled={off} onClick={() => setRevising(true)}>要求修改</button>
           </>
         )}
       </div>
@@ -137,10 +143,11 @@ function Plan({ ask, session, store }: Props) {
 }
 
 export function AskCard(props: Props) {
-  const { ask } = props;
+  const { ask, session } = props;
   return (
     <>
       {ask.kind === "plan" ? <Plan {...props} /> : ask.kind === "question" ? <Questions {...props} /> : <Approval {...props} />}
+      {session.syncing && !ask.sent ? <div className="sent syncing-note">正在同步会话，同步完才能回复（可能已经在别处回答过）</div> : null}
       {ask.expired ? <div className="sent failed"><Icon name="alert" size={12} />已失效：进程已结束</div> : null}
       {ask.sent && !ask.expired ? <div className="sent"><Icon name="up" size={12} />已发送，等它继续</div> : null}
       {ask.sent && ask.reply ? <div className="sent">你回复：{ask.reply}</div> : null}

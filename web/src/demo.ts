@@ -214,9 +214,18 @@ export function setupDemo(store: Store): void {
   }, 600);
 }
 
+/** 假的本机缓存。`?cache=fail`：改位置失败（看错误提示）。 */
+const demoCache = { path: "C:\\Users\\me\\AppData\\Local\\dev.anziron.cchub\\cache", bytes: 186_400_000, movable: true };
+
 export const demoHub: Hub = {
   connect: async () => (scene === "conn" ? "disconnected" : "connected"),
   onEvent: async (handler) => { emit = (event) => handler([event]); },
+  cache: async (op, dir) => {
+    if (op === "move" && params.get("cache") === "fail") throw "新位置里已有别的文件，请换一个空文件夹或还不存在的路径";
+    if (op === "clear") demoCache.bytes = 0;
+    if (op === "move" && dir) demoCache.path = dir;
+    return { ...demoCache };
+  },
   send: async (msg) => {
     if (msg.type === "devices") {
       setTimeout(() => emit({ type: "devices", error: null, devices: [
@@ -315,6 +324,8 @@ export const demoHub: Hub = {
         sessions: SESSIONS.map((s, i) => ({ id: s.id, title: s.title, cwd: scene === "devices" ? DEVICE_CWDS[i % DEVICE_CWDS.length] : "/mnt/laptop/d/demo-api", running: s.running, updated: now - i * 60, active: now - i * 60, archived: false })),
       });
     } else if (msg.type === "attach") {
+      // `?scene=syncing`：一直停在同步中（只回 attached、不回 synced），看锁住的卡片和底部提示。
+      if (scene === "syncing") emit({ type: "attached", session: msg.session, live: 1_000_000 });
       const session = SESSIONS.find((s) => s.id === msg.session);
       // 长会话分批到达，和真实连接一样边收边画。
       if (msg.session === "long") {

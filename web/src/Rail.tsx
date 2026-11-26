@@ -38,7 +38,7 @@ function useDismiss(open: boolean, ref: RefObject<HTMLElement | null>, close: ()
   }, [open, ref, close]);
 }
 
-/** 窗口底色上的窄图标栏：上面是视图图标，底部是齿轮（外观、连接服务器）。 */
+/** 窗口底色上的窄图标栏：上面是视图图标，底部是齿轮（外观、连接服务器、本机缓存）。 */
 export function Rail({ store, views, floating, look, onLook }: {
   store: Store;
   views: ViewDef[];
@@ -76,6 +76,7 @@ export function Rail({ store, views, floating, look, onLook }: {
           <div className="menu rail-pop" role="menu">
             <MenuItem icon="palette" label="外观" onClick={() => { setMenuOpen(false); setLookOpen(true); }} />
             <MenuItem icon="server" label="连接服务器" onClick={() => { setMenuOpen(false); store.toggleSettings(); }} />
+            <MenuItem icon="disk" label="本机缓存" onClick={() => { setMenuOpen(false); store.openCache(); }} />
           </div>
         ) : null}
       </div>

@@ -141,9 +141,9 @@ const ToolGroup = memo(function ToolGroup({ tools, cwd, active }: { tools: ToolI
 
 /**
  * 条目按引用比较（model 里是替换而不是原地改）。session 和 store 是原地修改的稳定对象，
- * 不能直接当依据：审批卡的 `sent` 是原地改的，所以单独作为 prop 传入；cwd 同理。
+ * 不能直接当依据：审批卡的 `sent` 是原地改的，所以单独作为 prop 传入；cwd、同步中（卡片锁住）同理。
  */
-const askKey = (ask?: Ask): string | undefined => (ask ? `${ask.sent}|${ask.expired ?? ""}|${ask.error ?? ""}` : undefined);
+const askKey = (ask: Ask | undefined, syncing: boolean): string | undefined => (ask ? `${ask.sent}|${ask.expired ?? ""}|${ask.error ?? ""}|${syncing}` : undefined);
 
 const ItemView = memo(function ItemView({ item, store, session, askSent }: { item: Item; store: Store; session: Session; askSent?: string }) {
   switch (item.kind) {
@@ -169,7 +169,7 @@ const ItemView = memo(function ItemView({ item, store, session, askSent }: { ite
       return <Tool tool={item} cwd={session.cwd} />;
     case "ask": {
       const ask = session.thread.asks.get(item.requestId);
-      // askSent 只用来让 memo 在卡片的 `sent` / 失效 / 错误变化时重画。
+      // askSent 只用来让 memo 在卡片的 `sent` / 失效 / 错误 / 同步中变化时重画。
       return ask ? <AskCard key={String(askSent)} ask={ask} session={session} store={store} /> : null;
     }
     case "interrupted":
@@ -421,7 +421,7 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
               item={block.item}
               store={store}
               session={session}
-              askSent={block.item.kind === "ask" ? askKey(session.thread.asks.get(block.item.requestId)) : undefined}
+              askSent={block.item.kind === "ask" ? askKey(session.thread.asks.get(block.item.requestId), session.syncing) : undefined}
             />
           ))}
         </div>

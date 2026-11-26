@@ -1,4 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { CachePanel } from "./CachePanel.tsx";
 import { Composer, Welcome } from "./Composer.tsx";
 import { ConfirmDialog, ConnectDialog, ResumeDialog, WorkspaceDialog } from "./Dialogs.tsx";
 import { loadAppearance, resolveTheme, saveAppearance, type Appearance } from "./appearance.ts";
@@ -231,6 +232,7 @@ export function App({ store }: { store: Store }) {
       {store.showWorkspace ? <WorkspaceDialog store={store} /> : null}
       {store.stopping ? <ConfirmDialog store={store} session={store.stopping} /> : null}
       {store.showResume ? <ResumeDialog store={store} /> : null}
+      {store.cache.open ? <CachePanel store={store} /> : null}
     </div>
   );
 }
