@@ -4,6 +4,9 @@
 #![forbid(unsafe_code)]
 
 mod attention;
+mod cache;
+
+pub use cache::{Cache, Opened, Record, ServerCache};
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
