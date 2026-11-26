@@ -1,10 +1,19 @@
-import { useState, type MouseEvent } from "react";
-import { agoText, chartPoints, chartX, formatLoad, level, loadWarning, memoryPercent, memoryWarning, nearestPoint, percent, shareLevel, type LoadPoint } from "./hostload.ts";
+import { useEffect, useState, type MouseEvent } from "react";
+import { agoText, chartPoints, chartX, formatLoad, HOST_LOAD_REFRESH_MS, level, loadWarning, memoryPercent, memoryWarning, nearestPoint, percent, shareLevel, type LoadPoint } from "./hostload.ts";
 import { describeCwd } from "./paths.ts";
+import { pageVisible } from "./platform.ts";
 import type { Store } from "./store.ts";
 
-/** 「服务器」窗格：整台机器的 CPU、内存，最近 10 分钟的走势，各会话和其他进程的占用。数据由会话栏底部定时去要。 */
+/** 「服务器」窗格：整台机器的 CPU、内存，最近 10 分钟的走势，各会话和其他进程的占用。 */
 export function ServerPane({ store }: { store: Store }) {
+  // 只有窗格开着才轮询（平时不轮询）：打开时问一次，之后页面看得见时每 5 秒一次，切回窗口时补一次。
+  useEffect(() => {
+    const tick = () => { if (pageVisible()) store.requestHostLoad(); };
+    tick();
+    const timer = setInterval(tick, HOST_LOAD_REFRESH_MS);
+    document.addEventListener("visibilitychange", tick);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", tick); };
+  }, [store, store.connection]);
   const { load, error, unsupported, history } = store.hostLoad;
   if (unsupported) return <p className="empty">服务器的 hubd 版本较旧，不支持查看负载，升级服务器后再用。</p>;
   if (!load) return error ? <p className="usage-error">{error}</p> : <p className="empty">正在读取服务器负载…</p>;
@@ -58,7 +67,7 @@ export function ServerPane({ store }: { store: Store }) {
           <span className="n">{item.mem_mb} MB</span>
         </div>
       ))}
-      <p className="host-note">CPU 是占整台机器的百分比（{load.cpus} 核合计 100%）。每 5 秒刷新，窗口在后台时暂停；会话空闲一段时间后进程被回收，不在列表里，发消息时自动恢复。</p>
+      <p className="host-note">CPU 是占整台机器的百分比（{load.cpus} 核合计 100%）。窗格开着时每 5 秒刷新，窗口在后台时暂停；会话空闲一段时间后进程被回收，不在列表里，发消息时自动恢复。</p>
     </>
   );
 }

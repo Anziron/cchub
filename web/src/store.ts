@@ -124,7 +124,7 @@ export class Store {
   taskOutput: { path: string; text: string | null; error: string | null } | null = null;
   /** 整体用量（使用情况窗格），打开窗格或点刷新时向服务器要一次。 */
   usage: { stats: UsageStats | null; error: string | null; loading: boolean } = { stats: null, error: null, loading: false };
-  /** 服务器负载（会话栏底部和「服务器」窗格），会话栏底部定时来要。 */
+  /** 服务器负载（会话栏底部和「服务器」窗格）：随会话列表刷新，窗格开着时每 5 秒要一次。 */
   hostLoad: HostLoadState = emptyHostLoad();
   /** 新会话要用的工作区，服务器上的路径。 */
   cwd = saved.cwd.get();
@@ -218,8 +218,10 @@ export class Store {
     }
   }
 
+  /** 会话列表和服务器负载（会话栏底部那一行）一起刷新：连上、回到窗口时各一次，平时不轮询。 */
   refresh(): void {
     void this.send({ type: "list" });
+    this.requestHostLoad();
   }
 
   private send(msg: Parameters<Hub["send"]>[0]): Promise<void> {
@@ -386,7 +388,7 @@ export class Store {
         this.hostLoad = applyHostLoad(this.hostLoad, event.load, event.error);
         break;
       case "error":
-        // 旧 hubd 不认识定时发的 `host_load`：不弹错误，之后不再问，会话栏照旧显示可用内存。
+        // 旧 hubd 不认识顺带发的 `host_load`：不弹错误，之后不再问，会话栏照旧显示可用内存。
         if (!event.session && isUnsupported(event.message)) {
           this.hostLoad = { ...this.hostLoad, unsupported: true };
           break;
@@ -1033,7 +1035,7 @@ export class Store {
     this.changed();
   }
 
-  /** 问一次服务器负载。会话栏底部每 5 秒调用；没连上、旧 hubd 不支持时不发。发送失败不提示，下次照样问。 */
+  /** 问一次服务器负载。`refresh` 和开着的「服务器」窗格调用；没连上、旧 hubd 不支持时不发。发送失败不提示，下次照样问。 */
   requestHostLoad(): void {
     if (this.connection !== "connected" || this.hostLoad.unsupported) return;
     void this.hub.send({ type: "host_load" }).catch(() => undefined);

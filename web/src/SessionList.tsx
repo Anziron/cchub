@@ -7,7 +7,7 @@ import { deviceColorMap, deviceColorVars } from "./deviceColors.ts";
 import { DEVICE_STATE, deviceList, deviceOf, groupByDate, groupDevices, SERVER_GROUP, type DeviceEntry } from "./sidebar.ts";
 import { describeCwd } from "./paths.ts";
 import type { HostLoad } from "./generated/HostLoad.ts";
-import { formatLoad, HOST_LOAD_REFRESH_MS, level, memoryPercent, percent } from "./hostload.ts";
+import { formatLoad, level, memoryPercent, percent } from "./hostload.ts";
 import type { Session, Store } from "./store.ts";
 
 type StatusFilter = "all" | "wait" | "running";
@@ -187,14 +187,7 @@ export function SideFooter({ store }: { store: Store }) {
   const conn = store.connection;
   const connClass = !store.url ? "bad" : conn === "connected" ? "ok" : conn === "disconnected" ? "bad" : "pending";
   const connText = !store.url ? "未连接服务器" : conn === "connected" ? "已连接" : conn === "disconnected" ? "已断开" : "重连中";
-  // 页面看得见时每 5 秒问一次服务器负载，切回窗口时补一次；没连上、旧 hubd 不支持时 store 不发。
-  useEffect(() => {
-    const tick = () => { if (pageVisible()) store.requestHostLoad(); };
-    tick();
-    const timer = setInterval(tick, HOST_LOAD_REFRESH_MS);
-    document.addEventListener("visibilitychange", tick);
-    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", tick); };
-  }, [store, conn]);
+  // 负载和会话列表一起刷新（连上、回到窗口时，见 `store.refresh`），平时不轮询；「服务器」窗格打开时每 5 秒一次。
   const load = conn === "connected" ? store.hostLoad.load : null;
   return (
     <div className="side-bottom">

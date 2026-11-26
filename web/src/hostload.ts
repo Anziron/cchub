@@ -1,7 +1,7 @@
 /** 服务器负载（hubd 的 `host_load`）：会话栏底部的一行和「服务器」窗格共用。纯逻辑，状态由 `store.ts` 持有。 */
 import type { HostLoad } from "./generated/HostLoad.ts";
 
-/** 页面看得见时多久问一次。 */
+/** 「服务器」窗格开着、页面看得见时多久问一次（窗格关着时不轮询，随会话列表刷新，见 `store.refresh`）。 */
 export const HOST_LOAD_REFRESH_MS = 5000;
 /** 走势图显示多久。 */
 export const HISTORY_MS = 10 * 60_000;
@@ -20,7 +20,7 @@ export interface HostLoadState {
   error: string | null;
   /** 服务器是不认识这个请求的旧版 hubd：不再问，会话栏照旧只显示可用内存。 */
   unsupported: boolean;
-  /** 打开窗口以后的记录，只留最近 10 分钟，不存本地。 */
+  /** 打开窗口以后的记录（窗格开着时每 5 秒一个点，关着时只在刷新会话列表时记），只留最近 10 分钟，不存本地。 */
   history: LoadPoint[];
 }
 

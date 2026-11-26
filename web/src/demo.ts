@@ -76,7 +76,7 @@ function demoHostLoad(): HostLoad {
   ].sort(byCpu);
   const others = [
     { pid: 31337, name: "claude", cwd: "/root/notes", cpu_permille: wave(310 * scale, 25), mem_mb: 246 + extra / 4 },
-    { pid: 812, name: "xray", cwd: "/usr/local/x-ui", cpu_permille: wave(20 * scale, 5), mem_mb: 38 },
+    { pid: 812, name: "nginx", cwd: "/", cpu_permille: wave(20 * scale, 5), mem_mb: 38 },
     { pid: 640, name: "tailscaled", cwd: "/", cpu_permille: wave(10, 3), mem_mb: 46 },
     { pid: 2301, name: "hubd", cwd: "/", cpu_permille: 4, mem_mb: 9 },
   ].sort(byCpu);

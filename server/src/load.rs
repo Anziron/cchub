@@ -58,7 +58,12 @@ pub struct Proc {
     /// 已退出并被回收的子进程用的 CPU 节拍。
     pub child_ticks: u64,
     pub rss_pages: u64,
+    /// 内核线程（如 `kworker`）：没有用户态内存和工作目录，不算“其他进程”。
+    pub kernel: bool,
 }
+
+/// `/proc/<pid>/stat` 第 9 个字段（flags）里表示内核线程的位，见 `include/linux/sched.h`。
+const PF_KTHREAD: u64 = 0x0020_0000;
 
 impl Sampler {
     /// `sessions` 是所有会话的 ID 和目录，没在运行的由 `host.usage` 排除。
@@ -117,11 +122,11 @@ impl Sampler {
             .collect();
         session_loads.sort_by_key(|load| Reverse((load.cpu_permille, load.mem_mb)));
 
-        // 会话的进程不算“其他进程”：DirectHost 按进程组认，systemd 按 cgroup 认（只查排在前面的几个）。
+        // 会话的进程不算“其他进程”：DirectHost 按进程组认，systemd 按 cgroup 认（只查排在前面的几个）。内核线程也不算。
         let groups: HashSet<u32> = usage.iter().filter_map(|(_, usage)| usage.group).collect();
         let mut ranked: Vec<(u32, &Proc)> = procs
             .iter()
-            .filter(|process| !groups.contains(&process.group))
+            .filter(|process| !process.kernel && !groups.contains(&process.group))
             .map(|process| {
                 let before = previous
                     .procs
@@ -288,6 +293,7 @@ fn parse_proc(pid: u32, text: &str) -> Option<Proc> {
         ticks: field(14)? + field(15)?,
         child_ticks: field(16)? + field(17)?,
         rss_pages: field(24)?,
+        kernel: field(9)? & PF_KTHREAD != 0,
     })
 }
 
@@ -363,7 +369,16 @@ mod tests {
         assert_eq!(process.child_ticks, 11);
         assert_eq!(process.start, 123456);
         assert_eq!(process.rss_pages, 2560);
+        assert!(!process.kernel);
         assert_eq!(parse_proc(1, "1 (init) S 0"), None);
+    }
+
+    #[test]
+    fn recognizes_kernel_threads() {
+        // 取自真实的 /proc/101/stat：flags（第 9 个字段）带 PF_KTHREAD。
+        let stat = "101 (kworker/R-crypt) I 2 0 0 0 -1 69238880 0 0 0 0 0 0 0 0 0 -20 1 0 64 \
+                    0 0 18446744073709551615 0 0 0 0 0 0 0 2147483647 0 1 0 0 17 2 0 0";
+        assert!(parse_proc(101, stat).unwrap().kernel);
     }
 
     #[test]
