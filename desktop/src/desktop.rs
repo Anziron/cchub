@@ -122,6 +122,7 @@ pub(crate) fn run() {
         .invoke_handler(tauri::generate_handler![
             crate::hub_connect,
             crate::hub_send,
+            crate::hub_cache,
             open_url,
             set_on_top
         ])

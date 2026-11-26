@@ -118,6 +118,7 @@ pub(crate) fn run() {
         .invoke_handler(tauri::generate_handler![
             crate::hub_connect,
             crate::hub_send,
+            crate::hub_cache,
             take_opened_session,
             background_status,
             request_battery_unrestricted

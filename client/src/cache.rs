@@ -530,7 +530,8 @@ fn entries(root: &Path) -> Vec<Entry> {
             let Some(session) = file_name.to_str().filter(|n| valid_session(n)) else {
                 continue;
             };
-            let Ok(meta) = file.metadata() else {
+            // 不用目录项里的大小：Windows 上文件还开着写入时它不更新（一直是 0）。
+            let Ok(meta) = fs::metadata(file.path()) else {
                 continue;
             };
             if meta.is_file() {
@@ -649,6 +650,14 @@ mod tests {
         server.skip(session, 20, 30);
         server.push(session, 30, 45, Approval, ASK);
         server.flush();
+    }
+
+    /// s1、s2、s3 各写三条，写完释放实例（关掉文件），像上次运行留下的缓存。
+    fn three_sessions(temp: &Temp) {
+        let server = Cache::new(temp.0.clone()).server(URL);
+        for session in ["s1", "s2", "s3"] {
+            three(&server, session);
+        }
     }
 
     #[test]
@@ -780,10 +789,8 @@ mod tests {
     #[test]
     fn retain_deletes_sessions_the_server_no_longer_lists() {
         let temp = Temp::new("retain");
-        let server = Cache::new(temp.0.clone()).server(URL);
-        for session in ["s1", "s2", "s3"] {
-            three(&server, session);
-        }
+        // 旧实例用完就释放（Windows 上开着的文件删不干净）。
+        three_sessions(&temp);
         // 重启后的新实例：s3 正在打开（有写入），即使不在列表里也不删。
         let server = Cache::new(temp.0.clone()).server(URL);
         load(&server, "s3");
@@ -796,10 +803,7 @@ mod tests {
     #[test]
     fn over_the_limit_the_least_recently_opened_go_first() {
         let temp = Temp::new("evict");
-        let server = Cache::new(temp.0.clone()).server(URL);
-        for session in ["s1", "s2", "s3"] {
-            three(&server, session);
-        }
+        three_sessions(&temp);
         let size = fs::metadata(file(&temp.0, "s1")).unwrap().len();
         // s1 最久没打开，s3 最近。
         let now = SystemTime::now();

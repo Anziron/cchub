@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use cchub_client::{HubClient, Notifier};
+use cchub_client::{Cache, HubClient, Notifier};
 use cchub_protocol::{ClientMsg, ConnectionState, EventClass, UiEvent};
+use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[cfg(desktop)]
@@ -48,10 +49,87 @@ struct Connection {
 struct Hub {
     connection: Mutex<Option<Connection>>,
     state: Arc<Mutex<Option<ConnectionState>>>,
+    /// 本机缓存（见 `cchub_client::Cache`），第一次用到时建好；拿不到应用目录时为空。
+    cache: OnceLock<Option<Cache>>,
+}
+
+impl Hub {
+    fn cache(&self, app: &AppHandle) -> Option<Cache> {
+        self.cache.get_or_init(|| open_cache(app)).clone()
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 设置里改过的缓存位置记在这里。
+fn cache_config(app: &AppHandle) -> Option<PathBuf> {
+    let dir = app.path().app_data_dir().ok()?;
+    Some(dir.join("cache.json"))
+}
+
+/// 缓存位置：设置里改过就用改过的，否则是应用本地数据目录下的 `cache`
+/// （Windows 上是 `%LOCALAPPDATA%\dev.anziron.cchub\cache`，Android 上是应用私有目录）。
+fn open_cache(app: &AppHandle) -> Option<Cache> {
+    let custom = cache_config(app)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|config| config["dir"].as_str().map(PathBuf::from));
+    let fallback = || {
+        app.path()
+            .app_local_data_dir()
+            .ok()
+            .map(|dir| dir.join("cache"))
+    };
+    Some(Cache::new(custom.or_else(fallback)?))
+}
+
+/// 设置里的“本机缓存”：`info` 查位置和占用，`clear` 清空，`move` 搬到 `dir`（只有桌面端能改位置）。
+/// 返回 `{ path, bytes, movable }`。放在阻塞线程里做：搬家要复制全部文件。
+#[tauri::command]
+async fn hub_cache(
+    app: AppHandle,
+    hub: State<'_, Hub>,
+    op: String,
+    dir: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let cache = hub.cache(&app).ok_or("这台设备上没有可用的缓存目录")?;
+    let config = cache_config(&app);
+    let work = move || -> Result<serde_json::Value, String> {
+        match op.as_str() {
+            "info" => {}
+            "clear" => cache.clear().map_err(|e| format!("清空失败：{e}"))?,
+            "move" if cfg!(mobile) => return Err("手机上不能改缓存位置".into()),
+            "move" => {
+                let dir = PathBuf::from(dir.as_deref().unwrap_or_default().trim());
+                cache.relocate(&dir)?;
+                let saved = config
+                    .ok_or("找不到应用数据目录".to_string())
+                    .and_then(|path| {
+                        if let Some(parent) = path.parent() {
+                            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                        }
+                        let text = json!({ "dir": dir.to_string_lossy() }).to_string();
+                        std::fs::write(&path, text).map_err(|e| e.to_string())
+                    });
+                if let Err(error) = saved {
+                    return Err(format!(
+                        "已经搬到新位置，但没能记住它（{error}），下次启动会回到默认位置"
+                    ));
+                }
+            }
+            other => return Err(format!("不认识的操作：{other}")),
+        }
+        Ok(json!({
+            "path": cache.root().to_string_lossy(),
+            "bytes": cache.usage(),
+            "movable": cfg!(desktop),
+        }))
+    };
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// 待决定事件的通知水位，存在磁盘上，重启后重放也不会重复通知。
@@ -138,21 +216,23 @@ fn hub_connect(app: AppHandle, hub: State<'_, Hub>, url: String) -> ConnectionSt
             return;
         }
         // 窗口关到托盘后 WebView 已销毁，`emit` 仍会先序列化整批事件。没有界面就不送；
-        // 重新打开窗口时界面会重新订阅、从头重放，不会漏。
+        // 重新打开窗口时界面会重新订阅，从本机缓存（没有就从头）重放，不会漏。
         #[cfg(desktop)]
         if !desktop::ui_alive(&handle) {
             return;
         }
         let _ = lock(&batcher).send(event);
     };
+    let cache = hub.cache(&app);
     #[cfg(desktop)]
-    let (client, task) = HubClient::new(url.clone(), INITIAL_BACKOFF, None, on_event, on_attention);
+    let (client, task) =
+        HubClient::new(url.clone(), INITIAL_BACKOFF, cache, on_event, on_attention);
     #[cfg(mobile)]
     let (client, task) = HubClient::watching(
         url.clone(),
         INITIAL_BACKOFF,
         mobile::WATCH_INTERVAL,
-        None,
+        cache,
         on_event,
         on_attention,
     );

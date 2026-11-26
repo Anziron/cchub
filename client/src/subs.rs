@@ -556,12 +556,14 @@ mod tests {
     #[test]
     fn pruned_sessions_lose_their_cache_when_the_list_arrives() {
         let temp = Temp::new("listed");
-        let cache = temp.cache();
-        for session in ["s1", "s2"] {
-            cache.create(session, "o1");
-            cache.push(session, 0, 5, Durable, "first");
+        {
+            let cache = temp.cache();
+            for session in ["s1", "s2"] {
+                cache.create(session, "o1");
+                cache.push(session, 0, 5, Durable, "first");
+            }
+            cache.flush();
         }
-        cache.flush();
         let info = |id: &str| SessionInfo {
             id: id.into(),
             title: None,
