@@ -10,6 +10,7 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use crate::load;
 use crate::session::HeldInput;
 
 /// 启动参数里的会话 ID、模型。会话 ID 已由 `valid_id` 校验。
@@ -44,6 +45,17 @@ fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
+/// 会话进程（含子进程）的累计用量。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Usage {
+    /// 累计用的 CPU 时间，微秒。
+    pub cpu_usec: u64,
+    /// 现在占的内存，字节。
+    pub mem_bytes: u64,
+    /// 会话的进程组号，组里的进程不算“其他进程”（见 `load.rs`）。放在 systemd unit 里时按 cgroup 认，为空。
+    pub group: Option<u32>,
+}
+
 pub trait ProcessHost: Send + Sync {
     /// `cwd` 是进程的工作目录，`dir` 是会话目录。`input` 证明 FIFO 已经打开并持有（见 `HeldInput`）。
     fn start(
@@ -56,6 +68,8 @@ pub trait ProcessHost: Send + Sync {
     ) -> io::Result<()>;
     fn is_running(&self, session: &str, dir: &Path) -> bool;
     fn stop(&self, session: &str, dir: &Path) -> io::Result<()>;
+    /// 没在运行或读不到时为空。
+    fn usage(&self, session: &str, dir: &Path) -> Option<Usage>;
 }
 
 /// 放进独立的 systemd unit，和 `hubd` 分属不同 cgroup，`hubd` 的 `MemoryMax` 不影响它。
@@ -64,8 +78,11 @@ pub struct SystemdHost {
     pub memory_max_mb: u64,
 }
 
+/// 会话 unit 名的前缀，`load.rs` 据此从进程的 cgroup 认出会话的进程。
+pub const UNIT_PREFIX: &str = "cchub-session-";
+
 fn unit_name(session: &str) -> String {
-    format!("cchub-session-{session}")
+    format!("{UNIT_PREFIX}{session}")
 }
 
 /// systemd 把 system 服务放在这里（cgroup v2）。
@@ -79,6 +96,21 @@ fn cgroup_running(slice: &Path, unit: &str) -> Option<bool> {
     }
     let procs = slice.join(format!("{unit}.service")).join("cgroup.procs");
     Some(fs::read_to_string(procs).is_ok_and(|procs| !procs.trim().is_empty()))
+}
+
+/// unit 的 cgroup 里的累计 CPU（含已退出的子进程）和当前内存。
+fn cgroup_usage(slice: &Path, unit: &str) -> Option<Usage> {
+    if cgroup_running(slice, unit) != Some(true) {
+        return None;
+    }
+    let dir = slice.join(format!("{unit}.service"));
+    let cpu = fs::read_to_string(dir.join("cpu.stat")).ok()?;
+    let memory = fs::read_to_string(dir.join("memory.current")).ok()?;
+    Some(Usage {
+        cpu_usec: load::parse_usage_usec(&cpu)?,
+        mem_bytes: memory.trim().parse().ok()?,
+        group: None,
+    })
 }
 
 impl ProcessHost for SystemdHost {
@@ -136,6 +168,10 @@ impl ProcessHost for SystemdHost {
             .arg(unit_name(session))
             .status()
             .map(|_| ())
+    }
+
+    fn usage(&self, session: &str, _dir: &Path) -> Option<Usage> {
+        cgroup_usage(Path::new(SYSTEM_SLICE), &unit_name(session))
     }
 }
 
@@ -198,6 +234,17 @@ impl ProcessHost for DirectHost {
             }
         }
         Ok(())
+    }
+
+    /// 只有主进程和它已回收的子进程：还在跑的子进程不算，没有 systemd 时只是近似。
+    fn usage(&self, _session: &str, dir: &Path) -> Option<Usage> {
+        let pid = read_pid(dir).filter(|pid| pid_alive(*pid))?;
+        let stat = load::proc_stat(u32::try_from(pid).ok()?)?;
+        Some(Usage {
+            cpu_usec: (stat.ticks + stat.child_ticks) * 1_000_000 / load::clock_ticks(),
+            mem_bytes: stat.rss_pages * load::page_size(),
+            group: Some(stat.group),
+        })
     }
 }
 
@@ -264,6 +311,37 @@ mod tests {
             cgroup_running(&slice, "cchub-session-c"),
             Some(false),
             "unit 已回收"
+        );
+        fs::remove_dir_all(&slice).unwrap();
+    }
+
+    #[test]
+    fn cgroup_usage_reads_cpu_and_memory() {
+        let slice = std::env::temp_dir().join(format!("hubd-usage-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&slice);
+        let unit = slice.join("cchub-session-a.service");
+        fs::create_dir_all(&unit).unwrap();
+        fs::write(unit.join("cgroup.procs"), "1234\n").unwrap();
+        fs::write(
+            unit.join("cpu.stat"),
+            "usage_usec 2500000\nuser_usec 2000000\n",
+        )
+        .unwrap();
+        fs::write(unit.join("memory.current"), "314572800\n").unwrap();
+        assert_eq!(
+            cgroup_usage(&slice, "cchub-session-a"),
+            Some(Usage {
+                cpu_usec: 2_500_000,
+                mem_bytes: 314_572_800,
+                group: None,
+            })
+        );
+        assert_eq!(cgroup_usage(&slice, "cchub-session-b"), None, "unit 已回收");
+        fs::write(unit.join("cgroup.procs"), "").unwrap();
+        assert_eq!(
+            cgroup_usage(&slice, "cchub-session-a"),
+            None,
+            "进程都退出了"
         );
         fs::remove_dir_all(&slice).unwrap();
     }

@@ -990,6 +990,52 @@ async fn lists_started_sessions_with_title_and_memory() {
 }
 
 #[tokio::test]
+async fn host_load_reports_machine_and_running_sessions() {
+    let temp = Temp::new("load");
+    let (mut hubd, addr) = spawn_hubd(&temp.0).await;
+    let mut socket = connect(&addr).await;
+    send(&mut socket, start_plain("s1")).await;
+    send(&mut socket, ClientMsg::HostLoad).await;
+
+    let load = tokio::time::timeout(TIMEOUT, async {
+        loop {
+            let message = socket.next().await.expect("连接断开").unwrap();
+            let Message::Text(text) = message else {
+                continue;
+            };
+            if let Ok(Frame {
+                msg: ServerMsg::HostLoad { load, error },
+                ..
+            }) = serde_json::from_str(text.as_str())
+            {
+                let load = load.unwrap_or_else(|| panic!("统计失败：{error:?}"));
+                // 不等进程启动完，开始可能还没有这个会话，再问一次。
+                if load.sessions.iter().any(|session| session.session == "s1") {
+                    return load;
+                }
+                send(&mut socket, ClientMsg::HostLoad).await;
+            }
+        }
+    })
+    .await
+    .unwrap();
+
+    assert!(load.cpus >= 1);
+    assert!(load.cpu_permille <= 1000);
+    assert_eq!(load.load_x100.len(), 3);
+    assert!(load.mem_total_mb > 0 && load.mem_available_mb <= load.mem_total_mb);
+    assert_eq!(load.sessions.len(), 1);
+    // 会话的进程只算在会话里，不出现在“其他进程”。
+    let pid: u32 = std::fs::read_to_string(temp.0.join("s1/pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(load.others.iter().all(|other| other.pid != pid));
+    let _ = hubd.kill().await;
+}
+
+#[tokio::test]
 async fn devices_come_from_workspace_status_and_are_cached() {
     use std::os::unix::fs::PermissionsExt;
     let temp = Temp::new("devices");

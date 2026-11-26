@@ -213,6 +213,7 @@ impl Inbound {
             | ServerMsg::TaskOutput { .. }
             | ServerMsg::Usage { .. }
             | ServerMsg::Devices { .. }
+            | ServerMsg::HostLoad { .. }
             | ServerMsg::Error { .. } => None,
         }
     }

@@ -10,6 +10,7 @@ import { describeCwd } from "./paths.ts";
 import type { Session, Store } from "./store.ts";
 import { Diff, TranscriptView } from "./Thread.tsx";
 import { PANE_TITLES } from "./TopBar.tsx";
+import { ServerPane } from "./ServerPane.tsx";
 import { UsagePane } from "./UsagePane.tsx";
 
 function ChangeFile({ file, name }: { file: FileChange; name: string }) {
@@ -234,6 +235,7 @@ export function PaneView({ store, session }: { store: Store; session?: Session }
         {session && pane === "plan" ? <PlanPane session={session} /> : null}
         {session && pane === "info" ? <InfoPane store={store} session={session} /> : null}
         {pane === "usage" ? <UsagePane store={store} /> : null}
+        {pane === "server" ? <ServerPane store={store} /> : null}
       </div>
     </aside>
   );

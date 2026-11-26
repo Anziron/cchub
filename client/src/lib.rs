@@ -388,6 +388,10 @@ impl State {
                 on_event(UiEvent::Devices { devices, error });
                 Vec::new()
             }
+            ServerMsg::HostLoad { load, error } => {
+                on_event(UiEvent::HostLoad { load, error });
+                Vec::new()
+            }
             ServerMsg::Error { message } => {
                 on_event(UiEvent::Error { session, message });
                 Vec::new()

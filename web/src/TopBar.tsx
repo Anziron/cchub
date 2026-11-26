@@ -7,8 +7,8 @@ import { GLOBAL_PANES, type PaneId } from "./nav.ts";
 import { describeCwd } from "./paths.ts";
 import type { Session, Store } from "./store.ts";
 
-export const PANE_TITLES: Record<PaneId, string> = { changes: "改动", tasks: "后台任务", todos: "待办", plan: "方案", info: "会话信息", usage: "使用情况" };
-const PANE_ICONS: Record<PaneId, string> = { changes: "diff", tasks: "tasks", todos: "check", plan: "plan", info: "info", usage: "chart" };
+export const PANE_TITLES: Record<PaneId, string> = { changes: "改动", tasks: "后台任务", todos: "待办", plan: "方案", info: "会话信息", usage: "使用情况", server: "服务器" };
+const PANE_ICONS: Record<PaneId, string> = { changes: "diff", tasks: "tasks", todos: "check", plan: "plan", info: "info", usage: "chart", server: "server" };
 
 function sessionHints(session: Session): Partial<Record<PaneId, string>> {
   const thread = session.thread;

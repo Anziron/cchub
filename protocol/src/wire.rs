@@ -80,6 +80,8 @@ pub enum ClientMsg {
     },
     /// 列出所有登记的设备和在线状态。
     Devices,
+    /// 查服务器负载：CPU、内存，以及各会话和其他进程的占用。
+    HostLoad,
 }
 
 /// 登记的设备。
@@ -108,6 +110,42 @@ pub struct SessionInfo {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub active: Option<u64>,
+}
+
+/// 服务器负载，回复 `HostLoad`。CPU 是距上一次统计的平均使用率，用千分比：整台机器所有核合计 1000。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct HostLoad {
+    pub cpus: u32,
+    pub cpu_permille: u32,
+    /// 1、5、15 分钟平均负载，各乘 100 取整。
+    pub load_x100: Vec<u32>,
+    pub mem_total_mb: u32,
+    pub mem_available_mb: u32,
+    /// 正在运行的会话（含子进程），按 CPU 从高到低。
+    pub sessions: Vec<SessionLoad>,
+    /// 不属于会话的进程里占用最多的几个，按 CPU、内存从高到低。
+    pub others: Vec<ProcessLoad>,
+}
+
+/// 一个会话的占用。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct SessionLoad {
+    pub session: String,
+    pub cpu_permille: u32,
+    pub mem_mb: u32,
+}
+
+/// 一个进程的占用。`cwd` 读不到（如别的用户的进程）时为空。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ProcessLoad {
+    pub pid: u32,
+    pub name: String,
+    pub cwd: Option<String>,
+    pub cpu_permille: u32,
+    pub mem_mb: u32,
 }
 
 /// 输入没有写给进程的原因。
@@ -205,6 +243,11 @@ pub enum ServerMsg {
         devices: Vec<DeviceInfo>,
         error: Option<String>,
     },
+    /// 回复 `HostLoad`。
+    HostLoad {
+        load: Option<HostLoad>,
+        error: Option<String>,
+    },
     Error {
         message: String,
     },
@@ -288,6 +331,10 @@ pub enum UiEvent {
     },
     Devices {
         devices: Vec<DeviceInfo>,
+        error: Option<String>,
+    },
+    HostLoad {
+        load: Option<HostLoad>,
         error: Option<String>,
     },
     Error {

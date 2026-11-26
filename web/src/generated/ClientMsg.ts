@@ -16,4 +16,4 @@ prompt?: string | null,
 /**
  * 启动时用的模型，拼成 `--model`。进程已在运行时忽略（要用 `set_model`）。
  */
-model?: string | null, } | { "type": "list" } | { "type": "attach", session: string, after: number, } | { "type": "input", session: string, id: string, line: string, } | { "type": "stop", session: string, } | { "type": "archive", session: string, archived: boolean, } | { "type": "browse", device?: string | null, path?: string | null, } | { "type": "mount", device: string, path: string, } | { "type": "task_output", path: string, } | { "type": "usage", tz_offset: number, } | { "type": "devices" };
+model?: string | null, } | { "type": "list" } | { "type": "attach", session: string, after: number, } | { "type": "input", session: string, id: string, line: string, } | { "type": "stop", session: string, } | { "type": "archive", session: string, archived: boolean, } | { "type": "browse", device?: string | null, path?: string | null, } | { "type": "mount", device: string, path: string, } | { "type": "task_output", path: string, } | { "type": "usage", tz_offset: number, } | { "type": "devices" } | { "type": "host_load" };

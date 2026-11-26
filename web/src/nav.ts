@@ -3,10 +3,10 @@
 /** 新会话页的草稿键（会话页的草稿按会话 ID）。 */
 export const NEW_DRAFT = "";
 
-export type PaneId = "changes" | "tasks" | "todos" | "plan" | "info" | "usage";
-const PANES: PaneId[] = ["changes", "tasks", "todos", "plan", "info", "usage"];
+export type PaneId = "changes" | "tasks" | "todos" | "plan" | "info" | "usage" | "server";
+const PANES: PaneId[] = ["changes", "tasks", "todos", "plan", "info", "usage", "server"];
 /** 不依赖会话的窗格，新会话页也能打开。 */
-export const GLOBAL_PANES: PaneId[] = ["usage"];
+export const GLOBAL_PANES: PaneId[] = ["usage", "server"];
 
 /** 本地存的窗格名，不认识的不用。 */
 export const asPane = (value: string): PaneId | null => PANES.find((p) => p === value) ?? null;

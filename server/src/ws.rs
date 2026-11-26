@@ -24,6 +24,7 @@ use tokio::task::{spawn_blocking, JoinHandle};
 use crate::auth;
 use crate::device::{self, Probes, Subscription};
 use crate::host::{valid_model, Launch, ProcessHost};
+use crate::load;
 use crate::session::{valid_id, Sessions, Written};
 use crate::title;
 use crate::usage;
@@ -51,6 +52,8 @@ pub struct App {
     /// 用量统计命令，协议见 `usage.rs`；为空时关闭。
     pub usage_cmd: String,
     pub usage_lock: tokio::sync::Mutex<()>,
+    /// 服务器负载：留着上一次采样，CPU 使用率靠两次相减。
+    pub load: load::Sampler,
     /// 设备探测按项目目录共享，所有连接订阅同一个结果。
     pub probes: Probes,
     /// `cc-workspace status` 的结果和取得时间。
@@ -210,6 +213,10 @@ async fn serve(app: Arc<App>, socket: WebSocket, deflate: bool, version: Option<
             }
             ClientMsg::Devices => {
                 tokio::spawn(devices(app.clone(), tx.clone()));
+                continue;
+            }
+            ClientMsg::HostLoad => {
+                tokio::spawn(host_load(app.clone(), tx.clone()));
                 continue;
             }
             ClientMsg::Start { session, .. }
@@ -433,7 +440,8 @@ async fn handle(
         | ClientMsg::Mount { .. }
         | ClientMsg::TaskOutput { .. }
         | ClientMsg::Usage { .. }
-        | ClientMsg::Devices => {}
+        | ClientMsg::Devices
+        | ClientMsg::HostLoad => {}
     }
     Ok(())
 }
@@ -552,6 +560,22 @@ async fn usage_stats(app: Arc<App>, tz_offset: i32, tx: mpsc::Sender<Frame>) {
         Err(error) => (None, Some(error)),
     };
     let msg = ServerMsg::Usage { stats, error };
+    let _ = tx.send(Frame { session: None, msg }).await;
+}
+
+/// 只读 `/proc` 和 cgroup，不起子进程。第一次（或隔了很久再问）要两次采样，约 0.3 秒。
+async fn host_load(app: Arc<App>, tx: mpsc::Sender<Frame>) {
+    let result = spawn_blocking(move || {
+        let sessions = app.sessions.entries();
+        app.load.measure(app.host.as_ref(), &sessions)
+    })
+    .await
+    .unwrap_or_else(|error| Err(error.to_string()));
+    let (load, error) = match result {
+        Ok(load) => (Some(load), None),
+        Err(error) => (None, Some(error)),
+    };
+    let msg = ServerMsg::HostLoad { load, error };
     let _ = tx.send(Frame { session: None, msg }).await;
 }
 

@@ -532,3 +532,41 @@ test("选工作区时挂载设备目录：挂上就选中并记住，失败显�
   assert.equal(store.mountError, "挂载失败");
   assert.equal(store.cwd, PROJECT);
 });
+
+// ---- 服务器负载 ----
+
+test("服务器负载：平时不轮询，连上和刷新会话列表（回到窗口时）顺带问一次", async () => {
+  const { store, hub } = setup();
+  store.refresh();
+  assert.equal(hub.of("host_load").length, 0, "没连上不问");
+  await store.connect("ws://hub");
+  assert.equal(hub.of("host_load").length, 1, "连上时和会话列表一起问");
+  store.refresh();
+  assert.equal(hub.of("host_load").length, 2, "刷新会话列表时也问");
+});
+
+test("服务器负载：旧 hubd 不认识这个请求时不报错、不再问，重连后再试一次", async () => {
+  const { store, hub } = setup();
+  await store.connect("ws://hub");
+  assert.equal(hub.of("host_load").length, 1);
+  hub.emit({ type: "error", session: null, message: "无法解析消息：unknown variant `host_load`, expected one of `start`" });
+  assert.equal(store.error, null);
+  assert.equal(store.hostLoad.unsupported, true);
+  store.requestHostLoad();
+  store.refresh();
+  assert.equal(hub.of("host_load").length, 1, "不再问");
+  await store.connect("ws://hub");
+  assert.equal(hub.of("host_load").length, 2, "重连的可能是升级过的 hubd");
+});
+
+test("服务器负载：收到统计记下结果和走势；失败时保留上一次的结果，不弹顶部错误", () => {
+  const { store, hub } = setup();
+  const load = { cpus: 2, cpu_permille: 500, load_x100: [100, 90, 80], mem_total_mb: 2000, mem_available_mb: 1000, sessions: [{ session: "s1", cpu_permille: 300, mem_mb: 250 }], others: [] };
+  hub.emit({ type: "host_load", load, error: null });
+  assert.deepEqual(store.hostLoad.load, load);
+  assert.equal(store.hostLoad.history.length, 1);
+  hub.emit({ type: "host_load", load: null, error: "读不了 /proc/stat" });
+  assert.deepEqual(store.hostLoad.load, load);
+  assert.equal(store.hostLoad.error, "读不了 /proc/stat");
+  assert.equal(store.error, null);
+});

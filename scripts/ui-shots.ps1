@@ -35,6 +35,8 @@ $shots = @(
   @("usage-dark", "/?theme=dark&pane=usage&range=30d", "1200,800"),
   @("usage-cost", "/?theme=light&pane=usage&range=30d&models=cost", "1200,1200"),
   @("usage-proj-tokens", "/?theme=dark&pane=usage&range=30d&models=tokens", "1200,1200"),
+  @("server-light", "/?s=rich&theme=light&pane=server", "1440,1000"),
+  @("server-busy-dark", "/?theme=dark&pane=server&scene=load-busy", "1200,1000"),
   @("usage-proj-narrow", "/?theme=dark&pane=usage&range=30d&models=tokens&panew=300", "1200,1200"),
   @("usage-proj-wide", "/?theme=dark&pane=usage&range=30d&models=tokens&panew=640", "1440,1200"),
   @("usage-proj-old", "/?scene=usage-old&theme=light&pane=usage&range=30d&models=tokens", "1200,1200"),
