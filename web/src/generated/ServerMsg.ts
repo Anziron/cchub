@@ -9,4 +9,9 @@ export type ServerMsg = { "type": "hello", version: string, protocol_version: nu
 /**
  * `claude` 输出的一行原文，`hubd` 不解析正文。
  */
-payload: string, } | { "type": "skipped", seq: number, next: number, } | { "type": "attached", live: number, } | { "type": "device", online: boolean, } | { "type": "status", running: boolean, } | { "type": "sessions", sessions: Array<SessionInfo>, mem_available_mb: number | null, } | { "type": "browse", device: string | null, path: string | null, parent: string | null, entries: Array<string>, error: string | null, } | { "type": "mounted", device: string, path: string, cwd: string | null, error: string | null, } | { "type": "task_output", path: string, text: string | null, error: string | null, } | { "type": "usage", stats: string | null, error: string | null, } | { "type": "devices", devices: Array<DeviceInfo>, error: string | null, } | { "type": "host_load", load: HostLoad | null, error: string | null, } | { "type": "error", message: string, };
+payload: string, } | { "type": "skipped", seq: number, next: number, } | { "type": "attached", live: number, 
+/**
+ * 日志文件 `out` 的身份（inode 加创建时间）。会话目录被清理后同一 ID 重建，`out` 从头写，身份就变了：
+ * 客户端本机缓存的偏移只在身份相同时接得上。旧版 `hubd` 不发，文件系统不记创建时间时也不发。
+ */
+origin?: string | null, } | { "type": "device", online: boolean, } | { "type": "status", running: boolean, } | { "type": "sessions", sessions: Array<SessionInfo>, mem_available_mb: number | null, } | { "type": "browse", device: string | null, path: string | null, parent: string | null, entries: Array<string>, error: string | null, } | { "type": "mounted", device: string, path: string, cwd: string | null, error: string | null, } | { "type": "task_output", path: string, text: string | null, error: string | null, } | { "type": "usage", stats: string | null, error: string | null, } | { "type": "devices", devices: Array<DeviceInfo>, error: string | null, } | { "type": "host_load", load: HostLoad | null, error: string | null, } | { "type": "error", message: string, };

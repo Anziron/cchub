@@ -740,38 +740,53 @@ async fn attach_reports_where_history_ends() {
 
     let mut other = connect(&addr).await;
     send(&mut other, attach).await;
-    let first = async {
+    let ServerMsg::Attached { live, .. } = session_frame(&mut other, "s1").await else {
+        panic!("订阅后的第一条不是 Attached");
+    };
+    assert_eq!(live, length);
+    assert!(length >= inbound.expected());
+}
+
+/// 下一条属于这个会话的消息（跳过别的会话和不带会话的）。
+async fn session_frame(socket: &mut Socket, session: &str) -> ServerMsg {
+    let wait = async {
         loop {
-            if let Message::Text(text) = other.next().await.unwrap().unwrap() {
+            if let Message::Text(text) = socket.next().await.expect("连接断开").unwrap() {
                 let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
-                if frame.session.as_deref() == Some("s1") {
+                if frame.session.as_deref() == Some(session) {
                     return frame.msg;
                 }
             }
         }
     };
-    let first = tokio::time::timeout(TIMEOUT, first).await.unwrap();
-    assert_eq!(first, ServerMsg::Attached { live: length });
-    assert!(length >= inbound.expected());
+    tokio::time::timeout(TIMEOUT, wait)
+        .await
+        .expect("等待会话消息超时")
 }
 
+/// 订阅一次，返回 `Attached` 里的 `(live, origin)`。
+async fn attach_once(socket: &mut Socket, session: &str, after: u64) -> (u64, Option<String>) {
+    let attach = ClientMsg::Attach {
+        session: session.into(),
+        after,
+    };
+    send(socket, attach).await;
+    loop {
+        match session_frame(socket, session).await {
+            ServerMsg::Attached { live, origin } => return (live, origin),
+            ServerMsg::Error { message } => panic!("hubd 报错：{message}"),
+            _ => {}
+        }
+    }
+}
+
+/// 偏移超出日志末尾：先回带身份的 `Attached`，客户端靠身份和长度判断接不接得上（本机缓存），再报错。
 #[tokio::test]
 async fn attach_beyond_log_end_reports_error() {
     let temp = Temp::new("beyond");
     let (_hubd, addr) = spawn_hubd(&temp.0).await;
     let mut socket = connect(&addr).await;
-    send(
-        &mut socket,
-        ClientMsg::Start {
-            session: "s1".into(),
-            title: None,
-            prompt: None,
-            model: None,
-            resume: None,
-            cwd: None,
-        },
-    )
-    .await;
+    send(&mut socket, start_plain("s1")).await;
     send(
         &mut socket,
         ClientMsg::Attach {
@@ -780,19 +795,65 @@ async fn attach_beyond_log_end_reports_error() {
         },
     )
     .await;
+    let ServerMsg::Attached { live, origin } = session_frame(&mut socket, "s1").await else {
+        panic!("第一条不是 Attached");
+    };
+    assert!(live < 999, "live = {live}");
+    assert!(origin.is_some(), "ext4 上应该取得到 out 的身份");
+    assert!(matches!(
+        session_frame(&mut socket, "s1").await,
+        ServerMsg::Error { .. }
+    ));
+    send(
+        &mut socket,
+        ClientMsg::Stop {
+            session: "s1".into(),
+        },
+    )
+    .await;
+}
+
+/// `Attached` 带 `out` 的身份：同一个文件每次一样；会话目录被清理后同一 ID 重建，`out` 从头写，身份就变了，
+/// 客户端据此丢掉本机缓存，而不是把旧偏移接到新文件上。
+#[tokio::test]
+async fn attached_origin_changes_when_the_session_dir_is_recreated() {
+    let temp = Temp::new("origin");
+    let (_hubd, addr) = spawn_hubd(&temp.0).await;
+    let mut socket = connect(&addr).await;
+    send(&mut socket, start_plain("s1")).await;
+    let (_, first) = attach_once(&mut socket, "s1", 0).await;
+    let (_, again) = attach_once(&mut socket, "s1", 0).await;
+    assert!(first.is_some(), "ext4 上应该取得到 out 的身份");
+    assert_eq!(first, again);
+
+    send(
+        &mut socket,
+        ClientMsg::Stop {
+            session: "s1".into(),
+        },
+    )
+    .await;
+    // 等进程退出再删目录（`hubd` 清理时也只删不在跑的会话）；没被回收的僵尸进程算已退出。
+    let alive = |pid: &str| {
+        std::fs::read_to_string(format!("/proc/{}/stat", pid.trim()))
+            .is_ok_and(|stat| !stat.rsplit(')').next().unwrap_or("").starts_with(" Z"))
+    };
     let wait = async {
-        loop {
-            if let Message::Text(text) = socket.next().await.unwrap().unwrap() {
-                let frame: Frame = serde_json::from_str(text.as_str()).unwrap();
-                if matches!(frame.msg, ServerMsg::Error { .. }) {
-                    return;
-                }
-            }
+        while std::fs::read_to_string(temp.0.join("s1/pid")).is_ok_and(|pid| alive(&pid)) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     };
     tokio::time::timeout(TIMEOUT, wait).await.unwrap();
+    std::fs::remove_dir_all(temp.0.join("s1")).unwrap();
+
+    // 旧连接上的跟读读不到被删的文件会报错，换一条连接看重建后的。
+    let mut fresh = connect(&addr).await;
+    send(&mut fresh, start_plain("s1")).await;
+    let (_, rebuilt) = attach_once(&mut fresh, "s1", 0).await;
+    assert!(rebuilt.is_some());
+    assert_ne!(rebuilt, first);
     send(
-        &mut socket,
+        &mut fresh,
         ClientMsg::Stop {
             session: "s1".into(),
         },

@@ -25,7 +25,7 @@ use crate::auth;
 use crate::device::{self, Probes, Subscription};
 use crate::host::{valid_model, Launch, ProcessHost};
 use crate::load;
-use crate::session::{valid_id, Sessions, Written};
+use crate::session::{stat_log, valid_id, Sessions, Written};
 use crate::title;
 use crate::usage;
 use crate::workspace;
@@ -646,7 +646,7 @@ async fn follow(app: Arc<App>, session: String, after: u64, tx: mpsc::Sender<Fra
     };
     let path = app.sessions.out_path(&session);
     // 先建监听再读，订阅期间写入的内容不会漏。
-    let (mut changes, replay_until) = match watch(&path, after).await {
+    let (mut changes, replay_until, origin) = match watch(&path).await {
         Ok(watching) => watching,
         Err(message) => {
             let _ = tx.send(frame(ServerMsg::Error { message })).await;
@@ -654,9 +654,18 @@ async fn follow(app: Arc<App>, session: String, after: u64, tx: mpsc::Sender<Fra
         }
     };
 
-    // 先于这次订阅的任何事件：告诉客户端历史到哪里为止。
-    let attached = ServerMsg::Attached { live: replay_until };
+    // 先于这次订阅的任何事件：告诉客户端历史到哪里为止、日志是哪一个文件。
+    let attached = ServerMsg::Attached {
+        live: replay_until,
+        origin,
+    };
     if tx.send(frame(attached)).await.is_err() {
+        return;
+    }
+    // 偏移超出日志末尾时客户端已经能从 `Attached` 看出接不上（新客户端据此从头重订），这条错误给旧客户端。
+    if after > replay_until {
+        let message = "日志已被清理，无法从该位置继续".to_string();
+        let _ = tx.send(frame(ServerMsg::Error { message })).await;
         return;
     }
 
@@ -739,18 +748,15 @@ async fn follow(app: Arc<App>, session: String, after: u64, tx: mpsc::Sender<Fra
     }
 }
 
-/// 返回日志的变化流和订阅时日志的长度（回放边界）。
+/// 返回日志的变化流、订阅时日志的长度（回放边界）和日志的身份。
 async fn watch(
     path: &std::path::Path,
-    after: u64,
-) -> Result<(inotify::EventStream<[u8; 1024]>, u64), String> {
-    let length = tokio::fs::metadata(path)
+) -> Result<(inotify::EventStream<[u8; 1024]>, u64, Option<String>), String> {
+    let owned = path.to_path_buf();
+    let stat = spawn_blocking(move || stat_log(&owned))
         .await
         .map_err(|error| format!("读取日志失败：{error}"))?
-        .len();
-    if after > length {
-        return Err("日志已被清理，无法从该位置继续".to_string());
-    }
+        .map_err(|error| format!("读取日志失败：{error}"))?;
     let failed = |error: std::io::Error| format!("监听日志失败：{error}");
     let inotify = Inotify::init().map_err(failed)?;
     inotify
@@ -758,7 +764,7 @@ async fn watch(
         .add(path, WatchMask::MODIFY)
         .map_err(failed)?;
     let changes = inotify.into_event_stream([0; 1024]).map_err(failed)?;
-    Ok((changes, length))
+    Ok((changes, stat.len, stat.origin))
 }
 
 async fn fill(

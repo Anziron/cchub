@@ -315,14 +315,50 @@ fn mtime_secs(path: &Path) -> Option<u64> {
 }
 
 fn mkfifo(path: &Path) -> io::Result<()> {
-    let path = CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "路径包含空字符"))?;
+    let path = c_path(path)?;
     // SAFETY: path 是有效的 C 字符串，调用期间一直存活。
     if unsafe { libc::mkfifo(path.as_ptr(), 0o600) } == 0 {
         Ok(())
     } else {
         Err(io::Error::last_os_error())
     }
+}
+
+fn c_path(path: &Path) -> io::Result<CString> {
+    CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "路径包含空字符"))
+}
+
+/// 日志文件的长度和身份（`ServerMsg::Attached` 的 `origin`）。
+pub struct LogStat {
+    pub len: u64,
+    pub origin: Option<String>,
+}
+
+/// 身份是 inode 加创建时间：会话目录被清理后同一 ID 重建，新的 `out` 可能复用旧 inode，但创建时间不同
+/// （精度是内核时钟节拍，几毫秒；被清理的旧文件至少是几天前建的）。文件系统不记创建时间就没有身份。
+/// 不用 `Metadata::created()`：部署的 musl 构建里标准库不支持它（2026-11-26 实测），所以直接调 statx。
+pub fn stat_log(path: &Path) -> io::Result<LogStat> {
+    let c = c_path(path)?;
+    let mut buf = std::mem::MaybeUninit::<libc::statx>::zeroed();
+    let mask = libc::STATX_SIZE | libc::STATX_INO | libc::STATX_BTIME;
+    // SAFETY: c 是有效的 C 字符串；buf 是已清零、大小正确的结构，内核只往里写。
+    let rc = unsafe { libc::statx(libc::AT_FDCWD, c.as_ptr(), 0, mask, buf.as_mut_ptr()) };
+    if rc != 0 {
+        // 老内核没有 statx、容器禁用了它：照常取长度，只是没有身份（客户端不用缓存）。
+        let len = fs::metadata(path)?.len();
+        return Ok(LogStat { len, origin: None });
+    }
+    // SAFETY: statx 成功时已写好整个结构；就算没写，清零的结构也是合法值。
+    let stat = unsafe { buf.assume_init() };
+    let origin = (stat.stx_mask & libc::STATX_BTIME != 0).then(|| {
+        let born = stat.stx_btime;
+        format!("{}-{}.{:09}", stat.stx_ino, born.tv_sec, born.tv_nsec)
+    });
+    Ok(LogStat {
+        len: stat.stx_size,
+        origin,
+    })
 }
 
 #[cfg(test)]

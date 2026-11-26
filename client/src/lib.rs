@@ -405,7 +405,7 @@ impl State {
             }
             // 握手时已经处理过。
             ServerMsg::Hello { .. } => Vec::new(),
-            ServerMsg::Attached { live } => {
+            ServerMsg::Attached { live, .. } => {
                 let Some(id) = session else {
                     return Vec::new();
                 };
@@ -658,7 +658,10 @@ mod tests {
         let answered =
             r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]}}"#;
         for message in [
-            frame(ServerMsg::Attached { live: 30 }),
+            frame(ServerMsg::Attached {
+                live: 30,
+                origin: None,
+            }),
             framed(0, 10, EventClass::Approval, ask),
             event(10, 20, answered),
             event(20, 30, r#"{"type":"result"}"#),
@@ -828,7 +831,10 @@ mod tests {
         next_client_msg(&mut server).await;
         let attached = serde_json::to_string(&Frame {
             session: Some("s1".into()),
-            msg: ServerMsg::Attached { live: 1234 },
+            msg: ServerMsg::Attached {
+                live: 1234,
+                origin: None,
+            },
         })
         .unwrap();
         server.send(Message::Text(attached.into())).await.unwrap();

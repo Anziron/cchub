@@ -9,6 +9,7 @@
 {"session":"s1","type":"event","seq":300,"next":400,"class":"question","payload":"{\"type\":\"control_request\"}"}
 {"session":"s1","type":"skipped","seq":400,"next":800}
 {"session":"s1","type":"attached","live":800}
+{"session":"s1","type":"attached","live":800,"origin":"1442720-1795665642.037012832"}
 {"session":"s1","type":"device","online":false}
 {"session":"s1","type":"status","running":true}
 {"type":"sessions","sessions":[{"id":"s1","title":"标题","cwd":"/mnt/pc/d/proj","running":true,"updated":1764000000,"archived":false,"active":1764000000},{"id":"s2","title":null,"cwd":null,"running":false,"updated":null,"archived":true,"active":null}],"mem_available_mb":512}

@@ -194,9 +194,14 @@ pub enum ServerMsg {
     },
     /// 订阅已开始，先于这次订阅的任何事件发出。偏移小于 `live` 的是订阅时日志里已有的内容
     /// （历史回放），从 `live` 起是实时写入的。客户端据此判断审批是不是早就处理过了。
+    /// 偏移超出日志末尾时也先发这条（`live` 是日志长度），再发 `Error`。
     Attached {
         #[cfg_attr(feature = "ts", ts(type = "number"))]
         live: u64,
+        /// 日志文件 `out` 的身份（inode 加创建时间）。会话目录被清理后同一 ID 重建，`out` 从头写，身份就变了：
+        /// 客户端本机缓存的偏移只在身份相同时接得上。旧版 `hubd` 不发，文件系统不记创建时间时也不发。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<String>,
     },
     /// 项目目录所在设备是否在线。
     Device {
@@ -297,10 +302,20 @@ pub enum UiEvent {
         online: bool,
     },
     /// 订阅时日志的长度：偏移更小的事件是重放的历史（界面据此不把历史里的旧额度当成最新）。
+    /// 先从本机缓存显示时会发两次：先是缓存末尾，收到 `hubd` 的回复后是日志长度。之后到 `Synced` 为止是“同步中”。
     Attached {
         session: String,
         #[cfg_attr(feature = "ts", ts(type = "number"))]
         live: u64,
+    },
+    /// 追上了最近一次 `Attached` 的 `live`：历史已经收全，同步中锁住的审批 / 提问卡片可以回复了。
+    Synced {
+        session: String,
+    },
+    /// 已显示的内容接不上服务器上的日志（本机缓存属于被清理掉的旧日志等）：界面清空这个会话，
+    /// 客户端已经从头重新订阅，后面照常收到 `Attached` 和事件。
+    Reset {
+        session: String,
     },
     Sessions {
         sessions: Vec<SessionInfo>,
