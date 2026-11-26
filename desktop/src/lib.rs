@@ -146,12 +146,13 @@ fn hub_connect(app: AppHandle, hub: State<'_, Hub>, url: String) -> ConnectionSt
         let _ = lock(&batcher).send(event);
     };
     #[cfg(desktop)]
-    let (client, task) = HubClient::new(url.clone(), INITIAL_BACKOFF, on_event, on_attention);
+    let (client, task) = HubClient::new(url.clone(), INITIAL_BACKOFF, None, on_event, on_attention);
     #[cfg(mobile)]
     let (client, task) = HubClient::watching(
         url.clone(),
         INITIAL_BACKOFF,
         mobile::WATCH_INTERVAL,
+        None,
         on_event,
         on_attention,
     );

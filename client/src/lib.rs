@@ -5,6 +5,7 @@
 
 mod attention;
 mod cache;
+mod subs;
 
 pub use cache::{Cache, Opened, Record, ServerCache};
 
@@ -12,14 +13,13 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::time::Duration;
 
-use attention::Attention;
 use cchub_protocol::{
     is_user_message, with_deflate_query, with_version_query, ClientMsg, ConnectionState,
-    EventClass, Frame, FrameDecoder, Inbound, InboundAction, Outbox, ServerMsg, SessionInfo,
-    UiEvent, PROTOCOL_VERSION,
+    EventClass, Frame, FrameDecoder, Outbox, ServerMsg, SessionInfo, UiEvent, PROTOCOL_VERSION,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use subs::Subs;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -34,33 +34,37 @@ pub struct HubClient {
 
 impl HubClient {
     /// 返回句柄和要交给运行时执行的连接循环。循环一直运行到所有句柄都被丢弃。
+    /// `cache` 是本机缓存（见 `cache.rs`）；为空时每次打开会话都从头下载。
     pub fn new(
         url: String,
         backoff: Duration,
+        cache: Option<Cache>,
         on_event: impl Fn(UiEvent) + Send + Sync + 'static,
         on_attention: impl Fn(&str, u64, EventClass) + Send + Sync + 'static,
     ) -> (Self, impl Future<Output = ()> + Send) {
         let (tx, rx) = mpsc::unbounded_channel();
         (
             Self { tx },
-            run(url, backoff, None, rx, on_event, on_attention),
+            run(url, backoff, None, cache, rx, on_event, on_attention),
         )
     }
 
     /// 界面可能不在时用：定时取会话列表，自己订阅运行中的会话，这样别处新开的会话也能发通知。
-    /// `hubd` 不主动推送列表，所以只能取。这些事件不进界面，只用来提醒；
-    /// 界面之后自己订阅时会从头重放，不会显示两遍。
+    /// `hubd` 不主动推送列表，所以只能取。这些事件不进界面，只用来提醒，也写进本机缓存；
+    /// 界面之后自己订阅时从缓存（没有缓存就从头）重放，不会显示两遍。
     pub fn watching(
         url: String,
         backoff: Duration,
         interval: Duration,
+        cache: Option<Cache>,
         on_event: impl Fn(UiEvent) + Send + Sync + 'static,
         on_attention: impl Fn(&str, u64, EventClass) + Send + Sync + 'static,
     ) -> (Self, impl Future<Output = ()> + Send) {
         let (tx, rx) = mpsc::unbounded_channel();
+        let watch = Some(interval);
         (
             Self { tx },
-            run(url, backoff, Some(interval), rx, on_event, on_attention),
+            run(url, backoff, watch, cache, rx, on_event, on_attention),
         )
     }
 
@@ -80,12 +84,15 @@ async fn run(
     url: String,
     initial_backoff: Duration,
     watch: Option<Duration>,
+    cache: Option<Cache>,
     mut rx: mpsc::UnboundedReceiver<ClientMsg>,
     on_event: impl Fn(UiEvent),
     on_attention: impl Fn(&str, u64, EventClass),
 ) {
     let mut state = State {
         watch,
+        // 缓存按用户填的地址分目录，不含下面加的查询参数。
+        subs: Subs::new(cache.map(|cache| cache.server(&url))),
         ..State::default()
     };
     let mut backoff = initial_backoff;
@@ -96,35 +103,51 @@ async fn run(
         on_event(UiEvent::Connection {
             state: ConnectionState::Connecting,
         });
-        if let Ok((mut socket, _)) = connect_async(url.as_str()).await {
-            let ended = match handshake(&mut socket, &on_event).await {
-                Ok(()) => {
-                    backoff = initial_backoff;
-                    on_event(UiEvent::Connection {
-                        state: ConnectionState::Connected,
-                    });
-                    connected(socket, &mut rx, &mut state, &on_event, &on_attention).await
-                }
-                Err(ended) => ended,
-            };
-            match ended {
-                Ended::Closed => return,
-                Ended::Mismatch => backoff = MAX_BACKOFF,
-                Ended::Lost => {}
+        // 建连和握手可能要很久（断网时等到超时），期间照样处理界面的消息：订阅马上从本机缓存显示。
+        let attempt = async {
+            let (mut socket, _) = connect_async(url.as_str()).await.map_err(|_| Ended::Lost)?;
+            handshake(&mut socket, &on_event).await?;
+            Ok::<_, Ended>(socket)
+        };
+        tokio::pin!(attempt);
+        let outcome = loop {
+            tokio::select! {
+                outcome = &mut attempt => break outcome,
+                msg = rx.recv() => match msg {
+                    Some(msg) => state.queue(msg, &on_event, &on_attention),
+                    None => return,
+                },
             }
+        };
+        let ended = match outcome {
+            Ok(socket) => {
+                backoff = initial_backoff;
+                on_event(UiEvent::Connection {
+                    state: ConnectionState::Connected,
+                });
+                connected(socket, &mut rx, &mut state, &on_event, &on_attention).await
+            }
+            Err(ended) => ended,
+        };
+        // 断线时可能还有半批没落盘。
+        state.subs.flush();
+        match ended {
+            Ended::Closed => return,
+            Ended::Mismatch => backoff = MAX_BACKOFF,
+            Ended::Lost => {}
         }
         on_event(UiEvent::Connection {
             state: ConnectionState::Disconnected,
         });
 
-        // 断线期间用户发的消息先留着，重连后再发。
+        // 断线期间用户发的消息先留着，重连后再发；订阅照样马上处理。
         let wait = tokio::time::sleep(backoff);
         tokio::pin!(wait);
         loop {
             tokio::select! {
                 _ = &mut wait => break,
                 msg = rx.recv() => match msg {
-                    Some(msg) => state.pending.push(msg),
+                    Some(msg) => state.queue(msg, &on_event, &on_attention),
                     None => return,
                 },
             }
@@ -186,11 +209,7 @@ where
         + SinkExt<Message>
         + Unpin,
 {
-    for (session, inbound) in state.sessions.iter() {
-        let attach = ClientMsg::Attach {
-            session: session.clone(),
-            after: inbound.expected(),
-        };
+    for attach in state.subs.reattach_all() {
         if send(&mut socket, &attach).await.is_err() {
             return Ended::Lost;
         }
@@ -229,8 +248,9 @@ where
             }
             msg = rx.recv() => {
                 let Some(msg) = msg else { return Ended::Closed };
+                let msg = state.accept(msg, on_event, on_attention);
                 if state.deliver(&mut socket, msg.clone()).await.is_err() {
-                    state.pending.push(msg);
+                    state.hold_back(msg);
                     return Ended::Lost;
                 }
             }
@@ -251,12 +271,14 @@ where
                     let Ok(frame) = serde_json::from_str::<Frame>(&text) else { continue };
                     for msg in state.on_frame(frame, on_event, on_attention) {
                         if send(&mut socket, &msg).await.is_err() {
-                            state.pending.push(msg);
+                            state.hold_back(msg);
                             return Ended::Lost;
                         }
                         state.outbox.sent(&msg);
                     }
                 }
+                // 这一批里要缓存的事件一起落盘。
+                state.subs.flush();
             }
         }
     }
@@ -264,7 +286,8 @@ where
 
 #[derive(Default)]
 struct State {
-    sessions: HashMap<String, Inbound>,
+    /// 每个会话的订阅：接收位置、提醒、本机缓存（见 `subs.rs`）。
+    subs: Subs,
     /// 断线期间的消息，重连后再发。
     pending: Vec<ClientMsg>,
     /// 已经发出、还没收到回执的输入，重连后补发。
@@ -274,25 +297,49 @@ struct State {
     held: Vec<ClientMsg>,
     /// 取会话列表的间隔，`None` 表示订阅全由界面决定。
     watch: Option<Duration>,
-    /// 自动订阅、界面还没要的会话。
-    watched: HashSet<String>,
-    /// 每个会话哪些需要人决定的事件该提醒。
-    attention: HashMap<String, Attention>,
 }
 
 impl State {
+    /// 界面发来的消息先经过这里：订阅（窗口重建、刷新后界面从头要）在这里建好，有缓存就先交给界面，
+    /// 换成从缓存末尾续订的消息。重连和缺口补齐不经过这里，用的是已收到的位置。
+    fn accept(
+        &mut self,
+        msg: ClientMsg,
+        on_event: &impl Fn(UiEvent),
+        on_attention: &impl Fn(&str, u64, EventClass),
+    ) -> ClientMsg {
+        match msg {
+            ClientMsg::Attach { session, after } => {
+                self.subs
+                    .subscribe(&session, after, false, on_event, on_attention)
+            }
+            msg => msg,
+        }
+    }
+
+    /// 没连上时界面发来的消息：订阅照样建（先显示缓存），其他的留到连上再发。
+    fn queue(
+        &mut self,
+        msg: ClientMsg,
+        on_event: &impl Fn(UiEvent),
+        on_attention: &impl Fn(&str, u64, EventClass),
+    ) {
+        let msg = self.accept(msg, on_event, on_attention);
+        self.hold_back(msg);
+    }
+
+    /// 没发出去的消息留到重连后再发。订阅不用留：重连时每个会话都会从已收到的位置重新订阅。
+    fn hold_back(&mut self, msg: ClientMsg) {
+        if !matches!(msg, ClientMsg::Attach { .. }) {
+            self.pending.push(msg);
+        }
+    }
+
     async fn deliver<S: SinkExt<Message> + Unpin>(
         &mut self,
         socket: &mut S,
         msg: ClientMsg,
     ) -> Result<(), ()> {
-        if let ClientMsg::Attach { session, after } = &msg {
-            // 窗口重建后要从头重放，所以这里按调用方给的偏移重置。
-            // 重连和缺口补齐走 `send`，不经过这里，用的是 `Inbound` 记录的偏移。
-            self.sessions.insert(session.clone(), Inbound::new(*after));
-            self.attention.insert(session.clone(), Attention::default());
-            self.watched.remove(session);
-        }
         if let ClientMsg::Input { session, line, .. } = &msg {
             if self.offline.contains(session) && is_user_message(line) {
                 self.held.push(msg);
@@ -342,7 +389,8 @@ impl State {
                 sessions,
                 mem_available_mb,
             } => {
-                let attach = self.watch_running(&sessions);
+                self.subs.listed(&sessions);
+                let attach = self.watch_running(&sessions, on_event, on_attention);
                 on_event(UiEvent::Sessions {
                     sessions,
                     mem_available_mb,
@@ -396,6 +444,12 @@ impl State {
                 Vec::new()
             }
             ServerMsg::Error { message } => {
+                if session
+                    .as_deref()
+                    .is_some_and(|id| self.subs.swallow_error(id))
+                {
+                    return Vec::new();
+                }
                 on_event(UiEvent::Error { session, message });
                 Vec::new()
             }
@@ -408,94 +462,47 @@ impl State {
             }
             // 握手时已经处理过。
             ServerMsg::Hello { .. } => Vec::new(),
-            ServerMsg::Attached { live, .. } => {
+            ServerMsg::Attached { live, origin } => {
                 let Some(id) = session else {
                     return Vec::new();
                 };
-                on_event(UiEvent::Attached {
-                    session: id.clone(),
-                    live,
-                });
-                if let Some(expected) = self.sessions.get(&id).map(Inbound::expected) {
-                    let alerts = self.attention.entry(id.clone()).or_default();
-                    for (seq, class) in alerts.attached(live, expected) {
-                        on_attention(&id, seq, class);
-                    }
-                }
-                Vec::new()
+                self.subs
+                    .attached(&id, live, origin, on_event, on_attention)
             }
+            // `Event` 和 `Skipped`。
             msg => {
                 let Some(id) = session else {
                     return Vec::new();
                 };
-                let Some(inbound) = self.sessions.get_mut(&id) else {
-                    return Vec::new();
-                };
-                let Some(action) = inbound.on_message(msg) else {
-                    return Vec::new();
-                };
-                let expected = inbound.expected();
-                let alerts = self.attention.entry(id.clone()).or_default();
-                match action {
-                    InboundAction::Apply {
-                        class,
-                        seq,
-                        payload,
-                    } => {
-                        for (seq, class) in alerts.event(seq, class, &payload, expected) {
-                            on_attention(&id, seq, class);
-                        }
-                        if self.watched.contains(&id) {
-                            return Vec::new();
-                        }
-                        on_event(UiEvent::Event {
-                            session: id,
-                            class,
-                            seq,
-                            payload,
-                        });
-                        Vec::new()
-                    }
-                    InboundAction::Resync { after } => {
-                        vec![ClientMsg::Attach { session: id, after }]
-                    }
-                    InboundAction::Skipped => {
-                        for (seq, class) in alerts.advanced(expected) {
-                            on_attention(&id, seq, class);
-                        }
-                        Vec::new()
-                    }
-                    InboundAction::Duplicate => Vec::new(),
-                }
+                self.subs.stream(&id, msg, on_event, on_attention)
             }
         }
     }
-}
 
-impl State {
     /// 运行中但还没人订阅的会话，返回要发的订阅消息。
-    fn watch_running(&mut self, sessions: &[SessionInfo]) -> Vec<ClientMsg> {
+    fn watch_running(
+        &mut self,
+        sessions: &[SessionInfo],
+        on_event: &impl Fn(UiEvent),
+        on_attention: &impl Fn(&str, u64, EventClass),
+    ) -> Vec<ClientMsg> {
         if self.watch.is_none() {
             return Vec::new();
         }
         let mut attach = Vec::new();
         for session in sessions {
-            if session.running && !self.sessions.contains_key(&session.id) {
-                self.sessions.insert(session.id.clone(), Inbound::new(0));
-                self.attention
-                    .insert(session.id.clone(), Attention::default());
-                self.watched.insert(session.id.clone());
-                attach.push(ClientMsg::Attach {
-                    session: session.id.clone(),
-                    after: 0,
-                });
+            if session.running && !self.subs.contains(&session.id) {
+                let msg = self
+                    .subs
+                    .subscribe(&session.id, 0, true, on_event, on_attention);
+                attach.push(msg);
             }
         }
         attach
     }
 }
 
-/// 决定哪些待决定事件要发系统通知。窗口重建后事件会从头重放，靠水位保证每条只通知一次。
+/// 决定哪些待决定事件要发系统通知。窗口重建、重启后事件会重放（从本机缓存或从头），靠水位保证每条只通知一次。
 #[derive(Default, Serialize, Deserialize)]
 pub struct Notifier {
     marks: HashMap<String, u64>,
@@ -545,6 +552,12 @@ mod tests {
             msg,
         })
         .unwrap()
+    }
+
+    /// 协议 1 的 `hubd` 每次订阅都先回这条，再发事件。
+    fn attached(live: u64, origin: Option<&str>) -> Message {
+        let origin = origin.map(str::to_string);
+        Message::Text(frame(ServerMsg::Attached { live, origin }).into())
     }
 
     fn hello() -> String {
@@ -602,6 +615,7 @@ mod tests {
         let (client, task) = HubClient::new(
             url,
             Duration::from_millis(10),
+            None,
             move |event| {
                 let _ = events_tx.send(event);
             },
@@ -623,14 +637,144 @@ mod tests {
             }
         };
         let first = Message::Text(event(0, 5, "first").into());
+        server.send(attached(5, None)).await.unwrap();
         server.send(first.clone()).await.unwrap();
         assert_eq!(next_payload().await, "first");
 
         // 窗口重建：再次从 0 订阅，同一条事件不能被当成重复丢掉。
         client.send(attach).unwrap();
         next_client_msg(&mut server).await;
+        server.send(attached(5, None)).await.unwrap();
         server.send(first).await.unwrap();
         assert_eq!(next_payload().await, "first");
+    }
+
+    /// 测试用的缓存目录，结束时删掉。
+    struct CacheDir(std::path::PathBuf);
+
+    impl CacheDir {
+        fn new(name: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("cchub-client-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            Self(dir)
+        }
+
+        /// 缓存里放两条 s1 的事件：0..5 first，5..9 second，日志身份 o1。
+        fn with_two_events(name: &str, url: &str) -> Self {
+            let dir = Self::new(name);
+            let cache = Cache::new(dir.0.clone()).server(url);
+            cache.create("s1", "o1");
+            cache.push("s1", 0, 5, EventClass::Durable, "first");
+            cache.push("s1", 5, 9, EventClass::Durable, "second");
+            cache.flush();
+            dir
+        }
+    }
+
+    impl Drop for CacheDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// 断网、线路差时一直连不上：界面要打开的会话照样马上从本机缓存显示，不等连接。
+    #[tokio::test]
+    async fn cached_session_shows_while_still_connecting() {
+        // 只监听不接受：客户端卡在握手上。
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let dir = CacheDir::with_two_events("connecting", &url);
+        let (events_tx, mut events) = mpsc::unbounded_channel();
+        let (client, task) = HubClient::new(
+            url,
+            Duration::from_millis(10),
+            Some(Cache::new(dir.0.clone())),
+            move |event| {
+                let _ = events_tx.send(event);
+            },
+            |_, _, _| {},
+        );
+        tokio::spawn(task);
+        client
+            .send(ClientMsg::Attach {
+                session: "s1".into(),
+                after: 0,
+            })
+            .unwrap();
+        let mut shown = Vec::new();
+        while shown.len() < 2 {
+            let received = tokio::time::timeout(Duration::from_secs(5), events.recv());
+            match received.await.unwrap().unwrap() {
+                UiEvent::Event { payload, .. } => shown.push(payload),
+                UiEvent::Connection {
+                    state: ConnectionState::Connected,
+                } => panic!("不该连上"),
+                _ => {}
+            }
+        }
+        assert_eq!(shown, ["first", "second"]);
+        drop(listener);
+    }
+
+    /// 有缓存：从缓存末尾续订，补来的新事件追加进缓存，下次打开就有。
+    #[tokio::test]
+    async fn cache_hit_resumes_after_the_cached_end_and_keeps_new_events() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let dir = CacheDir::with_two_events("hit", &url);
+        let (events_tx, mut events) = mpsc::unbounded_channel();
+        let (client, task) = HubClient::new(
+            url.clone(),
+            Duration::from_millis(10),
+            Some(Cache::new(dir.0.clone())),
+            move |event| {
+                let _ = events_tx.send(event);
+            },
+            |_, _, _| {},
+        );
+        tokio::spawn(task);
+        client
+            .send(ClientMsg::Attach {
+                session: "s1".into(),
+                after: 0,
+            })
+            .unwrap();
+        let mut server = accept_hub(&listener).await;
+        let resume = ClientMsg::Attach {
+            session: "s1".into(),
+            after: 9,
+        };
+        assert_eq!(next_client_msg(&mut server).await, resume);
+        server.send(attached(12, Some("o1"))).await.unwrap();
+        let third = Message::Text(event(9, 12, "third").into());
+        server.send(third).await.unwrap();
+
+        let mut shown = Vec::new();
+        loop {
+            let received = tokio::time::timeout(Duration::from_secs(5), events.recv());
+            match received.await.unwrap().unwrap() {
+                UiEvent::Event { payload, .. } => shown.push(payload),
+                UiEvent::Synced { .. } => break,
+                _ => {}
+            }
+        }
+        assert_eq!(shown, ["first", "second", "third"]);
+
+        // 再来一条消息：处理到它时，上一批已经落盘。
+        let status = frame(ServerMsg::Status { running: true });
+        server.send(Message::Text(status.into())).await.unwrap();
+        loop {
+            let received = tokio::time::timeout(Duration::from_secs(5), events.recv());
+            if let UiEvent::Status { .. } = received.await.unwrap().unwrap() {
+                break;
+            }
+        }
+        let cache = Cache::new(dir.0.clone()).server(&url);
+        let opened = cache.open("s1").unwrap();
+        let mut rows = Vec::new();
+        cache.replay("s1", &opened, |r| rows.push(r.payload.to_string()));
+        assert_eq!(rows, ["first", "second", "third"]);
     }
 
     /// 第一次打开一个会话：历史里已经回答过的审批不提醒，之后实时来的照常提醒。
@@ -642,6 +786,7 @@ mod tests {
         let (client, task) = HubClient::new(
             url,
             Duration::from_millis(10),
+            None,
             |_| {},
             move |session, seq, class| {
                 let _ = alerts_tx.send((session.to_string(), seq, class));
@@ -691,6 +836,7 @@ mod tests {
         let (client, task) = HubClient::new(
             url,
             Duration::from_millis(10),
+            None,
             move |event| {
                 let _ = events_tx.send(event);
             },
@@ -716,7 +862,11 @@ mod tests {
         next_client_msg(&mut server).await;
 
         let mut encoder = cchub_protocol::FrameEncoder::new();
-        let batch = [event(0, 5, "first"), event(5, 9, "second")];
+        let attached = frame(ServerMsg::Attached {
+            live: 0,
+            origin: None,
+        });
+        let batch = [attached, event(0, 5, "first"), event(5, 9, "second")];
         let message = Message::Binary(encoder.encode(&batch).into());
         server.send(message).await.unwrap();
         // 文本消息照样能收（旧版 hubd 不认参数，只发文本）。
@@ -747,6 +897,7 @@ mod tests {
             url,
             Duration::from_millis(10),
             Duration::from_secs(3600),
+            None,
             move |event| {
                 let _ = events_tx.send(event);
             },
@@ -784,6 +935,7 @@ mod tests {
         assert_eq!(next_client_msg(&mut server).await, attach);
 
         let first = Message::Text(event(0, 5, "first").into());
+        server.send(attached(5, None)).await.unwrap();
         server.send(first.clone()).await.unwrap();
         let ask = framed(5, 9, EventClass::Approval, "{}");
         server.send(Message::Text(ask.into())).await.unwrap();
@@ -798,7 +950,8 @@ mod tests {
         client.send(attach.clone()).unwrap();
         assert_eq!(next_client_msg(&mut server).await, attach);
 
-        // 界面订阅后，事件改走界面，从头重放。
+        // 界面订阅后，事件改走界面，从头重放（没有缓存）。
+        server.send(attached(9, None)).await.unwrap();
         server.send(first).await.unwrap();
         loop {
             let received = tokio::time::timeout(Duration::from_secs(5), events.recv());
@@ -818,6 +971,7 @@ mod tests {
         let (client, task) = HubClient::new(
             url,
             Duration::from_millis(10),
+            None,
             move |event| {
                 let _ = events_tx.send(event);
             },
@@ -858,6 +1012,7 @@ mod tests {
         let (client, task) = HubClient::new(
             url,
             Duration::from_millis(10),
+            None,
             move |event| {
                 let _ = events_tx.send(event);
             },
@@ -921,6 +1076,7 @@ mod tests {
         let (client, task) = HubClient::new(
             url,
             Duration::from_millis(10),
+            None,
             move |event| {
                 let _ = events_tx.send(event);
             },
@@ -947,6 +1103,7 @@ mod tests {
             next_client_msg(&mut server).await,
             ClientMsg::Attach { after: 0, .. }
         ));
+        server.send(attached(5, None)).await.unwrap();
         server
             .send(Message::Text(event(0, 5, "first").into()))
             .await
@@ -968,6 +1125,7 @@ mod tests {
             next_client_msg(&mut server).await,
             ClientMsg::Attach { after: 5, .. }
         ));
+        server.send(attached(12, None)).await.unwrap();
         server
             .send(Message::Text(event(5, 9, "second").into()))
             .await
@@ -984,6 +1142,7 @@ mod tests {
         let (_client, task) = HubClient::new(
             url,
             Duration::from_millis(10),
+            None,
             move |event| {
                 let _ = events_tx.send(event);
             },
@@ -1017,6 +1176,7 @@ mod tests {
         let (client, task) = HubClient::new(
             url,
             Duration::from_millis(10),
+            None,
             move |event| {
                 let _ = events_tx.send(event);
             },

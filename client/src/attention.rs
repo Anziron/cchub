@@ -29,6 +29,15 @@ struct Open {
 }
 
 impl Attention {
+    /// 先从本机缓存回放：缓存里的都是历史，审批先记下；回放完不能马上提醒（服务器上可能早就回答了），
+    /// 等 `hubd` 的 `Attached` 定下边界再按同样的规则判断。
+    pub fn from_cache() -> Self {
+        Self {
+            live: Some(u64::MAX),
+            open: Vec::new(),
+        }
+    }
+
     /// 收到 `Attached`。`expected` 是客户端当前的接收位置。
     pub fn attached(&mut self, live: u64, expected: u64) -> Vec<Alert> {
         self.live = Some(live);
@@ -222,6 +231,20 @@ mod tests {
         a.event(0, Durable, TEXT, 100);
         assert_eq!(a.event(100, Approval, ASK, 200), vec![(100, Approval)]);
         assert_eq!(a.event(200, Durable, TEXT, 300), vec![]);
+    }
+
+    #[test]
+    fn cached_history_waits_for_hubd_before_alerting() {
+        // 缓存末尾的审批，服务器上后来回答了：hubd 回的历史里有结果，不提醒。
+        let mut a = Attention::from_cache();
+        assert_eq!(a.event(0, Approval, ASK, 100), vec![]);
+        assert_eq!(a.attached(200, 100), vec![]);
+        assert_eq!(a.event(100, Durable, ANSWERED, 200), vec![]);
+
+        // 服务器上没有新内容：还在等人回答，提醒。
+        let mut a = Attention::from_cache();
+        assert_eq!(a.event(0, Approval, ASK, 100), vec![]);
+        assert_eq!(a.attached(100, 100), vec![(0, Approval)]);
     }
 
     #[test]
