@@ -23,8 +23,10 @@ use cchub_protocol::EventClass;
 const MAGIC: &str = "cchub-cache";
 /// 行格式的版本：改了格式就加一，不认识的旧文件整份删掉重下。
 const FORMAT: &str = "1";
-/// 总量上限（设计定的内置值，不给调）：超了先删最久没打开的会话。
-const LIMIT: u64 = 2 << 30;
+/// 默认的总量上限（设置里可改）：超了先删最久没打开的会话。
+pub const DEFAULT_LIMIT: u64 = 2 << 30;
+/// 选了非空文件夹时，缓存放进它下面的这个子文件夹，不和别的文件混在一起。
+const SUBFOLDER: &str = "cchub-cache";
 
 /// 缓存里的一条事件。
 #[derive(Debug, Clone, Copy)]
@@ -88,7 +90,7 @@ impl Writer {
 
 impl Cache {
     pub fn new(root: PathBuf) -> Self {
-        Self::with_limit(root, LIMIT)
+        Self::with_limit(root, DEFAULT_LIMIT)
     }
 
     fn with_limit(root: PathBuf, limit: u64) -> Self {
@@ -109,6 +111,17 @@ impl Cache {
 
     pub fn root(&self) -> PathBuf {
         self.lock().root.clone()
+    }
+
+    pub fn limit(&self) -> u64 {
+        self.lock().limit
+    }
+
+    /// 改总量上限，调低了马上按最久没打开的先删。
+    pub fn set_limit(&self, limit: u64) {
+        let mut store = self.lock();
+        store.limit = limit;
+        store.evict();
     }
 
     /// 占用的字节数。
@@ -136,6 +149,21 @@ impl Cache {
         self.relocate_with(to, |from, to| fs::copy(from, to).map(drop))
     }
 
+    /// 搬到用户在文件夹选择框里选的 `chosen`：空的（或还不存在）直接用，里面有别的文件就放进
+    /// 它下面的 `cchub-cache`。选的就是现在的位置时不动。
+    pub fn relocate_into(&self, chosen: &Path) -> Result<(), String> {
+        let empty = match fs::read_dir(chosen) {
+            Ok(mut entries) => entries.next().is_none(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+            Err(error) => return Err(format!("打不开这个文件夹：{error}")),
+        };
+        if empty || chosen == self.root() {
+            self.relocate(chosen)
+        } else {
+            self.relocate(&chosen.join(SUBFOLDER))
+        }
+    }
+
     fn relocate_with(
         &self,
         to: &Path,
@@ -147,6 +175,9 @@ impl Cache {
         let mut store = self.lock();
         if to == store.root {
             return Ok(());
+        }
+        if to.starts_with(&store.root) {
+            return Err("不能放在现在的缓存文件夹里面".to_string());
         }
         let existed = match fs::read_dir(to) {
             Ok(mut entries) => {
@@ -820,6 +851,55 @@ mod tests {
         assert!(file(&temp.0, "s1").exists());
         assert!(!file(&temp.0, "s2").exists());
         assert!(file(&temp.0, "s3").exists());
+    }
+
+    #[test]
+    fn lowering_the_limit_evicts_right_away() {
+        let temp = Temp::new("limit");
+        three_sessions(&temp);
+        let size = fs::metadata(file(&temp.0, "s1")).unwrap().len();
+        let now = SystemTime::now();
+        for (session, ago) in [("s1", 300), ("s2", 200), ("s3", 100)] {
+            let f = File::options()
+                .write(true)
+                .open(file(&temp.0, session))
+                .unwrap();
+            f.set_modified(now - Duration::from_secs(ago)).unwrap();
+        }
+        let cache = Cache::new(temp.0.clone());
+        cache.set_limit(size * 2 + size / 2);
+        assert_eq!(cache.limit(), size * 2 + size / 2);
+        assert!(!file(&temp.0, "s1").exists());
+        assert!(file(&temp.0, "s2").exists() && file(&temp.0, "s3").exists());
+    }
+
+    #[test]
+    fn relocate_into_a_folder_with_other_files_uses_a_subfolder() {
+        let temp = Temp::new("move-into");
+        let cache = Cache::new(temp.0.join("old"));
+        three(&cache.server(URL), "s1");
+        let busy = temp.0.join("busy");
+        fs::create_dir_all(&busy).unwrap();
+        fs::write(busy.join("notes.txt"), "别的文件").unwrap();
+
+        cache.relocate_into(&busy).unwrap();
+        assert_eq!(cache.root(), busy.join("cchub-cache"));
+        assert!(file(&busy.join("cchub-cache"), "s1").exists());
+        assert!(busy.join("notes.txt").exists());
+
+        // 空文件夹直接用。
+        let empty = temp.0.join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        cache.relocate_into(&empty).unwrap();
+        assert_eq!(cache.root(), empty);
+
+        // 选了现在的位置，或它里面的文件夹：不动。
+        cache.relocate_into(&empty).unwrap();
+        assert_eq!(cache.root(), empty);
+        let inner = empty.join(dir_name(URL));
+        assert!(cache.relocate_into(&inner).is_err());
+        assert_eq!(cache.root(), empty);
+        assert!(file(&empty, "s1").exists());
     }
 
     #[test]

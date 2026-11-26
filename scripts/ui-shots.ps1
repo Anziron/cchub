@@ -61,6 +61,8 @@ $shots = @(
   # 本机缓存：设置面板（齿轮菜单最后一项）；同步中锁住的卡片和状态行。sync-* 要加 -NoMotion：状态行延迟淡入，不加可能截不到
   @("cache-light", "/?s=rich&theme=light&pane=&frame=custom&click=.rail-gear%20.rail-btn&then=.menu%20.mi:last-child", "1200,800"),
   @("cache-dark", "/?s=rich&theme=dark&pane=&frame=custom&click=.rail-gear%20.rail-btn&then=.menu%20.mi:last-child", "1200,800"),
+  @("cache-limit-light", "/?s=rich&theme=light&pane=&frame=custom&click=.rail-gear%20.rail-btn&then=.menu%20.mi:last-child&then=.cache-limit%20.dd-btn", "1200,800"),
+  @("cache-clear-dark", "/?s=rich&theme=dark&pane=&frame=custom&click=.rail-gear%20.rail-btn&then=.menu%20.mi:last-child&then=.cache-panel%20.actions%20.quiet", "1200,800"),
   @("sync-light", "/?s=approval&scene=syncing&theme=light&pane=", "1200,800"),
   @("sync-dark", "/?s=approval&scene=syncing&theme=dark&pane=", "1200,800")
 )

@@ -1091,16 +1091,21 @@ export class Store {
     this.runCache("clear");
   }
 
-  /** 搬到 `dir`（只有桌面端）。失败时缓存留在原处，面板显示原因。 */
-  moveCache(dir: string): void {
-    this.runCache("move", dir);
+  /** 弹出系统的文件夹选择框，搬到选中的位置（只有桌面端）。失败时缓存留在原处，面板显示原因。 */
+  moveCache(): void {
+    this.runCache("move");
   }
 
-  private runCache(op: CacheOp, dir?: string): void {
+  /** 改总量上限（字节），调低了本机马上删掉最久没打开的。 */
+  setCacheLimit(limit: number): void {
+    this.runCache("limit", limit);
+  }
+
+  private runCache(op: CacheOp, limit?: number): void {
     if (this.cache.busy) return;
     this.cache = { ...this.cache, busy: op, error: null };
     this.changed();
-    this.hub.cache(op, dir).then(
+    this.hub.cache(op, limit).then(
       (info) => {
         this.cache = { ...this.cache, info, busy: null };
         this.changed();

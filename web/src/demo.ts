@@ -27,12 +27,12 @@ for (const [name, key] of [["sidew", "cchub.sideWidth"], ["panew", "cchub.paneWi
 // `?frame=custom`：浏览器里模拟无边框窗口，显示窗口按钮（见 platform.ts 的 customFrame）。
 // `?click=<选择器>`：元素出现后点一下，用来截图检查弹出菜单、撤回插入的消息等。
 // 不能按固定时间点：排队场景等元素要在连接之后才生成，曾经点早了什么也没点到（见下面 `?hover=` 的说明）。
-// `?then=<选择器>`：点完 click 的元素后，再等这个元素出现并点一下（两级菜单）。
+// `?then=<选择器>`：点完 click 的元素后，再等这个元素出现并点一下（两级菜单）；可以写多个，依次点。
 if (params.get("click")) {
-  whenPresent(params.get("click")!, (el) => {
-    (el as HTMLElement).click();
-    if (params.get("then")) whenPresent(params.get("then")!, (next) => (next as HTMLElement).click());
-  });
+  const clickInTurn = (selectors: string[]) => {
+    if (selectors.length) whenPresent(selectors[0], (el) => { (el as HTMLElement).click(); clickInTurn(selectors.slice(1)); });
+  };
+  clickInTurn([params.get("click")!, ...params.getAll("then")]);
 }
 // `?range=today|7d|30d|all`：使用情况窗格的范围（会记住，截图时每张都写明）。
 if (params.get("range")) localStorage.setItem("cchub.usageRange", params.get("range")!);
@@ -214,16 +214,20 @@ export function setupDemo(store: Store): void {
   }, 600);
 }
 
-/** 假的本机缓存。`?cache=fail`：改位置失败（看错误提示）。 */
-const demoCache = { path: "C:\\Users\\me\\AppData\\Local\\dev.anziron.cchub\\cache", bytes: 186_400_000, movable: true };
+/** 假的本机缓存。`?cache=fail`：改位置失败（看错误提示）；“选文件夹”总是选中 `D:\cchub-cache`。 */
+const demoCache = { path: "C:\\Users\\me\\AppData\\Local\\dev.anziron.cchub\\cache", bytes: 186_400_000, limit: 2 * 1024 ** 3, movable: true };
 
 export const demoHub: Hub = {
   connect: async () => (scene === "conn" ? "disconnected" : "connected"),
   onEvent: async (handler) => { emit = (event) => handler([event]); },
-  cache: async (op, dir) => {
-    if (op === "move" && params.get("cache") === "fail") throw "新位置里已有别的文件，请换一个空文件夹或还不存在的路径";
+  cache: async (op, limit) => {
+    if (op === "move" && params.get("cache") === "fail") throw "不能放在现在的缓存文件夹里面";
     if (op === "clear") demoCache.bytes = 0;
-    if (op === "move" && dir) demoCache.path = dir;
+    if (op === "move") demoCache.path = "D:\\cchub-cache";
+    if (op === "limit" && limit) {
+      demoCache.limit = limit;
+      demoCache.bytes = Math.min(demoCache.bytes, limit);
+    }
     return { ...demoCache };
   },
   send: async (msg) => {

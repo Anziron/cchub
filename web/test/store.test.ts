@@ -629,11 +629,11 @@ test("reset：清空这个会话已显示的内容，等重新回放", () => {
 
 test("本机缓存面板：打开时查位置和占用，清空后更新", async () => {
   const { store, hub } = setup();
-  hub.onCache(async (op) => ({ path: "D:\\cache", bytes: op === "clear" ? 0 : 2048, movable: true }));
+  hub.onCache(async (op) => ({ path: "D:\\cache", bytes: op === "clear" ? 0 : 2048, limit: 2 ** 31, movable: true }));
   store.openCache();
   await settle();
   assert.equal(store.cache.open, true);
-  assert.deepEqual(store.cache.info, { path: "D:\\cache", bytes: 2048, movable: true });
+  assert.deepEqual(store.cache.info, { path: "D:\\cache", bytes: 2048, limit: 2 ** 31, movable: true });
   store.clearCache();
   await settle();
   assert.equal(store.cache.info?.bytes, 0);
@@ -642,18 +642,31 @@ test("本机缓存面板：打开时查位置和占用，清空后更新", async
 
 test("改缓存位置失败：位置不变，显示原因；成功后显示新位置", async () => {
   const { store, hub } = setup();
-  hub.onCache(async (op, dir) => {
-    if (op === "move" && dir === "E:\\busy") throw "新位置里已有别的文件，请换一个空文件夹或还不存在的路径";
-    return { path: op === "move" ? dir : "D:\\cache", bytes: 10, movable: true };
+  let moves = 0;
+  hub.onCache(async (op) => {
+    if (op === "move" && ++moves === 1) throw "不能放在现在的缓存文件夹里面";
+    return { path: op === "move" ? "E:\\cchub-cache" : "D:\\cache", bytes: 10, limit: 2 ** 31, movable: true };
   });
   store.openCache();
   await settle();
-  store.moveCache("E:\\busy");
+  store.moveCache();
   await settle();
   assert.equal(store.cache.info?.path, "D:\\cache");
-  assert.match(store.cache.error ?? "", /已有别的文件/);
-  store.moveCache("E:\\cchub-cache");
+  assert.match(store.cache.error ?? "", /现在的缓存文件夹/);
+  store.moveCache();
   await settle();
   assert.equal(store.cache.info?.path, "E:\\cchub-cache");
   assert.equal(store.cache.error, null);
+});
+
+test("改缓存上限：把新上限交给本机，显示删完后的占用", async () => {
+  const { store, hub } = setup();
+  hub.onCache(async (op, limit) => ({ path: "D:\\cache", bytes: op === "limit" ? 400 : 900, limit: limit ?? 2 ** 31, movable: true }));
+  store.openCache();
+  await settle();
+  store.setCacheLimit(500 * 2 ** 20);
+  await settle();
+  assert.deepEqual(hub.cacheCalls.at(-1), { op: "limit", limit: 500 * 2 ** 20 });
+  assert.equal(store.cache.info?.limit, 500 * 2 ** 20);
+  assert.equal(store.cache.info?.bytes, 400);
 });

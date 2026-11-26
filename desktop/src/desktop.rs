@@ -1,10 +1,12 @@
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 
 use cchub_protocol::EventClass;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::{notification_body, Hub};
@@ -28,6 +30,18 @@ pub(crate) fn notify(app: &AppHandle, class: EventClass) {
         .title("CcHub")
         .body(notification_body(class))
         .show();
+}
+
+/// 弹出系统的文件夹选择框选缓存位置，从现在的位置开始浏览；取消时为空。要在阻塞线程里调用。
+pub(crate) fn pick_folder(app: &AppHandle, current: &Path) -> Option<PathBuf> {
+    let mut dialog = app.dialog().file().set_title("选择缓存位置");
+    if current.is_dir() {
+        dialog = dialog.set_directory(current);
+    }
+    if let Some(window) = app.get_webview_window(MAIN) {
+        dialog = dialog.set_parent(&window);
+    }
+    dialog.blocking_pick_folder()?.into_path().ok()
 }
 
 /// 主窗口（连同 WebView）是否还在。关到托盘时窗口被销毁，这时不必再给界面发事件。
@@ -118,6 +132,7 @@ pub(crate) fn run() {
     };
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(Hub::default())
         .invoke_handler(tauri::generate_handler![
             crate::hub_connect,

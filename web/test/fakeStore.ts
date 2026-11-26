@@ -35,8 +35,8 @@ export function fakeHub() {
   const sent: Msg[] = [];
   let handler: (events: unknown[]) => void = () => {};
   let failing = false;
-  const cacheCalls: { op: string; dir?: string }[] = [];
-  let cacheReply: (op: string, dir?: string) => Promise<unknown> = async () => ({ path: "C:\\cache", bytes: 0, movable: true });
+  const cacheCalls: { op: string; limit?: number }[] = [];
+  let cacheReply: (op: string, limit?: number) => Promise<unknown> = async () => ({ path: "C:\\cache", bytes: 0, limit: 2 ** 31, movable: true });
   const hub = {
     connect: async () => "connected" as const,
     send: async (msg: Msg) => {
@@ -46,9 +46,9 @@ export function fakeHub() {
     onEvent: async (h: (events: unknown[]) => void) => {
       handler = h;
     },
-    cache: async (op: string, dir?: string) => {
-      cacheCalls.push({ op, dir });
-      return cacheReply(op, dir);
+    cache: async (op: string, limit?: number) => {
+      cacheCalls.push(limit === undefined ? { op } : { op, limit });
+      return cacheReply(op, limit);
     },
   };
   const inputs = (): Input[] => sent.flatMap((m) => (m.type === "input" ? [{ ...m, body: JSON.parse(m.line) }] : []));
@@ -70,7 +70,7 @@ export function fakeHub() {
     },
     /** 本机缓存命令的调用记录，`onCache` 换掉它的回复。 */
     cacheCalls,
-    onCache: (reply: (op: string, dir?: string) => Promise<unknown>) => {
+    onCache: (reply: (op: string, limit?: number) => Promise<unknown>) => {
       cacheReply = reply;
     },
   };

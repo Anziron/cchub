@@ -63,36 +63,64 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// 设置里改过的缓存位置记在这里。
+/// 设置里改过的缓存位置（`dir`）和上限（`limit`，字节）记在这里。
 fn cache_config(app: &AppHandle) -> Option<PathBuf> {
     let dir = app.path().app_data_dir().ok()?;
     Some(dir.join("cache.json"))
 }
 
+fn read_cache_config(path: Option<&PathBuf>) -> serde_json::Value {
+    path.and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| json!({}))
+}
+
+/// 改 `cache.json` 里的一项，别的项保留。
+fn save_cache_config(
+    path: Option<&PathBuf>,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    let path = path.ok_or("找不到应用数据目录")?;
+    let mut config = read_cache_config(Some(path));
+    config[key] = value;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, config.to_string()).map_err(|e| e.to_string())
+}
+
 /// 缓存位置：设置里改过就用改过的，否则是应用本地数据目录下的 `cache`
 /// （Windows 上是 `%LOCALAPPDATA%\dev.anziron.cchub\cache`，Android 上是应用私有目录）。
 fn open_cache(app: &AppHandle) -> Option<Cache> {
-    let custom = cache_config(app)
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|config| config["dir"].as_str().map(PathBuf::from));
+    let config = read_cache_config(cache_config(app).as_ref());
+    let custom = config["dir"].as_str().map(PathBuf::from);
     let fallback = || {
         app.path()
             .app_local_data_dir()
             .ok()
             .map(|dir| dir.join("cache"))
     };
-    Some(Cache::new(custom.or_else(fallback)?))
+    let cache = Cache::new(custom.or_else(fallback)?);
+    if let Some(limit) = config["limit"].as_u64().filter(|&l| l >= MIN_CACHE_LIMIT) {
+        cache.set_limit(limit);
+    }
+    Some(cache)
 }
 
-/// 设置里的“本机缓存”：`info` 查位置和占用，`clear` 清空，`move` 搬到 `dir`（只有桌面端能改位置）。
-/// 返回 `{ path, bytes, movable }`。放在阻塞线程里做：搬家要复制全部文件。
+/// 上限不能低于这个，免得一打开会话就被删。
+const MIN_CACHE_LIMIT: u64 = 100 << 20;
+
+/// 设置里的“本机缓存”：`info` 查位置、占用和上限，`clear` 清空，`limit` 改上限，
+/// `move` 弹出文件夹选择框、搬过去（只有桌面端；取消就不动）。
+/// 返回 `{ path, bytes, limit, movable }`。放在阻塞线程里做：选文件夹要等用户，搬家要复制全部文件。
 #[tauri::command]
 async fn hub_cache(
     app: AppHandle,
     hub: State<'_, Hub>,
     op: String,
-    dir: Option<String>,
+    limit: Option<u64>,
 ) -> Result<serde_json::Value, String> {
     let cache = hub.cache(&app).ok_or("这台设备上没有可用的缓存目录")?;
     let config = cache_config(&app);
@@ -100,23 +128,25 @@ async fn hub_cache(
         match op.as_str() {
             "info" => {}
             "clear" => cache.clear().map_err(|e| format!("清空失败：{e}"))?,
-            "move" if cfg!(mobile) => return Err("手机上不能改缓存位置".into()),
+            "limit" => {
+                let limit = limit
+                    .filter(|&l| l >= MIN_CACHE_LIMIT)
+                    .ok_or("上限至少 100 MB")?;
+                cache.set_limit(limit);
+                save_cache_config(config.as_ref(), "limit", json!(limit)).map_err(|e| {
+                    format!("上限已生效，但没能记住它（{e}），下次启动会回到默认值")
+                })?;
+            }
+            #[cfg(mobile)]
+            "move" => return Err("手机上不能改缓存位置".into()),
+            #[cfg(desktop)]
             "move" => {
-                let dir = PathBuf::from(dir.as_deref().unwrap_or_default().trim());
-                cache.relocate(&dir)?;
-                let saved = config
-                    .ok_or("找不到应用数据目录".to_string())
-                    .and_then(|path| {
-                        if let Some(parent) = path.parent() {
-                            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-                        }
-                        let text = json!({ "dir": dir.to_string_lossy() }).to_string();
-                        std::fs::write(&path, text).map_err(|e| e.to_string())
-                    });
-                if let Err(error) = saved {
-                    return Err(format!(
-                        "已经搬到新位置，但没能记住它（{error}），下次启动会回到默认位置"
-                    ));
+                if let Some(chosen) = desktop::pick_folder(&app, &cache.root()) {
+                    cache.relocate_into(&chosen)?;
+                    let dir = cache.root().to_string_lossy().into_owned();
+                    save_cache_config(config.as_ref(), "dir", json!(dir)).map_err(|e| {
+                        format!("已经搬到新位置，但没能记住它（{e}），下次启动会回到默认位置")
+                    })?;
                 }
             }
             other => return Err(format!("不认识的操作：{other}")),
@@ -124,6 +154,7 @@ async fn hub_cache(
         Ok(json!({
             "path": cache.root().to_string_lossy(),
             "bytes": cache.usage(),
+            "limit": cache.limit(),
             "movable": cfg!(desktop),
         }))
     };

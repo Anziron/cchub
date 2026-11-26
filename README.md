@@ -34,7 +34,7 @@ curl -fsSL https://github.com/Anziron/cchub/releases/latest/download/install-ser
 - `hubd` 以运行它的用户身份启动 `claude`，能连上它的人就能操作服务器上的文件和命令。
 - 只监听回环或 Tailscale 地址，不要用反向代理暴露到公网；监听 Tailscale 地址时必须设置 `HUBD_ALLOWED_USERS`。
 - 会话目录保存完整的对话日志，注意目录权限。
-- 桌面端和手机端把打开过的会话内容明文缓存在本机（Windows 默认在 `%LOCALAPPDATA%\dev.anziron.cchub\cache`），和别人共用这台设备时注意；设置里的「本机缓存」可以清空或改位置。
+- 桌面端和手机端把打开过的会话内容明文缓存在本机（Windows 默认在 `%LOCALAPPDATA%\dev.anziron.cchub\cache`），和别人共用这台设备时注意；设置里的「本机缓存」可以清空、改位置和上限。
 
 ## 配置
 

@@ -1039,11 +1039,14 @@ button.proc-row:hover { background: var(--hover); }
 /* 本机缓存：同步中的状态行、设置面板 */
 /* 很快就追上时不显示（延迟淡入），不然打开每个会话都闪一下；“减少动画”时直接显示 */
 .activity.syncing, .sent.syncing-note { animation: fade .2s var(--ease) .6s both; }
-.cache-facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 14px 0 0; font-size: 13px; }
+.cache-facts { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px 14px; margin: 14px 0 0; font-size: 13px; }
 .cache-facts dt { color: var(--faint); }
 .cache-facts dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--text-2); }
 .cache-facts code { font: 12px var(--mono); }
-.cache-move { display: flex; align-items: flex-end; gap: 8px; margin-top: 16px; }
-.cache-move .field { flex: 1; min-width: 0; }
-.cache-move .btn { flex: none; height: 36px; }
-.help.cache-confirm { margin: 0 auto 0 0; }
+.cache-facts .btn { height: 28px; padding: 0 10px; font-size: 12.5px; }
+.cache-limit .dd-btn { display: flex; align-items: center; gap: 6px; height: 28px; margin-left: -8px; padding: 0 8px; border-radius: var(--r-sm); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.cache-limit .dd-btn:hover, .cache-limit .open .dd-btn { background: var(--hover); color: var(--text); }
+.cache-limit .dd-btn svg { color: var(--faint); }
+.cache-limit .menu { min-width: 120px; }
+.cache-panel .actions .push { margin-left: auto; }
+.btn.solid.danger { background: var(--del); color: var(--on-solid); }
