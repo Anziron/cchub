@@ -39,12 +39,11 @@ export function ServerPane({ store }: { store: Store }) {
           <span className="quota-reset">已用 {load.mem_total_mb - load.mem_available_mb} / {load.mem_total_mb} MB · 可用 {load.mem_available_mb} MB{memNote ? <em> · {memNote}</em> : null}</span>
         </div>
       </div>
-      <h4>最近 10 分钟</h4>
       <LoadChart history={history} />
-      <h4>cchub 会话{load.sessions.length ? <span className="h4-note">点一行打开会话</span> : null}</h4>
+      <h4>cchub</h4>
       {load.sessions.length ? (
         <>
-          <div className="proc-head"><span>会话</span><span>CPU</span><span>内存</span></div>
+          <div className="proc-head"><span /><span>CPU</span><span>内存</span></div>
           {load.sessions.map((item) => {
             const session = store.sessions.get(item.session);
             const { project, device } = describeCwd(session?.cwd);
@@ -58,16 +57,15 @@ export function ServerPane({ store }: { store: Store }) {
           })}
         </>
       ) : <p className="empty">没有正在运行的会话。</p>}
-      <h4>其他进程<span className="h4-note">不属于会话的，占用最多的几个</span></h4>
-      <div className="proc-head"><span>进程</span><span>CPU</span><span>内存</span></div>
+      <h4>其他进程</h4>
+      <div className="proc-head"><span /><span>CPU</span><span>内存</span></div>
       {load.others.map((item) => (
         <div key={item.pid} className="proc-row" title={`PID ${item.pid}${item.cwd ? `\n${item.cwd}` : ""}`}>
-          <span className="proc-name"><b>{item.name}</b>{item.cwd ? <small>{item.cwd}</small> : null}</span>
+          <span className="proc-name"><b>{item.name}</b></span>
           <span className={`n ${shareLevel(item.cpu_permille)}`}>{percent(item.cpu_permille)}%</span>
           <span className="n">{item.mem_mb} MB</span>
         </div>
       ))}
-      <p className="host-note">CPU 是占整台机器的百分比（{load.cpus} 核合计 100%）。窗格开着时每 5 秒刷新，窗口在后台时暂停；会话空闲一段时间后进程被回收，不在列表里，发消息时自动恢复。</p>
     </>
   );
 }

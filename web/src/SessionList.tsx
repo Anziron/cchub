@@ -193,7 +193,7 @@ export function SideFooter({ store }: { store: Store }) {
     <div className="side-bottom">
       <Status store={store} />
       <div className="side-foot">
-        <button className={`conn ${connClass}${load ? " with-load" : ""}`} title="连接服务器" onClick={() => store.toggleSettings()}>
+        <button className={`conn ${connClass}`} title="连接服务器" onClick={() => store.toggleSettings()}>
           <i />
           <span>{connText}</span>
           {/* 旧 hubd 不支持负载统计、或第一次统计还没回来时，照旧显示可用内存。 */}

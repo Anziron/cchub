@@ -838,9 +838,8 @@ a.link:hover { text-decoration-thickness: 2px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; color: var(--muted); font-size: 11.5px; }
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
 .legend i { width: 8px; height: 8px; border-radius: 2px; }
-/* 服务器负载：会话栏底部「已连接」右边的一行，和「服务器」窗格（卡片、坐标轴、浮层沿用使用情况窗格的样式） */
-.conn.with-load { flex: none; }
-.host-load { display: flex; flex: 1; justify-content: flex-end; align-items: center; gap: 5px; min-width: 0; height: 30px; padding: 0 8px; overflow: hidden; border-radius: var(--r-md); color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 服务器负载：会话栏底部「已连接」右边的一行（「已连接」占满剩余宽度，负载按钮只包住文字），和「服务器」窗格（卡片、坐标轴、浮层沿用使用情况窗格的样式） */
+.host-load { display: flex; flex: none; align-items: center; gap: 5px; min-width: 0; height: 30px; padding: 0 8px; overflow: hidden; border-radius: var(--r-md); color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .host-load:hover, .host-load.on { background: var(--hover); color: var(--muted); }
 .host-load .mid { color: var(--warn); }
 .host-load .high { color: var(--accent); }
@@ -848,7 +847,7 @@ a.link:hover { text-decoration-thickness: 2px; }
 .pane-server { --mem-line: #3d7fd9; }
 .pane-server .quota-row.mid b { color: var(--warn); }
 .pane-server .quota-reset { white-space: normal; }
-.host-chart { position: relative; height: 112px; margin-top: 8px; border-bottom: 1px solid var(--line); }
+.host-chart { position: relative; height: 112px; margin-top: 20px; border-bottom: 1px solid var(--line); }
 .host-chart .ylab { position: absolute; left: 0; width: 28px; color: var(--faint); font-size: 10.5px; line-height: 1; text-align: right; font-variant-numeric: tabular-nums; transform: translateY(-50%); }
 .host-plot { position: absolute; top: 0; right: 0; bottom: 0; left: 34px; }
 .host-plot svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
@@ -862,7 +861,6 @@ a.link:hover { text-decoration-thickness: 2px; }
 .pane-server .bars-axis { margin-left: 34px; }
 .pane-server i.cpu { background: var(--accent); }
 .pane-server i.mem { background: var(--mem-line); }
-.h4-note { margin-left: 6px; color: var(--faint); font-weight: 400; }
 .proc-head, .proc-row { display: grid; grid-template-columns: minmax(0, 1fr) 42px 58px; gap: 8px; align-items: center; }
 .proc-head { padding: 0 8px 4px; color: var(--faint); font-size: 11px; }
 .proc-head span + span, .proc-row .n { text-align: right; }
@@ -874,7 +872,6 @@ button.proc-row:hover { background: var(--hover); }
 .proc-row .n { font-variant-numeric: tabular-nums; }
 .proc-row .n.mid { color: var(--warn); }
 .proc-row .n.high { color: var(--accent); }
-.host-note { margin: 14px 0 0; color: var(--faint); font-size: 11px; line-height: 1.6; }
 /* 热力图占满窗格宽度：列数（周数）由 UsagePane 按宽度算，格子约 11px、间距 3px，等分剩余宽度并保持正方形；星期标签行高跟着格子 */
 .heat { display: flex; gap: 5px; }
 .heat-days, .heat-grid { display: grid; grid-template-rows: repeat(7, auto); gap: 3px; }
