@@ -304,6 +304,25 @@ test("新会话：启动、订阅、问模型、设强度、发第一条消息�
   assert.equal(lists(), before + 2);
 });
 
+test("上下文上限：按模型记在本地，新会话第一轮结束前上下文环就有进度，刷新后也在", () => {
+  // 上限只在一轮结束的 `result` 里（`modelUsage[模型].contextWindow`），录制里是 1000000。
+  const lines = recording("approval");
+  const result = lines.findIndex((line) => JSON.parse(line).type === "result");
+  const { store, hub } = setup(true, false);
+  lines.forEach((line, i) => hub.emit(event("s1", i * 1000, line)));
+  assert.deepEqual(JSON.parse(storage.getItem("cchub.contextWindows")!), { "claude-haiku-5-5": 1000000 }, "按模型 ID 记");
+  const firstTurn = (s: Store, h: ReturnType<typeof fakeHub>) => {
+    h.emit({ type: "sessions", sessions: [sessionInfo("s2", true)], mem_available_mb: null });
+    lines.slice(0, result).forEach((line, i) => h.emit(event("s2", i * 1000, line)));
+    const context = s.sessions.get("s2")!.thread.context;
+    assert.ok(context?.used, "第一轮结束前已经有用量");
+    return context.max;
+  };
+  assert.equal(firstTurn(store, hub), 1000000, "同一个窗口里开的新会话");
+  const again = fakeHub();
+  assert.equal(firstTurn(new Store(again.hub), again), 1000000, "刷新后（新的 Store）从本地读出");
+});
+
 // ---- 本地存储：键名和格式是老用户数据的约定，不能变 ----
 
 test("偏好存在本地，新开窗口照样读到", async () => {

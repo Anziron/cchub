@@ -8,7 +8,7 @@ import { parseUsage, type UsageStats } from "./usage.ts";
 import { afterTurn, confirmInserted, joinQueued, settleCancel, settleInsert, type Queued } from "./queue.ts";
 import { DropMounts, type DropRef } from "./paths.ts";
 import { choiceAck, controlNotice, inputNotice, replyAck, resumeChoice, startModel, userAck, type AckResult } from "./uplink.ts";
-import { saved, savedModels, stampTaskTimes, withoutPending, withPending } from "./storage.ts";
+import { saved, savedModels, stampContextWindows, stampTaskTimes, withoutPending, withPending } from "./storage.ts";
 import { asPane, History, type PaneId } from "./nav.ts";
 import type { DeviceInfo } from "./generated/DeviceInfo.ts";
 import {
@@ -153,6 +153,7 @@ export class Store {
   private attached: Record<string, DropRef[]> = {};
   private dropMounts = new DropMounts();
   private taskTimes = saved.taskTimes.get();
+  private contextWindows = saved.contextWindows.get();
   private limitsSave: ReturnType<typeof setTimeout> | 0 = 0;
 
   private hub: Hub;
@@ -319,6 +320,7 @@ export class Store {
           apply(session.thread, event.payload, this.models);
           applyPending(session.thread, this.pending[session.id]);
           this.stampTasks(session, event.payload);
+          this.stampContext(session, event.payload);
           // 不改 active：事件到达不能影响侧边栏顺序。
           session.updated = Math.floor(Date.now() / 1000);
           if (session.queue.length) this.settleQueue(session, interrupting);
@@ -443,6 +445,14 @@ export class Store {
     if (!next) return;
     this.taskTimes = next;
     saved.taskTimes.set(next);
+  }
+
+  /** 上下文上限按模型记在本地，新会话第一轮就有进度；重放时每轮的 `result` 都会进来，值没变不写盘。 */
+  private stampContext(session: Session, line: string): void {
+    const next = stampContextWindows(session.thread, line, this.contextWindows);
+    if (!next) return;
+    this.contextWindows = next;
+    saved.contextWindows.set(next);
   }
 
   /** 问 CLI 当前有哪些模型和命令。不调用模型，也不写进会话记录；每个进程问一次就够。 */

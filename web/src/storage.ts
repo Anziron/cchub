@@ -4,7 +4,7 @@
  * 别的模块自己的键在各自文件里：外观 `appearance.ts`、宽度 `Resizer.tsx`、侧栏 `SessionList.tsx`、
  * 问候语 `Composer.tsx`、置顶 `TopBar.tsx`、使用情况 `UsagePane.tsx`；`demo.ts` 按地址参数改写其中一些。
  */
-import type { ModelOption, PendingChoice, RateLimits, SlashCommand, Task } from "./model.ts";
+import type { ModelOption, PendingChoice, RateLimits, SlashCommand, Task, Thread } from "./model.ts";
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
@@ -59,6 +59,8 @@ export const saved = {
   drafts: json<Record<string, string>>("cchub.drafts", {}),
   /** 任务开始时间，见 `stampTaskTimes`。 */
   taskTimes: json<Record<string, number>>("cchub.taskTimes", {}),
+  /** 上下文上限，模型 ID → token 数，见 `stampContextWindows`。 */
+  contextWindows: json<Record<string, number>>("cchub.contextWindows", {}),
 };
 
 /** 还没有任何会话返回过模型列表时用，只放 CLI 长期支持的别名。 */
@@ -107,4 +109,29 @@ export function stampTaskTimes(tasks: Iterable<Task>, times: Record<string, numb
   if (!next) return null;
   const entries = Object.entries(next);
   return entries.length > MAX_TASK_TIMES ? Object.fromEntries(entries.slice(-MAX_TASK_TIMES)) : next;
+}
+
+/**
+ * 上下文上限只在一轮结束的 `result` 里（`modelUsage[模型].contextWindow`），新会话第一轮结束前上下文环没有进度。
+ * 见过的按模型记下；会话有用量还没有上限时先套上记下的（之后的 `result` 照常改成它报的）。
+ * 有新记的才返回新记录，否则返回 null。
+ */
+export function stampContextWindows(thread: Thread, line: string, windows: Record<string, number>): Record<string, number> | null {
+  let next: Record<string, number> | null = null;
+  if (line.includes('"contextWindow"')) {
+    try {
+      const event = JSON.parse(line);
+      if (event.type === "result") {
+        for (const [model, usage] of Object.entries(event.modelUsage ?? {})) {
+          const max = (usage as { contextWindow?: unknown }).contextWindow;
+          if (typeof max === "number" && max > 0 && (next ?? windows)[model] !== max) (next ??= { ...windows })[model] = max;
+        }
+      }
+    } catch {
+      // 读不懂的行不记。
+    }
+  }
+  const known = thread.model ? (next ?? windows)[thread.model] : undefined;
+  if (thread.context && !thread.context.max && known) thread.context.max = known;
+  return next;
 }
