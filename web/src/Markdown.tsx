@@ -1,5 +1,6 @@
 import { marked, type Token, type Tokens } from "marked";
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { autolinkPieces, splitUrls, type Piece } from "./links.ts";
 import { isWebUrl, openUrl } from "./platform.ts";
 
 // 渲染成 React 元素而不是 HTML 字符串，模型输出里的标签只会显示成文字。
@@ -13,21 +14,13 @@ export function WebLink({ url, children }: { url: string; children?: ReactNode }
   );
 }
 
-const URL_RE = /https?:\/\/[^\s<>"'`，。；）】]+/g;
+function pieces(parts: Piece[]): ReactNode[] {
+  return parts.map((part, i) => (typeof part === "string" ? part : <WebLink key={i} url={part.url} />));
+}
 
-/** 纯文本里的网址变成可点的链接（工具输出等）。末尾的标点不算网址。 */
+/** 纯文本里的网址变成可点的链接（工具输出等）。网址到哪为止见 `links.ts`。 */
 export function linkify(text: string): ReactNode {
-  if (!text.includes("http")) return text;
-  const parts: ReactNode[] = [];
-  let last = 0;
-  for (const match of text.matchAll(URL_RE)) {
-    const url = match[0].replace(/[.,;:!?)\]}]+$/, "");
-    const at = match.index ?? 0;
-    parts.push(text.slice(last, at), <WebLink key={at} url={url} />);
-    last = at + url.length;
-  }
-  parts.push(text.slice(last));
-  return parts;
+  return text.includes("http") ? pieces(splitUrls(text)) : text;
 }
 
 function inline(tokens: Token[] | undefined): ReactNode {
@@ -45,9 +38,9 @@ function inline(tokens: Token[] | undefined): ReactNode {
         return <br key={i} />;
       case "link": {
         const { href, tokens: children } = token as Tokens.Link;
-        return isWebUrl(href)
-          ? <WebLink key={i} url={href}>{inline(children)}</WebLink>
-          : <span key={i} className="link" title={href}>{inline(children)}</span>;
+        if (!isWebUrl(href)) return <span key={i} className="link" title={href}>{inline(children)}</span>;
+        const auto = autolinkPieces(token as Tokens.Link);
+        return auto ? <Fragment key={i}>{pieces(auto)}</Fragment> : <WebLink key={i} url={href}>{inline(children)}</WebLink>;
       }
       case "text":
         return "tokens" in token && token.tokens ? inline(token.tokens) : decode(token.text);
