@@ -1,6 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AskCard } from "./AskCard.tsx";
 import { Icon } from "./Icon.tsx";
+import { MessageImages } from "./ImageViews.tsx";
 import { linkify, Markdown, WebLink } from "./Markdown.tsx";
 import { describeTool, formatDuration, formatTokens, groupTools, searchLinks, type Ask, type Item, type RenderBlock, type ToolItem } from "./model.ts";
 import { isTouch } from "./platform.ts";
@@ -150,7 +151,7 @@ const ItemView = memo(function ItemView({ item, store, session, askSent }: { ite
     case "user":
       return (
         <>
-          <div className="user" data-turn={item.id}><div>{item.text}</div></div>
+          <UserBubble item={item} turn />
           {item.state === "sending" ? <div className="sent">发送中…</div> : null}
           {item.state === "delivered" ? <div className="sent">已送达</div> : null}
           {item.state === "failed" ? (
@@ -183,6 +184,22 @@ const ItemView = memo(function ItemView({ item, store, session, askSent }: { ite
   }
 });
 
+/** 用户的消息；带截图时图片在上、文字在下。`turn` 时标出这一轮（侧边的轮次导航按它定位）。 */
+function UserBubble({ item, turn }: { item: Extract<Item, { kind: "user" }>; turn?: boolean }) {
+  return (
+    <div className="user" data-turn={turn ? item.id : undefined}>
+      {item.images?.length ? (
+        <div className="with-images">
+          <MessageImages messageId={item.id} images={item.images} />
+          {item.text ? <div className="user-text">{item.text}</div> : null}
+        </div>
+      ) : (
+        <div>{item.text}</div>
+      )}
+    </div>
+  );
+}
+
 function TurnLine({ item }: { item: Extract<Item, { kind: "turn" }> }) {
   const parts = [item.durationMs != null ? formatDuration(item.durationMs) : "", item.outputTokens ? `${formatTokens(item.outputTokens)} tokens` : ""].filter(Boolean);
   return <div className="turn"><i aria-hidden="true" />{parts.join(" · ")}</div>;
@@ -195,7 +212,7 @@ export function TranscriptView({ items, cwd }: { items: Item[]; cwd?: string }) 
       {items.map((item) => {
         switch (item.kind) {
           case "user":
-            return <div key={item.id} className="user"><div>{item.text}</div></div>;
+            return <UserBubble key={item.id} item={item} />;
           case "text":
             return <Markdown key={item.id} text={item.text} />;
           case "thinking":
@@ -313,7 +330,7 @@ export function ThreadView({ store, session }: { store: Store; session: Session 
     };
   }, [toBottom]);
   const thread = session.thread;
-  const turns = thread.items.flatMap((item) => (item.kind === "user" ? [{ id: item.id, text: item.text }] : []));
+  const turns = thread.items.flatMap((item) => (item.kind === "user" ? [{ id: item.id, text: item.text || (item.images?.length ? "[截图]" : "") }] : []));
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
   const [current, setCurrent] = useState(-1);

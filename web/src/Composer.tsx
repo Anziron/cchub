@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { CommandMenu, ModelMenu } from "./Dialogs.tsx";
 import { Dropdown, Elapsed, formatTokens, Meter, sessionStatus } from "./Common.tsx";
 import { Icon } from "./Icon.tsx";
+import { PastedChips } from "./ImageViews.tsx";
+import { clipboardImages, prepareImage, type PastedImage } from "./images.ts";
 import { firstAsk, isResumeCommand, matchCommands, runningTasks, turnTokens, type SlashCommand } from "./model.ts";
 import { describeCwd, mentionText, type DropRef } from "./paths.ts";
 import { isTouch, onFileDrop, pageVisible } from "./platform.ts";
@@ -151,7 +153,7 @@ function Box({ children, menu, onSubmit }: { children: ReactNode; menu: ReactNod
   );
 }
 
-/** 输入框的文字、拖进来的文件和拖放高亮。`key` 是草稿键（会话 ID 或新会话）。 */
+/** 输入框的文字、拖进来的文件、粘贴的截图和拖放高亮。`key` 是草稿键（会话 ID 或新会话）。 */
 function useInput(store: Store, key: string, cwd: string | undefined) {
   const [text, setTextState] = useState(() => store.draft(key));
   const [hover, setHover] = useState(false);
@@ -182,20 +184,31 @@ function useInput(store: Store, key: string, cwd: string | undefined) {
     if (box) box.style.height = "";
   }, [text]);
   const files = store.files(key);
-  /** 取走文字和文件，拼成要发的消息。 */
+  const images = store.images(key);
+  /** 剪贴板里有截图就加到输入框上方；带文字的照常粘贴文字。 */
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const found = clipboardImages(event.clipboardData);
+    if (!found.length) return;
+    event.preventDefault();
+    void Promise.allSettled(found.map(prepareImage)).then((results) => {
+      store.addImages(key, results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : [])));
+      if (results.some((r) => r.status === "rejected")) store.notify("有截图读不出来，没有加上");
+    });
+  };
+  /** 取走文字、文件和截图，拼成要发的消息。 */
   const take = (message: string) => {
     const paths = store.takeFiles(key).map((f) => f.path);
     setText("");
-    return mentionText(paths, message);
+    return { text: mentionText(paths, message), images: store.takeImages(key) };
   };
-  return { text, setText, ref, hover, files, take, hasContent: !!text.trim() || files.length > 0 };
+  return { text, setText, ref, hover, files, images, onPaste, take, hasContent: !!text.trim() || files.length > 0 || images.length > 0 };
 }
 
 const MAX_INPUT_HEIGHT = 220;
 
-/** 拖进来的文件，显示成小标签；项目外的先挂载所在目录（变淡），挂不上才标黄。 */
-function FileChips({ store, draftKey, files }: { store: Store; draftKey: string; files: DropRef[] }) {
-  if (!files.length) return null;
+/** 拖进来的文件，显示成小标签；项目外的先挂载所在目录（变淡），挂不上才标黄。粘贴的截图显示成缩略图，排在后面。 */
+function FileChips({ store, draftKey, files, images }: { store: Store; draftKey: string; files: DropRef[]; images: PastedImage[] }) {
+  if (!files.length && !images.length) return null;
   return (
     <div className="file-chips">
       {files.map((file) => (
@@ -209,6 +222,7 @@ function FileChips({ store, draftKey, files }: { store: Store; draftKey: string;
           <button type="button" aria-label="移除" onClick={() => store.removeFile(draftKey, file.path)}><Icon name="close" size={11} /></button>
         </span>
       ))}
+      <PastedChips images={images} onRemove={(id) => store.removeImage(draftKey, id)} />
     </div>
   );
 }
@@ -244,7 +258,7 @@ function QueueList({ store, session, onEdit }: { store: Store; session: Session;
       {session.queue.map((q) => (
         <li key={q.id} className={q.mode}>
           <span className="queue-tag">{q.mode === "insert" ? (q.delivered ? "已送达" : "待插入") : "等结束"}</span>
-          <span className="queue-text" title={q.text}>{q.text}</span>
+          <span className="queue-text" title={q.text}>{q.images?.length ? `[截图 ×${q.images.length}] ` : ""}{q.text}</span>
           {actions(q)}
         </li>
       ))}
@@ -259,18 +273,18 @@ export function Composer({ store, session }: { store: Store; session: Session })
   const busy = thread.phase !== "idle" && !firstAsk(thread);
   /** 空闲时直接发；一轮进行中按 `mode` 排队（回车等结束，Ctrl+Enter 插入）。 */
   const submit = (message: string, mode: "wait" | "insert" = "wait") => {
-    if (!message.trim() && !input.files.length) return;
+    if (!message.trim() && !input.files.length && !input.images.length) return;
     // 有卡片等回复时，输入框里的话直接当卡片的回复（`/` 命令和带文件的消息照旧当普通消息发）。
     // 同步中的卡片可能早就回答过了，照常当普通消息发。
     const ask = session.syncing ? undefined : firstAsk(thread);
-    if (ask && message.trim() && !message.trimStart().startsWith("/") && !input.files.length) {
+    if (ask && message.trim() && !message.trimStart().startsWith("/") && !input.files.length && !input.images.length) {
       setText("");
       store.deny(session, ask, `用户没有选选项，而是回复：${message}`, message.trim());
       return;
     }
     const full = input.take(message);
-    if (busy) store.enqueue(session, full, mode);
-    else store.sendText(session, full);
+    if (busy) store.enqueue(session, full.text, mode, full.images);
+    else store.sendText(session, full.text, full.images);
   };
   const send = (mode?: "wait" | "insert") => submit(text, mode);
   const commands = useCommandMenu(store.commandsFor(session), text, setText, (message) => submit(message));
@@ -298,12 +312,13 @@ export function Composer({ store, session }: { store: Store; session: Session })
       <Box menu={commands.menu} onSubmit={() => send()}>
         <QueueList store={store} session={session} onEdit={edit} />
         <div className={`box${input.hover ? " drop" : ""}`}>
-          <FileChips store={store} draftKey={session.id} files={input.files} />
+          <FileChips store={store} draftKey={session.id} files={input.files} images={input.images} />
           <textarea
             ref={ref}
             rows={1}
             aria-label="输入消息"
-            placeholder={firstAsk(thread) && !session.syncing ? "回复上面的问题…" : busy ? (isTouch ? "补充内容，这一轮结束后发送" : "补充内容：Enter 等这一轮结束后发送，Ctrl+Enter 插入这一轮") : "继续补充，输入 / 查看命令，可以拖入文件"}
+            onPaste={input.onPaste}
+            placeholder={firstAsk(thread) && !session.syncing ? "回复上面的问题…" : busy ? (isTouch ? "补充内容，这一轮结束后发送" : "补充内容：Enter 等这一轮结束后发送，Ctrl+Enter 插入这一轮") : "继续补充，输入 / 查看命令，可以拖入文件或粘贴截图"}
             value={text}
             onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {
@@ -401,8 +416,8 @@ export function Welcome({ store }: { store: Store }) {
   const model = chosenModel ?? store.defaultModel;
   const effort = chosenEffort ? chosenEffort.value : store.defaultEffort;
   const submit = (message: string) => {
-    if (!message.trim() && !input.files.length) return;
-    if (isResumeCommand(message)) {
+    if (!message.trim() && !input.files.length && !input.images.length) return;
+    if (!input.images.length && isResumeCommand(message)) {
       setText("");
       store.openResume();
       return;
@@ -413,7 +428,8 @@ export function Welcome({ store }: { store: Store }) {
       store.openWorkspace();
       return;
     }
-    store.newSession(input.take(message), store.cwd, model ?? "", effort);
+    const full = input.take(message);
+    store.newSession(full.text, store.cwd, model ?? "", effort, full.images);
   };
   const send = () => submit(text);
   const commands = useCommandMenu(store.commandsFor(), text, setText, submit);
@@ -442,12 +458,13 @@ export function Welcome({ store }: { store: Store }) {
       </div>
       <Box menu={commands.menu} onSubmit={send}>
         <div className={`box tall${input.hover ? " drop" : ""}`}>
-          <FileChips store={store} draftKey={NEW_DRAFT} files={input.files} />
+          <FileChips store={store} draftKey={NEW_DRAFT} files={input.files} images={input.images} />
           <textarea
             ref={input.ref}
             autoFocus={!isTouch}
             aria-label="输入任务"
-            placeholder="描述任务，它会在后台持续运行，需要你时再叫你；可以拖入文件"
+            onPaste={input.onPaste}
+            placeholder="描述任务，它会在后台持续运行，需要你时再叫你；可以拖入文件或粘贴截图"
             value={text}
             onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {

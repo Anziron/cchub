@@ -670,3 +670,28 @@ test("改缓存上限：把新上限交给本机，显示删完后的占用", as
   assert.equal(store.cache.info?.limit, 500 * 2 ** 20);
   assert.equal(store.cache.info?.bytes, 400);
 });
+
+// ---- 带截图的消息 ----
+
+test("带截图的消息：图片随这条消息发出；紧接着发的文字排在它后面", async () => {
+  const { store, hub, session } = setup();
+  store.sendText(session, "看图", [{ mediaType: "image/png", data: "iVBORw0KGgo" }]);
+  store.sendText(session, "再说一句");
+  await settle();
+  const users = hub.users();
+  assert.equal(users.length, 2);
+  assert.deepEqual(users[0].body.message.content, [
+    { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo" } },
+    { type: "text", text: "看图" },
+  ]);
+  assert.equal(users[1].body.message.content, "再说一句");
+});
+
+test("截图压不进一条消息（文字已经把一条消息占满）：这条标失败，不发出", async () => {
+  const { store, hub, session } = setup();
+  store.sendText(session, "字".repeat(400_000), [{ mediaType: "image/png", data: "iVBORw0KGgo" }]);
+  await settle();
+  assert.equal(hub.users().length, 0);
+  const item = session.thread.items.find((i) => i.kind === "user");
+  assert.equal(item?.kind === "user" && item.state, "failed");
+});

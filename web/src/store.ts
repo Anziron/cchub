@@ -6,13 +6,16 @@ import { isNarrow } from "./platform.ts";
 import { sortKey } from "./sidebar.ts";
 import { parseUsage, type UsageStats } from "./usage.ts";
 import { applyHostLoad, emptyHostLoad, isUnsupported, type HostLoadState } from "./hostload.ts";
-import { afterTurn, confirmInserted, joinQueued, settleCancel, settleInsert, type Queued } from "./queue.ts";
+import { afterTurn, confirmInserted, joinQueued, joinQueuedImages, settleCancel, settleInsert, type Queued } from "./queue.ts";
+import { cacheImages } from "./imageCache.ts";
+import { fitImages, imageBudget, type PastedImage } from "./images.ts";
 import { DropMounts, type DropRef } from "./paths.ts";
 import { choiceAck, controlNotice, inputNotice, replyAck, resumeChoice, startModel, userAck, type AckResult } from "./uplink.ts";
 import { saved, savedModels, stampContextWindows, stampTaskTimes, withoutPending, withPending } from "./storage.ts";
 import { asPane, History, type PaneId } from "./nav.ts";
 import type { DeviceInfo } from "./generated/DeviceInfo.ts";
 import {
+  type MessageImage,
   addSending,
   allowLine,
   answerLine,
@@ -161,6 +164,10 @@ export class Store {
   private initialized = new Set<string>();
   private drafts = saved.drafts.get();
   private attached: Record<string, DropRef[]> = {};
+  /** 粘贴进输入框、还没发出的截图，按草稿分开；只在内存里（几 MB 的图不进 localStorage）。 */
+  private pasted: Record<string, PastedImage[]> = {};
+  /** 每个会话发消息的先后：带图的消息要先压缩（异步），后发的不能抢到前面。 */
+  private sendChains = new Map<string, Promise<void>>();
   private dropMounts = new DropMounts();
   private taskTimes = saved.taskTimes.get();
   private contextWindows = saved.contextWindows.get();
@@ -462,7 +469,10 @@ export class Store {
       this.cancelRequests.delete(requestId);
       const item = session.queue.find((q) => q.id === id);
       session.queue = settleCancel(session.queue, id, cancelled);
-      if (cancelled && edit && item) this.appendDraft(session.id, item.text);
+      if (cancelled && edit && item) {
+        if (item.text.trim()) this.appendDraft(session.id, item.text);
+        this.restoreImages(session.id, item.images);
+      }
       return;
     }
   }
@@ -554,6 +564,40 @@ export class Store {
     const refs = this.files(key);
     delete this.attached[key];
     return refs;
+  }
+
+  images(key: string): PastedImage[] {
+    return this.pasted[key] ?? [];
+  }
+
+  addImages(key: string, images: PastedImage[]): void {
+    if (!images.length) return;
+    this.pasted[key] = [...this.images(key), ...images];
+    this.changed();
+  }
+
+  removeImage(key: string, id: string): void {
+    this.pasted[key] = this.images(key).filter((image) => image.id !== id);
+    this.changed();
+  }
+
+  /** 在界面顶部提示一句（和其他出错提示同一处）。 */
+  notify(message: string): void {
+    this.error = message;
+    this.changed();
+  }
+
+  /** 发送时取走截图。 */
+  takeImages(key: string): PastedImage[] {
+    const images = this.images(key);
+    delete this.pasted[key];
+    return images;
+  }
+
+  /** 没发出去的消息放回输入框时，截图也放回去（排队的消息里只有图片数据，补上标签要用的 id 和尺寸）。 */
+  private restoreImages(key: string, images: Queued["images"]): void {
+    if (!images?.length) return;
+    this.addImages(key, images.map((image) => ("id" in image ? (image as PastedImage) : { ...image, id: crypto.randomUUID(), width: 0, height: 0, originalWidth: 0, originalHeight: 0 })));
   }
 
   /** 草稿存在本地：切换会话和关窗（WebView 会销毁）都不能丢。 */
@@ -724,11 +768,40 @@ export class Store {
     return [...new Set(cwds)];
   }
 
-  private sendUser(session: Session, text: string): void {
+  private sendUser(session: Session, text: string, images: MessageImage[] = []): void {
     const id = crypto.randomUUID();
-    addSending(session.thread, id, text);
+    const sent = images.map(({ mediaType, data }) => ({ mediaType, data }));
+    addSending(session.thread, id, text, sent);
     session.updated = session.active = Math.floor(Date.now() / 1000);
-    this.deliverUser(session, id, userLine(text, id), false);
+    this.withImages(session, text, sent, (fitted) => this.deliverUser(session, id, userLine(text, id, fitted), false), id, (reason) => {
+      failUser(session.thread, id, reason);
+      this.changed();
+    });
+  }
+
+  /**
+   * 带图的消息先把图片压到一条消息放得下（见 images.ts 的 `MESSAGE_IMAGE_BUDGET`），再发；按会话排队，保持先后。
+   * 发出去的图片存进本机缓存（重新打开时显示）。压不下时调 `fail`。
+   */
+  private withImages(session: Session, text: string, images: MessageImage[], send: (fitted: MessageImage[]) => void, id: string, fail: (reason: string) => void): void {
+    if (!images.length && !this.sendChains.has(session.id)) {
+      send(images);
+      return;
+    }
+    const previous = this.sendChains.get(session.id) ?? Promise.resolve();
+    const next = previous
+      .then(() => fitImages(images, imageBudget(text)))
+      .then(
+        (fitted) => {
+          if (fitted.length) void cacheImages(id, fitted);
+          send(fitted);
+        },
+        (error: unknown) => fail(error instanceof Error ? error.message : String(error)),
+      );
+    this.sendChains.set(session.id, next);
+    void next.then(() => {
+      if (this.sendChains.get(session.id) === next) this.sendChains.delete(session.id);
+    });
   }
 
   /** 发用户消息并按回执处理（规则见 `uplink.ts` 的 `userAck`）；`retried` 是恢复进程后的那次重发。 */
@@ -786,9 +859,9 @@ export class Store {
     if (pending.effort !== undefined) this.setEffort(session, pending.effort ?? undefined);
   }
 
-  newSession(text: string, cwd: string, model: string, effort?: string): void {
+  newSession(text: string, cwd: string, model: string, effort?: string, images: MessageImage[] = []): void {
     const id = crypto.randomUUID();
-    const title = text.split("\n")[0].slice(0, 40);
+    const title = text.trim() ? text.split("\n")[0].slice(0, 40) : "截图";
     const session = this.session({ id, title, cwd, running: true, updated: null, active: Math.floor(Date.now() / 1000), archived: false });
     session.cwd = cwd;
     session.running = true;
@@ -797,7 +870,7 @@ export class Store {
     this.history.remember(id);
     this.showDrawer = false;
     // 第一条消息交给 hubd 在后台概括成标题（`/` 命令不概括），几秒后刷新列表拿到。
-    const prompt = text.trimStart().startsWith("/") ? undefined : text;
+    const prompt = text.trimStart().startsWith("/") || !text.trim() ? undefined : text;
     void this.send({ type: "start", session: id, cwd, title, prompt, model: startModel(model) });
     if (prompt) for (const delay of TITLE_REFRESH_MS) setTimeout(() => this.refresh(), delay);
     void this.send({ type: "attach", session: id, after: 0 });
@@ -807,25 +880,25 @@ export class Store {
       session.thread.effort = effort;
       this.control(session, setEffortLine(effort), "设置推理强度");
     }
-    this.sendUser(session, text);
+    this.sendUser(session, text, images);
     this.refresh();
     this.changed();
   }
 
-  sendText(session: Session, text: string): void {
-    if (isResumeCommand(text)) {
+  sendText(session: Session, text: string, images: MessageImage[] = []): void {
+    if (!images.length && isResumeCommand(text)) {
       this.openResume();
       return;
     }
     // 进程已回收：先恢复，消息写进 FIFO 等它读。
     if (!session.running) this.resume(session);
     // `/model` 回复成功但不生效，要走控制消息。其他命令都原样交给 CLI。
-    const model = /^\/model\s+(\S+)\s*$/.exec(text)?.[1];
+    const model = images.length ? undefined : /^\/model\s+(\S+)\s*$/.exec(text)?.[1];
     if (model) {
       this.setModel(session, model);
       return;
     }
-    this.sendUser(session, text);
+    this.sendUser(session, text, images);
     this.changed();
   }
 
@@ -833,20 +906,30 @@ export class Store {
    * 一轮进行中再发消息。插入：马上写给 CLI，它在下一个工具结果之后插进这一轮，回传同一 uuid 后移出队列。
    * 等结束：留在本地，这一轮正常结束后合成一条发出。`/` 命令只能等结束。
    */
-  enqueue(session: Session, text: string, mode: Queued["mode"]): void {
+  enqueue(session: Session, text: string, mode: Queued["mode"], images: MessageImage[] = []): void {
     const id = crypto.randomUUID();
+    const sent = images.map(({ mediaType, data }) => ({ mediaType, data }));
+    // 队列里留原来的截图（带 id 和尺寸），放回输入框时标签照旧。
+    const withImages = images.length ? { images } : {};
     if (mode === "insert" && !text.trimStart().startsWith("/")) {
-      session.queue = [...session.queue, { id, text, mode }];
+      session.queue = [...session.queue, { id, text, ...withImages, mode }];
       session.updated = session.active = Math.floor(Date.now() / 1000);
-      this.input(session, userLine(text, id), (error) => {
-        session.queue = settleInsert(session.queue, id, !error);
-        // 进程不在时 status 事件会把队列放回输入框，不另外提示。
-        const notice = inputNotice(error);
-        if (notice) this.error = notice;
+      const insert = (fitted: MessageImage[]) =>
+        this.input(session, userLine(text, id, fitted), (error) => {
+          session.queue = settleInsert(session.queue, id, !error);
+          // 进程不在时 status 事件会把队列放回输入框，不另外提示。
+          const notice = inputNotice(error);
+          if (notice) this.error = notice;
+          this.changed();
+        }, id);
+      this.withImages(session, text, sent, insert, id, (reason) => {
+        // 压不下：转成等结束，留着让用户删图或改。
+        session.queue = settleInsert(session.queue, id, false);
+        this.error = reason;
         this.changed();
-      }, id);
+      });
     } else {
-      session.queue = [...session.queue, { id, text, mode: "wait" }];
+      session.queue = [...session.queue, { id, text, ...withImages, mode: "wait" }];
     }
     this.changed();
   }
@@ -856,6 +939,7 @@ export class Store {
     const item = session.queue.find((q) => q.id === id && q.mode === "wait");
     if (!item) return "";
     session.queue = session.queue.filter((q) => q !== item);
+    this.restoreImages(session.id, item.images);
     this.changed();
     return item.text;
   }
@@ -865,8 +949,9 @@ export class Store {
     const action = afterTurn(session.queue, session.thread, interrupted);
     if (action === "flush") {
       const text = joinQueued(session.queue);
+      const images = joinQueuedImages(session.queue);
       session.queue = [];
-      if (text) this.sendText(session, text);
+      if (text || images.length) this.sendText(session, text, images);
     } else if (action === "restore") {
       this.restoreQueue(session);
     }
@@ -903,15 +988,19 @@ export class Store {
   private restoreQueue(session: Session): void {
     if (!session.queue.length) return;
     const text = joinQueued(session.queue);
+    const images = joinQueuedImages(session.queue);
     session.queue = [];
     for (const [requestId, request] of this.cancelRequests) if (request.session === session) this.cancelRequests.delete(requestId);
-    this.appendDraft(session.id, text);
+    if (text) this.appendDraft(session.id, text);
+    this.restoreImages(session.id, images);
     this.changed();
   }
 
   retry(session: Session, id: string, text: string): void {
+    const item = session.thread.items.find((i) => i.kind === "user" && i.id === id);
+    const images = item?.kind === "user" ? item.images ?? [] : [];
     removeItem(session.thread, id);
-    this.sendText(session, text);
+    this.sendText(session, text, images);
   }
 
   /**

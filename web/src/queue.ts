@@ -5,7 +5,7 @@
  * - 等结束：留在桌面端，可以改（放回输入框）或删，这一轮正常结束后合成一条发出；被中断时放回输入框。
  * 只存在内存里：关掉窗口后不会在别的时机突然发出去。
  */
-import { isWaiting, type Thread } from "./model.ts";
+import { isWaiting, type MessageImage, type Thread } from "./model.ts";
 
 /** 还有没写进 FIFO 的用户消息（只算发送中；`model.ts` 的 `isSending` 连已送达的也算）。 */
 const sending = (thread: Thread) => thread.items.some((item) => item.kind === "user" && item.state === "sending");
@@ -13,6 +13,8 @@ const sending = (thread: Thread) => thread.items.some((item) => item.kind === "u
 export interface Queued {
   id: string;
   text: string;
+  /** 一起发的截图。 */
+  images?: MessageImage[];
   mode: "insert" | "wait";
   /** 插入的消息：已发出撤回请求，等 CLI 回复。 */
   cancelling?: boolean;
@@ -30,7 +32,7 @@ export function settleInsert(queue: Queued[], id: string, written: boolean): Que
 /** 撤回请求有了回复：撤回成功就移出队列，来不及就标成 `late`。 */
 export function settleCancel(queue: Queued[], id: string, cancelled: boolean): Queued[] {
   if (cancelled) return queue.filter((q) => q.id !== id);
-  return queue.map((q) => (q.id === id ? { id: q.id, text: q.text, mode: q.mode, ...(q.delivered ? { delivered: true } : {}), late: true } : q));
+  return queue.map((q) => (q.id === id ? { id: q.id, text: q.text, ...(q.images ? { images: q.images } : {}), mode: q.mode, ...(q.delivered ? { delivered: true } : {}), late: true } : q));
 }
 
 /** 回传已到的插入消息移出队列；没有变化时返回原数组。 */
@@ -51,3 +53,6 @@ export function afterTurn(queue: Queued[], thread: Thread, interrupted: boolean)
 
 export const joinQueued = (queue: Queued[]): string =>
   queue.map((q) => q.text.trim()).filter(Boolean).join("\n\n");
+
+/** 合成一条发出（或放回输入框）时，各条的截图按顺序合在一起。 */
+export const joinQueuedImages = (queue: Queued[]): MessageImage[] => queue.flatMap((q) => q.images ?? []);
