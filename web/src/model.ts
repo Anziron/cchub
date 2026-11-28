@@ -48,8 +48,17 @@ export interface ToolItem {
 /** 发送中 → hubd 回执成功（已送达，等 CLI 回传）→ 回传后没有状态；失败可重试。 */
 export type UserState = "sending" | "delivered" | "failed";
 
+/**
+ * 消息里的图片（输入框里粘贴的截图）。`data` 是 base64；大图回传时被 hubd 省掉（见 protocol 的 `elide_base64`），
+ * 这时是空串，界面再去本机缓存（`imageCache.ts`）里找。
+ */
+export interface MessageImage {
+  mediaType: string;
+  data: string;
+}
+
 export type Item =
-  | { kind: "user"; id: string; text: string; state?: UserState; error?: string }
+  | { kind: "user"; id: string; text: string; images?: MessageImage[]; state?: UserState; error?: string }
   | { kind: "text"; id: string; text: string; live: boolean }
   | { kind: "thinking"; id: string; text: string }
   | ToolItem
@@ -489,48 +498,17 @@ function onUser(thread: Thread, event: Json): void {
   const content = event.message?.content;
   if (typeof content === "string") {
     if (event.parent_tool_use_id) return;
-    // 后台任务结束时 CLI 发给模型的通知，不是用户说的话，内容在后台任务面板里。
-    if (event.origin?.kind === "task-notification" || content.startsWith("<task-notification>")) {
-      thread.phase = "thinking";
-      thread.activeTool = undefined;
-      return;
-    }
-    if (isInjected(event)) {
-      onInjected(thread, event, content);
-      return;
-    }
-    const notice = localNotice(content);
-    if (notice !== null) {
-      if (notice) thread.items.push({ kind: "notice", id: event.uuid ?? `n${thread.items.length}`, text: notice });
-      return;
-    }
-    const command = commandText(content);
-    // 发送时已经先显示了，回传只是确认送达。
-    const sent = findLast(thread, (item) => item.kind === "user" && item.id === event.uuid);
-    const prior = sent >= 0 ? thread.items[sent] : undefined;
-    // 已经回传过（气泡没有发送状态了）又来一次：hubd 重启后客户端按原 id 补发，CLI 认出 uuid 重复、
-    // 只回显不处理（实验见设计仓库 experiments/k2-dup.py）。什么都不改，否则会一直显示“思考中”。
-    if (prior?.kind === "user" && prior.state === undefined) return;
-    if (sent >= 0) {
-      replaceItem(thread, sent, { kind: "user", id: event.uuid, text: command ?? content });
-      if (command) return;
-    } else if (command) {
-      // 内置命令的回传排在回复后面，重放时放回回复前面。
-      const last = thread.items.length - 1;
-      const at = thread.items[last]?.kind === "text" ? last : thread.items.length;
-      thread.items.splice(at, 0, { kind: "user", id: event.uuid ?? `u${thread.items.length}`, text: command });
-      return;
-    } else {
-      thread.items.push({ kind: "user", id: event.uuid ?? `u${thread.items.length}`, text: content });
-    }
-    thread.phase = "thinking";
-    thread.activeTool = undefined;
-    const at = Date.parse(event.timestamp ?? "");
-    thread.turnStartedAt = Number.isNaN(at) ? Date.now() : at;
-    thread.turnUsage = newTurnUsage();
+    onUserText(thread, event, content);
     return;
   }
   if (!Array.isArray(content)) return;
+  // 带图片的用户消息（输入框里粘贴的截图）：文字和图片合成一条，和纯文字一样按 uuid 确认送达。
+  const images = userImages(event, content as Json[]);
+  if (images) {
+    const text = (content as Json[]).filter((part) => part.type === "text").map((part) => String(part.text)).join("\n\n");
+    onUserText(thread, event, text, images);
+    return;
+  }
   for (const part of content as Json[]) {
     if (part.type === "tool_result") {
       onToolResult(thread, part);
@@ -549,6 +527,65 @@ function onUser(thread: Thread, event: Json): void {
       }
     }
   }
+}
+
+/** 用户自己发的、带图片的消息里的图片；不是（工具结果、子代理、注入的消息、没有图片）返回 null。 */
+function userImages(event: Json, content: Json[]): MessageImage[] | null {
+  if (event.parent_tool_use_id || isInjected(event)) return null;
+  if (!content.some((part) => part.type === "image") || content.some((part) => part.type === "tool_result")) return null;
+  return content
+    .filter((part) => part.type === "image")
+    .map((part) => ({ mediaType: String(part.source?.media_type ?? "image/png"), data: typeof part.source?.data === "string" ? part.source.data : "" }));
+}
+
+/** 回传的图片数据被 hubd 省掉时，沿用发送时本地那份。 */
+function keepImageData(echoed: MessageImage[] | undefined, local: MessageImage[] | undefined): MessageImage[] | undefined {
+  if (!echoed) return local;
+  return echoed.map((image, i) => (image.data || !local?.[i] ? image : { ...image, data: local[i].data }));
+}
+
+/** 用户说的话（纯文字，或带图片的消息里的文字）。 */
+function onUserText(thread: Thread, event: Json, content: string, images?: MessageImage[]): void {
+  // 后台任务结束时 CLI 发给模型的通知，不是用户说的话，内容在后台任务面板里。
+  if (event.origin?.kind === "task-notification" || content.startsWith("<task-notification>")) {
+    thread.phase = "thinking";
+    thread.activeTool = undefined;
+    return;
+  }
+  if (isInjected(event)) {
+    onInjected(thread, event, content);
+    return;
+  }
+  const notice = localNotice(content);
+  if (notice !== null) {
+    if (notice) thread.items.push({ kind: "notice", id: event.uuid ?? `n${thread.items.length}`, text: notice });
+    return;
+  }
+  const command = commandText(content);
+  // 发送时已经先显示了，回传只是确认送达。
+  const sent = findLast(thread, (item) => item.kind === "user" && item.id === event.uuid);
+  const prior = sent >= 0 ? thread.items[sent] : undefined;
+  // 已经回传过（气泡没有发送状态了）又来一次：hubd 重启后客户端按原 id 补发，CLI 认出 uuid 重复、
+  // 只回显不处理（实验见设计仓库 experiments/k2-dup.py）。什么都不改，否则会一直显示“思考中”。
+  if (prior?.kind === "user" && prior.state === undefined) return;
+  if (sent >= 0) {
+    const kept = keepImageData(images, prior?.kind === "user" ? prior.images : undefined);
+    replaceItem(thread, sent, { kind: "user", id: event.uuid, text: command ?? content, ...(kept ? { images: kept } : {}) });
+    if (command) return;
+  } else if (command) {
+    // 内置命令的回传排在回复后面，重放时放回回复前面。
+    const last = thread.items.length - 1;
+    const at = thread.items[last]?.kind === "text" ? last : thread.items.length;
+    thread.items.splice(at, 0, { kind: "user", id: event.uuid ?? `u${thread.items.length}`, text: command });
+    return;
+  } else {
+    thread.items.push({ kind: "user", id: event.uuid ?? `u${thread.items.length}`, text: content, ...(images ? { images } : {}) });
+  }
+  thread.phase = "thinking";
+  thread.activeTool = undefined;
+  const at = Date.parse(event.timestamp ?? "");
+  thread.turnStartedAt = Number.isNaN(at) ? Date.now() : at;
+  thread.turnUsage = newTurnUsage();
 }
 
 /** 本地命令（`/context`、`/compact` 等）的输出是 CLI 合成的回复，不是模型说的。 */
@@ -861,13 +898,20 @@ export function onProcessExit(thread: Thread): void {
 
 // 发给 claude 的消息。
 
-export function userLine(text: string, uuid?: string): string {
-  return JSON.stringify({ type: "user", ...(uuid ? { uuid } : {}), message: { role: "user", content: text } });
+/** 带图片时内容是数组：图片在前、文字在后（图片放在前面模型理解得更好）。 */
+export function userLine(text: string, uuid?: string, images?: MessageImage[]): string {
+  const content = images?.length
+    ? [
+        ...images.map((image) => ({ type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } })),
+        ...(text ? [{ type: "text", text }] : []),
+      ]
+    : text;
+  return JSON.stringify({ type: "user", ...(uuid ? { uuid } : {}), message: { role: "user", content } });
 }
 
 /** 发送时立刻显示，不等服务器回传。回传带同一个 uuid，到时候转为已送达。 */
-export function addSending(thread: Thread, id: string, text: string): void {
-  thread.items.push({ kind: "user", id, text, state: "sending" });
+export function addSending(thread: Thread, id: string, text: string, images?: MessageImage[]): void {
+  thread.items.push({ kind: "user", id, text, ...(images?.length ? { images } : {}), state: "sending" });
   if (thread.phase === "idle") {
     thread.phase = "thinking";
     thread.activeTool = undefined;
