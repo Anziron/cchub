@@ -8,7 +8,7 @@ import { parseUsage, type UsageStats } from "./usage.ts";
 import { applyHostLoad, emptyHostLoad, isUnsupported, type HostLoadState } from "./hostload.ts";
 import { afterTurn, confirmInserted, joinQueued, joinQueuedImages, settleCancel, settleInsert, type Queued } from "./queue.ts";
 import { cacheImages } from "./imageCache.ts";
-import type { PastedImage } from "./images.ts";
+import { fitImages, imageBudget, type PastedImage } from "./images.ts";
 import { DropMounts, type DropRef } from "./paths.ts";
 import { choiceAck, controlNotice, inputNotice, replyAck, resumeChoice, startModel, userAck, type AckResult } from "./uplink.ts";
 import { saved, savedModels, stampContextWindows, stampTaskTimes, withoutPending, withPending } from "./storage.ts";
@@ -166,6 +166,8 @@ export class Store {
   private attached: Record<string, DropRef[]> = {};
   /** 粘贴进输入框、还没发出的截图，按草稿分开；只在内存里（几 MB 的图不进 localStorage）。 */
   private pasted: Record<string, PastedImage[]> = {};
+  /** 每个会话发消息的先后：带图的消息要先压缩（异步），后发的不能抢到前面。 */
+  private sendChains = new Map<string, Promise<void>>();
   private dropMounts = new DropMounts();
   private taskTimes = saved.taskTimes.get();
   private contextWindows = saved.contextWindows.get();
@@ -771,8 +773,35 @@ export class Store {
     const sent = images.map(({ mediaType, data }) => ({ mediaType, data }));
     addSending(session.thread, id, text, sent);
     session.updated = session.active = Math.floor(Date.now() / 1000);
-    if (sent.length) void cacheImages(id, sent);
-    this.deliverUser(session, id, userLine(text, id, sent), false);
+    this.withImages(session, text, sent, (fitted) => this.deliverUser(session, id, userLine(text, id, fitted), false), id, (reason) => {
+      failUser(session.thread, id, reason);
+      this.changed();
+    });
+  }
+
+  /**
+   * 带图的消息先把图片压到一条消息放得下（见 images.ts 的 `MESSAGE_IMAGE_BUDGET`），再发；按会话排队，保持先后。
+   * 发出去的图片存进本机缓存（重新打开时显示）。压不下时调 `fail`。
+   */
+  private withImages(session: Session, text: string, images: MessageImage[], send: (fitted: MessageImage[]) => void, id: string, fail: (reason: string) => void): void {
+    if (!images.length && !this.sendChains.has(session.id)) {
+      send(images);
+      return;
+    }
+    const previous = this.sendChains.get(session.id) ?? Promise.resolve();
+    const next = previous
+      .then(() => fitImages(images, imageBudget(text)))
+      .then(
+        (fitted) => {
+          if (fitted.length) void cacheImages(id, fitted);
+          send(fitted);
+        },
+        (error: unknown) => fail(error instanceof Error ? error.message : String(error)),
+      );
+    this.sendChains.set(session.id, next);
+    void next.then(() => {
+      if (this.sendChains.get(session.id) === next) this.sendChains.delete(session.id);
+    });
   }
 
   /** 发用户消息并按回执处理（规则见 `uplink.ts` 的 `userAck`）；`retried` 是恢复进程后的那次重发。 */
@@ -885,14 +914,20 @@ export class Store {
     if (mode === "insert" && !text.trimStart().startsWith("/")) {
       session.queue = [...session.queue, { id, text, ...withImages, mode }];
       session.updated = session.active = Math.floor(Date.now() / 1000);
-      if (sent.length) void cacheImages(id, sent);
-      this.input(session, userLine(text, id, sent), (error) => {
-        session.queue = settleInsert(session.queue, id, !error);
-        // 进程不在时 status 事件会把队列放回输入框，不另外提示。
-        const notice = inputNotice(error);
-        if (notice) this.error = notice;
+      const insert = (fitted: MessageImage[]) =>
+        this.input(session, userLine(text, id, fitted), (error) => {
+          session.queue = settleInsert(session.queue, id, !error);
+          // 进程不在时 status 事件会把队列放回输入框，不另外提示。
+          const notice = inputNotice(error);
+          if (notice) this.error = notice;
+          this.changed();
+        }, id);
+      this.withImages(session, text, sent, insert, id, (reason) => {
+        // 压不下：转成等结束，留着让用户删图或改。
+        session.queue = settleInsert(session.queue, id, false);
+        this.error = reason;
         this.changed();
-      }, id);
+      });
     } else {
       session.queue = [...session.queue, { id, text, ...withImages, mode: "wait" }];
     }

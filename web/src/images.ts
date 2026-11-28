@@ -17,6 +17,16 @@ export interface PastedImage extends MessageImage {
 export const MAX_EDGE = 2000;
 /** 单张图编码前的上限：Claude 限制单张 5MB，base64 还会再大三分之一。 */
 export const MAX_BYTES = 3.5 * 1024 * 1024;
+/**
+ * 一条消息里所有图片的 base64 总长上限。hubd 把整条消息作为一行写进 claude 的 FIFO，一行最多约 1MB
+ * （管道 1MB 减 8KB 预留，见 server/src/session.rs 的 `write_whole`），超了整条被拒，界面提示“消息太长或格式不对”。
+ * 留出文字和 JSON 的余量；发送时再减去文字的长度（`imageBudget`）。微信里复制的原图常有 1MB 以上。
+ */
+export const MESSAGE_IMAGE_BUDGET = 960 * 1024;
+
+/** 一条消息里图片还能用多少 base64 字符：总上限减去文字（按 UTF-8 字节算）。 */
+export const imageBudget = (text: string): number => Math.max(0, MESSAGE_IMAGE_BUDGET - new TextEncoder().encode(text).length);
+
 /** 这几种格式模型直接认，没超限就原样发。 */
 const DIRECT = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
@@ -56,10 +66,57 @@ export async function prepareImage(file: Blob): Promise<PastedImage> {
         blob = await canvas.convertToBlob({ type: "image/jpeg", quality });
       }
     }
-    return { id: crypto.randomUUID(), mediaType: blob.type, data: await toBase64(blob), ...size, originalWidth, originalHeight };
+    const image: PastedImage = { id: crypto.randomUUID(), mediaType: blob.type, data: await toBase64(blob), ...size, originalWidth, originalHeight };
+    // 单张就放不进一条消息的（如微信复制的原图）先压到放得下，缩略图上显示的就是最后发出去的尺寸。
+    return image.data.length > MESSAGE_IMAGE_BUDGET ? await shrink(image, MESSAGE_IMAGE_BUDGET) : image;
   } finally {
     bitmap.close();
   }
+}
+
+/**
+ * 一条消息里的图片加起来超过 `budget`（base64 字符数）时，按张数平分重新压缩；没超就原样返回。
+ * 压缩先降 JPEG 质量，再缩小尺寸；怎么压都放不下时抛错。
+ */
+export async function fitImages<T extends MessageImage>(images: T[], budget: number): Promise<T[]> {
+  const total = images.reduce((sum, image) => sum + image.data.length, 0);
+  if (total <= budget) return images;
+  const each = Math.floor(budget / images.length);
+  return Promise.all(images.map((image) => (image.data.length <= each ? image : shrink(image, each))));
+}
+
+/** 压到 base64 不超过 `limit` 个字符：JPEG（透明处垫白底），质量 0.85 → 0.55，尺寸逐步缩到 0.3 倍。 */
+async function shrink<T extends MessageImage>(image: T, limit: number): Promise<T> {
+  const bitmap = await createImageBitmap(fromBase64(image.data, image.mediaType));
+  try {
+    for (const scale of [1, 0.8, 0.64, 0.5, 0.4, 0.3]) {
+      const width = Math.max(1, Math.round(bitmap.width * scale));
+      const height = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = new OffscreenCanvas(width, height);
+      const context = canvas.getContext("2d");
+      if (!context) break;
+      context.fillStyle = "#fff";
+      context.fillRect(0, 0, width, height);
+      context.drawImage(bitmap, 0, 0, width, height);
+      for (const quality of [0.85, 0.7, 0.55]) {
+        const blob = await canvas.convertToBlob({ type: "image/jpeg", quality });
+        // base64 是原始字节的 4/3。
+        if (Math.ceil(blob.size / 3) * 4 <= limit) {
+          return { ...image, mediaType: "image/jpeg", data: await toBase64(blob), ...("width" in image ? { width, height } : {}) };
+        }
+      }
+    }
+  } finally {
+    bitmap.close();
+  }
+  throw new Error("截图太大，压缩后也放不进一条消息");
+}
+
+function fromBase64(data: string, type: string): Blob {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type });
 }
 
 async function toBase64(blob: Blob): Promise<string> {

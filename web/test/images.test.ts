@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { cacheImages, cachedImage, overLimit } from "../src/imageCache.ts";
-import { clipboardImages, fitSize, MAX_EDGE } from "../src/images.ts";
+import { clipboardImages, fitImages, fitSize, imageBudget, MAX_EDGE, MESSAGE_IMAGE_BUDGET } from "../src/images.ts";
 import { addSending, apply, newThread, userLine, type MessageImage } from "../src/model.ts";
 import { joinQueued, joinQueuedImages, settleCancel, type Queued } from "../src/queue.ts";
 
@@ -91,4 +91,19 @@ test("没有 IndexedDB 时缓存只在内存里，按消息 ID 和序号取回",
   assert.deepEqual(await cachedImage("m1", 1), { mediaType: "image/jpeg", data: "/9j/" });
   assert.equal(await cachedImage("m1", 2), null);
   assert.equal(await cachedImage("m2", 0), null);
+});
+
+test("一条消息里图片的预算：总上限减去文字的 UTF-8 字节数，不会是负数", () => {
+  assert.equal(imageBudget(""), MESSAGE_IMAGE_BUDGET);
+  assert.equal(imageBudget("abc"), MESSAGE_IMAGE_BUDGET - 3);
+  assert.equal(imageBudget("截图"), MESSAGE_IMAGE_BUDGET - 6);
+  assert.equal(imageBudget("字".repeat(400_000)), 0);
+  // hubd 一行最多 1MB 减 8KB 预留，预算要留出文字和 JSON 的余量。
+  assert.ok(MESSAGE_IMAGE_BUDGET < 1024 * 1024 - 8192 - 32 * 1024);
+});
+
+test("图片总量没超预算时原样返回，不重新压缩", async () => {
+  const images = [shot, { mediaType: "image/jpeg", data: "/9j/4AAQ" }];
+  assert.equal(await fitImages(images, 1000), images);
+  assert.deepEqual(await fitImages([], 0), []);
 });
