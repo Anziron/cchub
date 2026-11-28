@@ -25,22 +25,30 @@ function Viewer({ src, onClose }: { src: string; onClose: () => void }) {
   );
 }
 
+/** 尺寸说明：缩小过的带上原图尺寸。放回输入框的旧截图不知道尺寸，返回空串。 */
 const sizeText = (image: PastedImage): string => {
-  if (!image.width) return "截图";
+  if (!image.width) return "";
   const size = `${image.width}×${image.height}`;
-  return image.originalWidth !== image.width ? `截图 ${size}（原图 ${image.originalWidth}×${image.originalHeight}，已缩小）` : `截图 ${size}`;
+  return image.originalWidth !== image.width ? `${size}（原图 ${image.originalWidth}×${image.originalHeight}，已缩小）` : size;
 };
 
-/** 输入框里粘贴的截图，和拖进来的文件标签排在一行。 */
+/**
+ * 输入框里粘贴的截图，和拖进来的文件标签排在一行。缩略图按比例整张放下（不裁剪），
+ * 鼠标停上去在上方弹出大一点的预览和尺寸；点一下看大图。
+ */
 export function PastedChips({ images, onRemove }: { images: PastedImage[]; onRemove: (id: string) => void }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
     <>
       {images.map((image) => (
-        <span key={image.id} className="img-chip" title={sizeText(image)}>
-          <button type="button" className="img-open" aria-label="查看截图" onClick={() => setOpen(imageSrc(image))}>
+        <span key={image.id} className="img-chip">
+          <button type="button" className="img-open" aria-label={`查看截图 ${sizeText(image)}`.trim()} onClick={() => setOpen(imageSrc(image))}>
             <img src={imageSrc(image)} alt="" />
           </button>
+          <span className="img-pop" aria-hidden="true">
+            <img src={imageSrc(image)} alt="" />
+            {sizeText(image) ? <em>{sizeText(image)}</em> : null}
+          </span>
           <button type="button" className="img-remove" aria-label="移除" onClick={() => onRemove(image.id)}><Icon name="close" size={10} /></button>
         </span>
       ))}
